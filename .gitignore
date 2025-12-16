@@ -213,3 +213,9 @@ __marimo__/
 .claude
 
 .idea
+**/.DS_Store
+.deepagents/
+.vscode/
+docs/
+workspace/
+run.sh
