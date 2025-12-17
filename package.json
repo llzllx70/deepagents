@@ -1,0 +1,22 @@
+{
+  "name": "a-stock-market-presentation",
+  "version": "1.0.0",
+  "description": "A股市场走势分析演示文稿",
+  "main": "create_presentation.js",
+  "scripts": {
+    "build": "node create_presentation.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.12.0",
+    "playwright": "^1.40.0",
+    "sharp": "^0.32.0"
+  },
+  "keywords": [
+    "powerpoint",
+    "presentation",
+    "stock-market",
+    "china-a-share"
+  ],
+  "author": "AI Assistant",
+  "license": "MIT"
+}
