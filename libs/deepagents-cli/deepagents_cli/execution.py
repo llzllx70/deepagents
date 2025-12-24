@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 import sys
 import termios
@@ -307,9 +308,37 @@ async def execute_task(
 
     # Stream input - may need to loop if there are interrupts
     stream_input = {"messages": [{"role": "user", "content": message_content}]}
+    stream_round = 0
+
+    def _format_stream_input_for_log(value) -> str:
+        if isinstance(value, Command):
+            resume = getattr(value, "resume", None)
+            if isinstance(resume, dict):
+                return f"Command(resume_interrupts={list(resume.keys())})"
+            return "Command(resume=<non-dict>)"
+        if isinstance(value, dict):
+            messages = value.get("messages")
+            if isinstance(messages, list) and messages:
+                last = messages[-1]
+                if isinstance(last, dict):
+                    role = last.get("role")
+                    content = last.get("content")
+                    if isinstance(content, str):
+                        content_preview = content.replace("\n", "\\n")
+                        if len(content_preview) > 200:
+                            content_preview = content_preview[:200] + "...(truncated)"
+                        return f"dict(messages[-1].role={role!r}, content={content_preview!r})"
+                    return f"dict(messages[-1].role={role!r}, content_type={type(content).__name__})"
+            return f"dict(keys={list(value.keys())})"
+        return f"{type(value).__name__}({value!r})"
 
     try:
         while True:
+            stream_round += 1
+            if os.getenv("DEEPAGENTS_CLI_DEBUG_STREAM_INPUT"):
+                console.print(
+                    f"[dim]stream round {stream_round}: {_format_stream_input_for_log(stream_input)}[/dim]"
+                )
             interrupt_occurred = False
             hitl_response: dict[str, HITLResponse] = {}
             suppress_resumed_output = False
