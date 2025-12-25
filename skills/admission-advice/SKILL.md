@@ -12,9 +12,8 @@ Admission Advice Skill 是一套 **面向高校招生** 的志愿报考分析技
 设计目标：
 
 * 基于本地招生信息目录下的数据
-* 分析过程结构化、可解释、可审计
-* 输出标准化 HTML + PDF/PPTX 报告
-* 报告中必须包含可视化图表
+* 分析过程结构化、可解释、可审计、信息丰富、有深度
+* 输出标准化md文件
 
 适用于：
 
@@ -42,7 +41,7 @@ Admission Advice Skill 是一套 **面向高校招生** 的志愿报考分析技
 workspace/admission/
 ```
 
-每个考生使用独立 case 目录：
+每个考生使用独立case目录：
 
 ```
 workspace/admission/case_[省份]_[选科]_[分数]/
@@ -110,62 +109,7 @@ analysis/findings_<task>.md
 
 所有的分析要尽可能多的包含具体的数据
 
-## 七、图表生成（强制）
+## 结果输出
 
-- 先在charts目录中生成png图片，再在html中通过路径引用
-- 要能够正常显示中文，使用'Hiragino Sans GB'字体，一定
-- 这类复杂图片不要用直接用html/css/js的方式生成图, 切记
-- 生成的图要依据实际需要，不局限于某几类，如趋势图，拆线图，柱状图，生成后要对图表进行说明
-- 如果是柱状图，要有一定的区分度
+- 汇总子任务的结果，生成draft/report.md 
 
-### 示例图表一：重点专业 2022–2024 录取分数趋势
-
-```
-charts/major_trend_2022_2024.png
-```
-
-要求：
-
-* 折线图
-* 含“您的分数”虚线
-
-### 示例图表二：2024 年各专业录取分数对比
-
-```
-charts/major_score_2024.png
-```
-
-分级规则：
-
-* 稳妥：≤ user_score − 15（绿色）
-* 适中：≤ user_score + 5（黄色）
-* 冲刺：> user_score + 5（红色）
-
-## 八、HTML 报告生成
-
-生成：
-
-```
-draft/report.html
-```
-
-必须嵌入：
-
-* ../charts/major_trend_2022_2024.png
-* ../charts/major_score_2024.png
-
-## 九、HTML → PDF/PPTX
-
-- HTML转PDF参考 html2pdf skill 
-- HTML 转PPTX参考 pptx skill
-
-
-## 十、最终交付物
-
-* charts/*.png
-* draft/report.html
-* output/report.pdf 或者 output/report.pptx
-
-## 十一、免责声明
-
-本 Skill 仅作为志愿填报辅助工具，不构成录取承诺。

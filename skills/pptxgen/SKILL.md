@@ -24,8 +24,10 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 可用主题（`meta.theme` 或 CLI `--theme`）：
 
-- `modernLight`（默认）
+- `modernLight`（默认，已针对中文报告优化）
 - `modernDark`
+- `eduLight`（教育/招生报告更偏“政务简洁风”）
+- `eduDark`
 
 ## Deck Spec（JSON）结构
 
@@ -45,6 +47,7 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 - `title`：封面
 - `section`：章节页
+- `toc`：目录页（也会自动识别 `title=目录/大纲/议程` 且 `bullets` 为“`一、...`”格式的 `content`）
 - `content`：左要点 + 右侧卡片（可选 `aside`）
 - `chart`：左要点 + 右侧图表卡片（`chart: { type, data, options }`）
 - `table`：表格页（`table: { rows, options }`）
@@ -72,12 +75,70 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 ## 生成“精美”排版的工作流（给 Agent 的硬约束）
 
 - 先做“设计选择”：受众/场景/语气 → 主题色与信息层级（不要默认模板）。
-- 把用户文本变成每页 1 个中心信息点；每页不超过 6 行要点（宁可拆页）。
+- 把用户文本变成每页 1 个中心信息点；优先 **短句** 与 **数据点**；要点过长就拆页/改表格/改图。
 - 默认用 `LAYOUT_16x9`；颜色统一用 `RRGGBB`（不要 `#`；脚本会尝试自动去掉 `#`）。
 - 如果需要更细的 API 参数：只在需要时阅读 `skills/pptxgen/references/pptxgenjs-api.md`。
+
+## 适应性设计原则（让 LLM 动态生成不同排版）
+
+目标：同一套视觉语言（字体/色板/卡片/标题样式一致），但不同页面用不同的版式组合来适配内容密度，避免“强行左右两栏”。
+
+### 版式选择（建议的决策树）
+
+- **目录/议程**：`type: "toc"`（或 `title=目录/大纲/议程` + `bullets` 形如 `一、...`）
+- **章节分隔**：`type: "section"`
+- **解释性要点**（3–6 条短句）：`type: "content"` + `layout: "tiles"`（会自动做卡片网格）
+- **解释性要点**（长句/信息密集）：`type: "content"` + `layout: "oneCol"`（增加宽度减少换行）
+- **需要一句话结论**：`type: "content"` + `aside.text: "核心结论：..."`（短则自动变成右上角徽章；长则转为侧栏）
+- **需要图表**：`type: "chart"`（左解释右图；脚本会自动修正“单类目+多系列导致窄图”的常见错误）
+- **需要表格**：`type: "table"`（表头高亮+斑马纹；对“保底/冲刺/不建议”等标签自动上色）
+
+### 防溢出（最重要）
+
+- 先控制内容：每页不超过 5–7 条要点；单条要点尽量 ≤ 25 字（太长就拆成两条或改表格）。
+- 如果你无法控制内容长度：让脚本兜底分页/缩小字号：
+  - `content` 页会根据盒子高度 **自动缩字**，必要时自动拆成 `（续）` 多页。
+  - 你也可以手动指定：`slide.style.bulletFontSize`（例如 14/16）。
+
+## 示例：从“任意大纲文本”动态生成 deck spec（伪代码）
+
+核心思路：先把输入拆成“章节→页面→块”，再选择最合适的 `slide.type/layout`。
+
+```js
+function toSlides(outline) {
+  const slides = [];
+  slides.push({ type: 'title', title: outline.title, subtitle: outline.subtitle, meta: outline.meta });
+  slides.push({ type: 'toc', title: '目录', items: outline.sections.map(s => s.title) });
+
+  for (const sec of outline.sections) {
+    slides.push({ type: 'section', title: sec.title });
+    for (const block of sec.blocks) {
+      if (block.kind === 'chart') slides.push({ type: 'chart', title: block.title, bullets: block.takeaways, chart: block.chart });
+      else if (block.kind === 'table') slides.push({ type: 'table', title: block.title, table: block.table });
+      else {
+        const isShort = block.bullets.every(t => t.length <= 18) && block.bullets.length <= 6;
+        slides.push({
+          type: 'content',
+          title: block.title,
+          bullets: block.bullets,
+          layout: isShort ? 'tiles' : 'oneCol',
+          aside: block.conclusion ? { text: `核心结论：${block.conclusion}` } : undefined
+        });
+      }
+    }
+  }
+  return slides;
+}
+```
 
 ## 常见增强（建议优先用）
 
 - 图表页：用 `chart` 类型，左侧要点解释，右侧图表占更大面积。
 - 图片页：用 `image.sizing.type = "contain"|"cover"`，减少手算比例。
 - 表格页：表头强调（`options.autoPage` / `options.fill` / `options.border` 等按需加）。
+
+## Aside（右侧卡片）常用字段
+
+- `aside.text`：一句话结论（建议写成 `“核心结论：...”`，会自动拆成标签 + 正文）
+- `aside.emphasis: true`：加粗/更醒目
+- `aside.warning: true`：警示色样式（适合风险、提醒）
