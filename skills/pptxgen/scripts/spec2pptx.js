@@ -964,6 +964,43 @@ function toTableRows(table2d) {
   });
 }
 
+function inferHeaderRows(rawRows, explicitHeaderRows) {
+  if (Number.isFinite(explicitHeaderRows)) return Math.max(0, Math.floor(explicitHeaderRows));
+  if (!Array.isArray(rawRows) || rawRows.length < 2) return 0;
+  const first = rawRows[0];
+  if (!Array.isArray(first) || !first.length) return 0;
+
+  const joined = first.map((c) => String(c ?? '').trim()).join(' ');
+  const headerKeywords = [
+    '序号',
+    '排序',
+    '排名',
+    '学校',
+    '院校',
+    '专业',
+    '类别',
+    '类型',
+    '分数',
+    '最低分',
+    '最高分',
+    '平均分',
+    '位次',
+    '录取概率',
+    '建议',
+    '说明',
+    '结论',
+    '备注'
+  ];
+  const looksLikeHeader = headerKeywords.some((k) => joined.includes(k));
+  if (looksLikeHeader) return 1;
+
+  // If first row contains obvious value-like tokens (numbers/percent/+/stars), treat as data.
+  const valueLike = /([0-9]+(?:\\.[0-9]+)?%|\\+[0-9]+\\s*分|[0-9]{2,}|★|⭐)/;
+  if (valueLike.test(joined)) return 0;
+
+  return 0;
+}
+
 function slideTable(slide, size, theme, slideSpec) {
   addBg(slide, size, theme);
   addHeader(slide, size, theme, slideSpec.title || '');
@@ -971,6 +1008,7 @@ function slideTable(slide, size, theme, slideSpec) {
   const table = ensureObject(slideSpec.table || {}, 'slide.table');
   const rawRows = Array.isArray(table.rows) ? table.rows : [];
   const options = deepNormalizeColors(table.options || {});
+  const headerRows = inferHeaderRows(rawRows, table.headerRows ?? options.headerRows);
 
   const layout = getLayout(size);
   const manualW = typeof options.w === 'number' ? options.w : null;
@@ -988,8 +1026,8 @@ function slideTable(slide, size, theme, slideSpec) {
 
   addShadowedCard(slide, theme, box, { accentBarColor: theme.colors.accent, accentBarW: 0.12 });
 
-  const headerFill = theme.name.includes('Dark') ? theme.colors.accent : theme.colors.accent;
-  const headerTextColor = theme.name.includes('Dark') ? theme.colors.bg : 'FFFFFF';
+  const headerFill = theme.colors.accent;
+  const headerTextColor = 'FFFFFF';
   const zebra = theme.name.includes('Dark') ? '0E1628' : 'F8FAFC';
 
   const styledRows = rawRows.map((row, rIdx) =>
@@ -1002,7 +1040,7 @@ function slideTable(slide, size, theme, slideSpec) {
         valign: 'mid',
         margin: 2
       };
-      if (rIdx === 0) {
+      if (headerRows > 0 && rIdx < headerRows) {
         return {
           text,
           options: {
@@ -1022,6 +1060,7 @@ function slideTable(slide, size, theme, slideSpec) {
 
       // Column-level alignment
       if (cIdx === 0) opt.align = 'center';
+      if (headerRows === 0 && cIdx === 0) opt.bold = true;
 
       // Semantic tags coloring (common in admissions tables)
       if (/^(保底|稳妥|适中|冲刺|不建议)$/.test(text)) {
@@ -1046,7 +1085,7 @@ function slideTable(slide, size, theme, slideSpec) {
   );
 
   // Strip layout overrides from options; box controls geometry
-  const { x, y, w, h, fill, ...restOptions } = options || {};
+  const { x, y, w, h, fill, headerRows: _headerRows, ...restOptions } = options || {};
 
   slide.addTable(styledRows, {
     x: box.x + 0.32,

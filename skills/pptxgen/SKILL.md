@@ -92,6 +92,7 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 - **需要一句话结论**：`type: "content"` + `aside.text: "核心结论：..."`（短则自动变成右上角徽章；长则转为侧栏）
 - **需要图表**：`type: "chart"`（左解释右图；脚本会自动修正“单类目+多系列导致窄图”的常见错误）
 - **需要表格**：`type: "table"`（表头高亮+斑马纹；对“保底/冲刺/不建议”等标签自动上色）
+  - 如果首行不是表头：设置 `table.headerRows: 0`（或 `table.options.headerRows: 0`）避免误染色
 
 ### 防溢出（最重要）
 
