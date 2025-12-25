@@ -13,7 +13,7 @@ Admission Advice Skill 是一套 **面向高校招生** 的志愿报考分析技
 
 * 基于本地招生信息目录下的数据
 * 分析过程结构化、可解释、可审计
-* 输出标准化 HTML + PDF 报告
+* 输出标准化 HTML + PDF/PPTX 报告
 * 报告中必须包含可视化图表
 
 适用于：
@@ -154,16 +154,17 @@ draft/report.html
 * ../charts/major_trend_2022_2024.png
 * ../charts/major_score_2024.png
 
-## 九、HTML → PDF
+## 九、HTML → PDF/PPTX
 
-参考 html2pdf skill 
+- HTML转PDF参考 html2pdf skill 
+- HTML 转PPTX参考 pptx skill
 
 
 ## 十、最终交付物
 
 * charts/*.png
 * draft/report.html
-* output/report.pdf
+* output/report.pdf 或者 output/report.pptx
 
 ## 十一、免责声明
 
