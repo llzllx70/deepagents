@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "libs" / "deepagents"))
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLResponse
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -246,12 +246,16 @@ class Session:
                     message, _metadata = data
 
                     if isinstance(message, HumanMessage):
-                        if message.text:
+                        continue
+
+                    if isinstance(message, AIMessage):
+                        text = message.content if isinstance(message.content, str) else None
+                        if text:
                             await self.broadcast(
                                 {
                                     "type": "assistant.message",
                                     "run_id": run_request.run_id,
-                                    "text": message.text,
+                                    "text": text,
                                 }
                             )
                         continue

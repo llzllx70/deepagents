@@ -18,7 +18,7 @@ class DeepAgentsClient {
         // State
         this.currentRunId = null;
         this.isRunning = false;
-        this.autoApprove = false;
+        this.autoApprove = true;
         this.pendingInterrupts = [];
         this.messageBuffer = new Map(); // For assembling streaming messages
         this.currentToolCalls = new Map(); // Track tool calls by ID
@@ -45,6 +45,9 @@ class DeepAgentsClient {
     async init() {
         // Cache DOM elements
         this.cacheElements();
+
+        // Load config (auto-approve default, etc.)
+        this.loadConfig();
 
         // Setup event listeners
         this.setupEventListeners();
@@ -303,6 +306,7 @@ class DeepAgentsClient {
         this.currentRunId = data.run_id;
         this.isRunning = true;
         this.updateCancelButton(true);
+        this.messageBuffer.set(data.run_id, '');
 
         // Hide welcome message
         this.elements.welcomeMessage.style.display = 'none';
@@ -315,6 +319,9 @@ class DeepAgentsClient {
         const status = data.type.split('.')[1];
         console.log('Run ended:', status, data);
 
+        if (data.run_id) {
+            this.messageBuffer.delete(data.run_id);
+        }
         this.currentRunId = null;
         this.isRunning = false;
         this.updateCancelButton(false);
@@ -340,15 +347,19 @@ class DeepAgentsClient {
         const text = data.text;
         if (!text) return;
 
+        const runId = data.run_id || this.currentRunId || 'default';
+        const currentText = this.messageBuffer.get(runId) || '';
+        const nextText = currentText + text;
+        this.messageBuffer.set(runId, nextText);
+
         // Get or create current message element
         if (!this.currentMessageElement) {
             this.currentMessageElement = this.createMessageElement('assistant');
             this.elements.messages.appendChild(this.currentMessageElement);
         }
 
-        // Append text
-        const contentElement = this.currentMessageElement.querySelector('.message-text');
-        contentElement.innerHTML += this.escapeHtml(text);
+        const markdownElement = this.getOrCreateAssistantMarkdownElement(this.currentMessageElement);
+        markdownElement.innerHTML = this.parseMarkdown(nextText);
 
         this.scrollToBottom();
     }
@@ -357,13 +368,16 @@ class DeepAgentsClient {
         const text = data.text;
         if (!text) return;
 
+        const runId = data.run_id || this.currentRunId || 'default';
+        this.messageBuffer.set(runId, text);
+
         if (!this.currentMessageElement) {
             this.currentMessageElement = this.createMessageElement('assistant');
             this.elements.messages.appendChild(this.currentMessageElement);
         }
 
-        const contentElement = this.currentMessageElement.querySelector('.message-text');
-        contentElement.innerHTML = this.parseMarkdown(text);
+        const markdownElement = this.getOrCreateAssistantMarkdownElement(this.currentMessageElement);
+        markdownElement.innerHTML = this.parseMarkdown(text);
 
         this.scrollToBottom();
     }
@@ -529,6 +543,17 @@ class DeepAgentsClient {
         return messageDiv;
     }
 
+    getOrCreateAssistantMarkdownElement(messageElement) {
+        const contentElement = messageElement.querySelector('.message-text');
+        let markdownElement = contentElement.querySelector('.assistant-markdown');
+        if (!markdownElement) {
+            markdownElement = document.createElement('div');
+            markdownElement.className = 'assistant-markdown';
+            contentElement.prepend(markdownElement);
+        }
+        return markdownElement;
+    }
+
     createToolCallElement({ name, args, id, status }) {
         const toolDiv = document.createElement('div');
         toolDiv.className = 'tool-call';
@@ -562,7 +587,8 @@ class DeepAgentsClient {
 
     createFileOpElement({ toolName, path, status, error, metrics, diff }) {
         const fileOpDiv = document.createElement('div');
-        fileOpDiv.className = 'file-operation';
+        const hasBody = Boolean(metrics || diff);
+        fileOpDiv.className = hasBody ? 'file-operation expanded' : 'file-operation';
 
         // Check if file is PDF
         const isPdf = path.toLowerCase().endsWith('.pdf');
@@ -585,7 +611,7 @@ class DeepAgentsClient {
 
         // Add download button for PDF files
         const downloadButtonHtml = isPdf ? `
-            <a href="${this.escapeHtml(path)}" download class="file-download-btn">
+            <a href="${this.escapeHtml(path)}" download class="file-download-btn" onclick="event.stopPropagation()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7 10 12 15 17 10"></polyline>
@@ -595,8 +621,21 @@ class DeepAgentsClient {
             </a>
         ` : '';
 
+        const chevronHtml = hasBody ? `
+            <svg class="file-op-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+        ` : '';
+
+        const bodyHtml = hasBody ? `
+            <div class="file-operation-body">
+                ${metricsHtml}
+                ${diffHtml}
+            </div>
+        ` : '';
+
         fileOpDiv.innerHTML = `
-            <div class="file-operation-header">
+            <div class="file-operation-header" ${hasBody ? "onclick=\"this.parentElement.classList.toggle('expanded')\"" : ''}>
                 <svg class="file-op-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
                     <polyline points="13 2 13 9 20 9"></polyline>
@@ -604,9 +643,9 @@ class DeepAgentsClient {
                 <span class="file-op-path">${this.escapeHtml(path)}</span>
                 <span class="file-op-status ${status}">${status}</span>
                 ${downloadButtonHtml}
+                ${chevronHtml}
             </div>
-            ${metricsHtml}
-            ${diffHtml}
+            ${bodyHtml}
         `;
 
         return fileOpDiv;
@@ -826,7 +865,8 @@ class DeepAgentsClient {
             const textElement = msg.querySelector('.message-text');
             return {
                 role: isUser ? 'user' : 'assistant',
-                content: textElement ? textElement.textContent : ''
+                content: textElement ? textElement.textContent : '',
+                html: textElement ? textElement.innerHTML : ''
             };
         }).filter(m => m.content);
 
@@ -861,15 +901,31 @@ class DeepAgentsClient {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
-                <span>${this.escapeHtml(chat.title)}</span>
+                <span class="history-item-title">${this.escapeHtml(chat.title)}</span>
+                <button class="history-delete-btn" data-chat-id="${chat.id}" title="Delete chat">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                </button>
             </div>
         `).join('');
 
-        // Add click handlers
+        // Add click handlers for loading chat
         this.elements.historyList.querySelectorAll('.history-item').forEach(item => {
-            item.addEventListener('click', () => {
+            const titleSpan = item.querySelector('.history-item-title');
+            titleSpan.addEventListener('click', () => {
                 const chatId = item.getAttribute('data-chat-id');
                 this.loadChat(chatId);
+            });
+        });
+
+        // Add click handlers for delete buttons
+        this.elements.historyList.querySelectorAll('.history-delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const chatId = btn.getAttribute('data-chat-id');
+                this.deleteChat(chatId);
             });
         });
     }
@@ -883,11 +939,27 @@ class DeepAgentsClient {
 
         chat.messages.forEach(msg => {
             const messageElement = this.createMessageElement(msg.role);
-            messageElement.querySelector('.message-text').textContent = msg.content;
+            const textElement = messageElement.querySelector('.message-text');
+
+            // Use innerHTML for structured content, fallback to textContent
+            if (msg.html) {
+                textElement.innerHTML = msg.html;
+            } else {
+                textElement.textContent = msg.content;
+            }
             this.elements.messages.appendChild(messageElement);
         });
 
         this.elements.welcomeMessage.style.display = 'none';
+    }
+
+    deleteChat(chatId) {
+        // Remove from history array
+        this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
+
+        // Save and re-render
+        this.saveHistory();
+        this.renderHistory();
     }
 
     saveConfig() {
@@ -901,7 +973,9 @@ class DeepAgentsClient {
         const stored = localStorage.getItem('deepagents_config');
         if (stored) {
             const config = JSON.parse(stored);
-            this.autoApprove = config.autoApprove || false;
+            if (Object.prototype.hasOwnProperty.call(config, 'autoApprove')) {
+                this.autoApprove = Boolean(config.autoApprove);
+            }
             this.elements.autoApproveToggle.checked = this.autoApprove;
         }
     }
@@ -915,7 +989,25 @@ class DeepAgentsClient {
 
     parseMarkdown(text) {
         if (typeof marked !== 'undefined') {
-            return marked.parse(text);
+            let html = marked.parse(text);
+            // Wrap all code blocks with collapsible containers
+            // This regex matches both <pre><code class="language-xxx"> and <pre><code>
+            html = html.replace(/<pre><code(?: class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g, (match, lang, code) => {
+                const langDisplay = lang ? lang.toUpperCase() : 'CODE';
+                const codeClass = lang ? `language-${lang}` : '';
+                return `
+                    <div class="code-block-container">
+                        <div class="code-block-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                            <span class="code-language">${langDisplay}</span>
+                            <svg class="code-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </div>
+                        <pre><code class="${codeClass}">${code}</code></pre>
+                    </div>
+                `;
+            });
+            return html;
         }
         return this.escapeHtml(text).replace(/\n/g, '<br>');
     }
