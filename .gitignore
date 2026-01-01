@@ -222,3 +222,5 @@ docs/
 workspace/
 run.sh
 node_modules/**
+*.pdf
+*.html
