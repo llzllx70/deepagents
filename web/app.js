@@ -22,6 +22,8 @@ class DeepAgentsClient {
         this.pendingInterrupts = [];
         this.messageBuffer = new Map(); // For assembling streaming messages
         this.currentToolCalls = new Map(); // Track tool calls by ID
+        this.runStatusElements = new Map(); // Track run status elements by run ID
+        this.currentRunStatusElement = null;
         this.sessions = [];
         this.chatHistory = this.loadHistory();
 
@@ -312,26 +314,32 @@ class DeepAgentsClient {
         this.elements.welcomeMessage.style.display = 'none';
 
         // Add run status indicator
-        this.addRunStatus('running', `Running: ${data.run_id.slice(0, 8)}`);
+        this.addRunStatus('running', data.run_id, `Running: ${data.run_id.slice(0, 8)}`);
     }
 
     handleRunEnded(data) {
         const status = data.type.split('.')[1];
         console.log('Run ended:', status, data);
 
-        if (data.run_id) {
-            this.messageBuffer.delete(data.run_id);
-        }
+        const runId = data.run_id || this.currentRunId;
+
+        if (runId) this.messageBuffer.delete(runId);
         this.currentRunId = null;
         this.isRunning = false;
         this.updateCancelButton(false);
 
         // Update run status
-        const statusElement = document.querySelector('.run-status');
+        const statusElement =
+            (runId ? this.runStatusElements.get(runId) : null) ||
+            this.currentRunStatusElement ||
+            Array.from(document.querySelectorAll('.run-status')).pop();
         if (statusElement) {
             statusElement.className = `run-status ${status}`;
             statusElement.innerHTML = `<span>${status.charAt(0).toUpperCase() + status.slice(1)}</span>`;
         }
+
+        if (runId) this.runStatusElements.delete(runId);
+        this.currentRunStatusElement = null;
 
         // Save to history
         this.saveCurrentChat();
@@ -680,14 +688,18 @@ class DeepAgentsClient {
         `;
     }
 
-    addRunStatus(status, text) {
+    addRunStatus(status, runId, text) {
         const statusDiv = document.createElement('div');
         statusDiv.className = `run-status ${status}`;
+        if (runId) statusDiv.dataset.runId = runId;
         statusDiv.innerHTML = status === 'running' ? `
             <div class="spinner"></div>
             <span>${text}</span>
         ` : `<span>${text}</span>`;
         this.elements.messages.appendChild(statusDiv);
+
+        if (runId) this.runStatusElements.set(runId, statusDiv);
+        this.currentRunStatusElement = statusDiv;
     }
 
     addLogMessage(level, message) {
@@ -811,6 +823,8 @@ class DeepAgentsClient {
         this.currentRunId = null;
         this.isRunning = false;
         this.messageBuffer.clear();
+        this.runStatusElements.clear();
+        this.currentRunStatusElement = null;
     }
 
     send(data) {
