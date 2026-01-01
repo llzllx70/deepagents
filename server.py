@@ -20,10 +20,16 @@ from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLRespo
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+
 from deepagents_cli.agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
 from deepagents_cli.file_ops import FileOpTracker
 from deepagents_cli.tools import fetch_url, http_request, web_search
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
@@ -409,8 +415,12 @@ class SessionManager:
         session_id = uuid.uuid4().hex
         model = create_model()
         tools = [http_request, fetch_url]
+        logger.info(f"settings.has_tavily = {settings.has_tavily}, tavily_api_key = {settings.tavily_api_key[:10] if settings.tavily_api_key else None}...")
         if settings.has_tavily:
             tools.append(web_search)
+            logger.info(f"web_search tool added, total tools: {[t.__name__ for t in tools]}")
+        else:
+            logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
         agent, backend = create_cli_agent(
@@ -437,6 +447,16 @@ class SessionManager:
 
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 manager = SessionManager()
 
 
@@ -662,4 +682,4 @@ async def _handle_tool_call_block(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
