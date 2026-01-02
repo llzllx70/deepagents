@@ -422,6 +422,14 @@ body {
     margin-bottom: 0;
 }
 
+.assistant-segment {
+    margin-bottom: 12px;
+}
+
+.assistant-segment:last-child {
+    margin-bottom: 0;
+}
+
 .message.assistant .message-text pre {
     margin: 12px 0;
     border-radius: var(--radius-md);

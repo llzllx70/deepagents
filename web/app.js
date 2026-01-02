@@ -21,6 +21,8 @@ class DeepAgentsClient {
         this.autoApprove = true;
         this.pendingInterrupts = [];
         this.messageBuffer = new Map(); // For assembling streaming messages
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
         this.currentToolCalls = new Map(); // Track tool calls by ID
         this.runStatusElements = new Map(); // Track run status elements by run ID
         this.currentRunStatusElement = null;
@@ -309,6 +311,8 @@ class DeepAgentsClient {
         this.isRunning = true;
         this.updateCancelButton(true);
         this.messageBuffer.set(data.run_id, '');
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
 
         // Hide welcome message
         this.elements.welcomeMessage.style.display = 'none';
@@ -327,6 +331,8 @@ class DeepAgentsClient {
         this.currentRunId = null;
         this.isRunning = false;
         this.updateCancelButton(false);
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
 
         // Update run status
         const statusElement =
@@ -352,72 +358,16 @@ class DeepAgentsClient {
     }
 
     handleAssistantDelta(data) {
-        const text = data.text;
-        if (!text) return;
-
-        const runId = data.run_id || this.currentRunId || 'default';
-        const currentText = this.messageBuffer.get(runId) || '';
-        let nextText = '';
-        if (!currentText) {
-            nextText = text;
-        } else if (text.startsWith(currentText)) {
-            // Some backends send cumulative "delta" payloads; treat as full text update.
-            nextText = text;
-        } else if (currentText.startsWith(text)) {
-            // Ignore out-of-order shorter updates.
-            nextText = currentText;
-        } else {
-            // True incremental delta.
-            nextText = currentText + text;
-        }
-        this.messageBuffer.set(runId, nextText);
-
-        // Get or create current message element
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
-        }
-
-        const markdownElement = this.getOrCreateAssistantMarkdownElement(this.currentMessageElement);
-        markdownElement.innerHTML = this.parseMarkdown(nextText);
-
-        this.scrollToBottom();
+        this.appendAssistantText(data.run_id || this.currentRunId || 'default', data.text);
     }
 
     handleAssistantMessage(data) {
-        const text = data.text;
-        if (!text) return;
-
-        const runId = data.run_id || this.currentRunId || 'default';
-        const currentText = this.messageBuffer.get(runId) || '';
-        let nextText = '';
-        if (!currentText) {
-            nextText = text;
-        } else if (text.startsWith(currentText)) {
-            // Cumulative update (common for some streaming implementations).
-            nextText = text;
-        } else if (currentText.startsWith(text)) {
-            // Ignore out-of-order shorter updates.
-            nextText = currentText;
-        } else {
-            // Treat as incremental chunk and append.
-            nextText = currentText + text;
-        }
-        this.messageBuffer.set(runId, nextText);
-
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
-        }
-
-        const markdownElement = this.getOrCreateAssistantMarkdownElement(this.currentMessageElement);
-        markdownElement.innerHTML = this.parseMarkdown(nextText);
-
-        this.scrollToBottom();
+        this.appendAssistantText(data.run_id || this.currentRunId || 'default', data.text);
     }
 
     handleToolCallStarted(data) {
         const { tool_name, args, tool_call_id } = data;
+        this.closeAssistantSegment();
 
         // Create tool call element
         const toolElement = this.createToolCallElement({
@@ -453,6 +403,7 @@ class DeepAgentsClient {
             toolElement = this.currentToolCalls.get(tool_call_id);
         } else {
             // Fallback: create a tool card even if we missed the started event
+            this.closeAssistantSegment();
             toolElement = this.createToolCallElement({
                 name: tool_name || 'tool',
                 args: {},
@@ -502,6 +453,7 @@ class DeepAgentsClient {
 
     handleFileOp(data) {
         const { tool_name, path, status, error, metrics, diff } = data;
+        this.closeAssistantSegment();
 
         const fileOpElement = this.createFileOpElement({
             toolName: tool_name,
@@ -531,6 +483,7 @@ class DeepAgentsClient {
         let todoElement = this.currentMessageElement?.querySelector('.todo-list');
 
         if (!todoElement) {
+            this.closeAssistantSegment();
             if (!this.currentMessageElement) {
                 this.currentMessageElement = this.createMessageElement('assistant');
                 this.elements.messages.appendChild(this.currentMessageElement);
@@ -602,15 +555,62 @@ class DeepAgentsClient {
         return messageDiv;
     }
 
-    getOrCreateAssistantMarkdownElement(messageElement) {
+    closeAssistantSegment() {
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
+    }
+
+    getOrCreateAssistantSegmentElement(messageElement) {
         const contentElement = messageElement.querySelector('.message-text');
-        let markdownElement = contentElement.querySelector('.assistant-markdown');
-        if (!markdownElement) {
-            markdownElement = document.createElement('div');
-            markdownElement.className = 'assistant-markdown';
-            contentElement.prepend(markdownElement);
+        if (!this.currentAssistantSegmentElement) {
+            const segment = document.createElement('div');
+            segment.className = 'assistant-markdown assistant-segment';
+            contentElement.appendChild(segment);
+            this.currentAssistantSegmentElement = segment;
+            this.currentAssistantSegmentText = '';
         }
-        return markdownElement;
+        return this.currentAssistantSegmentElement;
+    }
+
+    ingestAssistantText(runId, incomingText) {
+        const text = incomingText == null ? '' : String(incomingText);
+        if (!text) return '';
+
+        const currentFull = this.messageBuffer.get(runId) || '';
+        let nextFull = '';
+        let appended = '';
+
+        if (!currentFull) {
+            nextFull = text;
+            appended = text;
+        } else if (text.startsWith(currentFull)) {
+            nextFull = text;
+            appended = text.slice(currentFull.length);
+        } else if (currentFull.startsWith(text)) {
+            nextFull = currentFull;
+            appended = '';
+        } else {
+            nextFull = currentFull + text;
+            appended = text;
+        }
+
+        this.messageBuffer.set(runId, nextFull);
+        return appended;
+    }
+
+    appendAssistantText(runId, text) {
+        const appended = this.ingestAssistantText(runId, text);
+        if (!appended) return;
+
+        if (!this.currentMessageElement) {
+            this.currentMessageElement = this.createMessageElement('assistant');
+            this.elements.messages.appendChild(this.currentMessageElement);
+        }
+
+        const segmentElement = this.getOrCreateAssistantSegmentElement(this.currentMessageElement);
+        this.currentAssistantSegmentText += appended;
+        segmentElement.innerHTML = this.parseMarkdown(this.currentAssistantSegmentText);
+        this.scrollToBottom();
     }
 
     createToolCallElement({ name, args, id, status }) {
@@ -754,6 +754,7 @@ class DeepAgentsClient {
     }
 
     addLogMessage(level, message) {
+        this.closeAssistantSegment();
         const logDiv = document.createElement('div');
         logDiv.className = `log-message ${level}`;
         logDiv.textContent = `[${level.toUpperCase()}] ${message}`;
@@ -840,6 +841,8 @@ class DeepAgentsClient {
 
         // Reset current message element
         this.currentMessageElement = null;
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
 
         // Send to server
         const runId = this.generateRunId();
@@ -863,6 +866,8 @@ class DeepAgentsClient {
         // Clear messages
         this.elements.messages.innerHTML = '';
         this.currentMessageElement = null;
+        this.currentAssistantSegmentElement = null;
+        this.currentAssistantSegmentText = '';
 
         // Show welcome message
         this.elements.welcomeMessage.style.display = 'flex';
