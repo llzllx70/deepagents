@@ -123,12 +123,22 @@ class DeepAgentsClient {
         this.elements.userInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                this.sendMessage();
+                if (this.isRunning) {
+                    this.cancelRun();
+                } else {
+                    this.sendMessage();
+                }
             }
         });
 
         // Send button
-        this.elements.sendBtn.addEventListener('click', () => this.sendMessage());
+        this.elements.sendBtn.addEventListener('click', () => {
+            if (this.isRunning) {
+                this.cancelRun();
+            } else {
+                this.sendMessage();
+            }
+        });
 
         // Example prompts
         document.querySelectorAll('.example-btn').forEach(btn => {
@@ -167,6 +177,18 @@ class DeepAgentsClient {
         window.addEventListener('resize', () => {
             if (window.innerWidth > 768) {
                 this.elements.sidebar.classList.remove('open');
+            }
+        });
+
+        // Keyboard shortcut: Esc cancels run (or closes modal)
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (this.elements.interruptModal.classList.contains('active')) {
+                this.elements.interruptModal.classList.remove('active');
+                return;
+            }
+            if (this.isRunning) {
+                this.cancelRun();
             }
         });
     }
@@ -310,6 +332,7 @@ class DeepAgentsClient {
         this.currentRunId = data.run_id;
         this.isRunning = true;
         this.updateCancelButton(true);
+        this.updateSendButton();
         this.messageBuffer.set(data.run_id, '');
         this.currentAssistantSegmentElement = null;
         this.currentAssistantSegmentText = '';
@@ -331,6 +354,7 @@ class DeepAgentsClient {
         this.currentRunId = null;
         this.isRunning = false;
         this.updateCancelButton(false);
+        this.updateSendButton();
         this.currentAssistantSegmentElement = null;
         this.currentAssistantSegmentText = '';
 
@@ -956,8 +980,30 @@ class DeepAgentsClient {
     }
 
     updateSendButton() {
+        const btn = this.elements.sendBtn;
         const hasText = this.elements.userInput.value.trim().length > 0;
-        this.elements.sendBtn.disabled = !hasText;
+
+        if (this.isRunning) {
+            btn.disabled = false;
+            btn.classList.add('stop');
+            btn.title = '中断运行';
+            btn.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect>
+                </svg>
+            `;
+            return;
+        }
+
+        btn.disabled = !hasText;
+        btn.classList.remove('stop');
+        btn.title = '发送';
+        btn.innerHTML = `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+        `;
     }
 
     adjustTextareaHeight() {

@@ -951,6 +951,14 @@ body {
     background: var(--accent-hover);
 }
 
+.send-btn.stop {
+    background: var(--error);
+}
+
+.send-btn.stop:hover:not(:disabled) {
+    background: #dc2626;
+}
+
 .send-btn:active:not(:disabled) {
     transform: scale(0.95);
 }

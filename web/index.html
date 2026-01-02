@@ -74,7 +74,7 @@
             <div class="chat-container" id="chatContainer">
                 <div class="welcome-message" id="welcomeMessage">
                     <h2>欢迎使用</h2>
-                    <p>星火自研的开源智能体框架</p>
+                    <p>星火自研的智能体框架</p>
                 </div>
                 <div class="messages" id="messages">
                     <!-- Messages will be populated here -->
@@ -84,24 +84,24 @@
             <!-- Input Area -->
             <div class="input-area">
                 <div class="input-wrapper">
-                    <textarea
-                        id="userInput"
-                        placeholder="输入消息…（Cmd+Enter 发送）"
-                        rows="1"
-                    ></textarea>
+	                    <textarea
+	                        id="userInput"
+	                        placeholder="输入消息…（Cmd+Enter 发送，Esc 中断）"
+	                        rows="1"
+	                    ></textarea>
                     <button class="send-btn" id="sendBtn" disabled>
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                         </svg>
                     </button>
-                </div>
-                <div class="input-footer">
-                    <span class="hint">按 Cmd+Enter 发送</span>
-                </div>
-            </div>
-        </main>
-    </div>
+	                </div>
+	                <div class="input-footer">
+	                    <span class="hint">Cmd+Enter 发送，Esc 中断</span>
+	                </div>
+	            </div>
+	        </main>
+	    </div>
 
     <!-- Interrupt Modal -->
     <div class="modal" id="interruptModal">
