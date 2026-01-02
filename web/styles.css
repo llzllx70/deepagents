@@ -530,7 +530,7 @@ body {
 
 .tool-call-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     padding: 12px 16px;
     background: var(--bg-tertiary);
@@ -552,13 +552,29 @@ body {
 .tool-name {
     font-weight: 500;
     font-size: 14px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.tool-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.tool-summary {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .tool-status {
-    margin-left: auto;
     font-size: 12px;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
+    flex-shrink: 0;
 }
 
 .tool-status.running {
@@ -658,7 +674,7 @@ body {
 
 .file-operation-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     user-select: none;
 }
@@ -684,6 +700,10 @@ body {
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 13px;
     color: var(--accent);
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .file-op-status {
@@ -742,6 +762,37 @@ body {
     margin: 0;
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 12px;
+}
+
+.file-op-content {
+    margin-top: 12px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    overflow-x: auto;
+}
+
+.file-op-content-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.file-op-content pre {
+    margin: 0;
+}
+
+.file-op-content pre code {
+    display: block;
+    padding: 0;
+    background: transparent;
+    overflow-x: auto;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 12px;
+    white-space: pre;
+    color: var(--text-secondary);
 }
 
 .diff-add {
@@ -859,12 +910,30 @@ body {
     gap: 8px;
     margin-bottom: 12px;
     font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+}
+
+.todo-chevron {
+    margin-left: auto;
+    transition: transform 0.2s;
+    transform: rotate(-90deg);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.todo-list.expanded .todo-chevron {
+    transform: rotate(0deg);
 }
 
 .todo-items {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.todo-list:not(.expanded) .todo-items {
+    display: none;
 }
 
 .todo-item {

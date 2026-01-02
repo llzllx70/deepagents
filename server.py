@@ -290,6 +290,18 @@ class Session:
                         record = file_op_tracker.complete_with_message(message)
 
                         if record is not None:
+                            content = ""
+                            content_preview = ""
+                            content_truncated = False
+                            meta: dict[str, Any] = {}
+                            if record.tool_name == "read_file" and record.read_output is not None:
+                                raw_content = record.read_output
+                                content, content_truncated = _truncate_text(raw_content, limit=50000)
+                                content_preview, _preview_truncated = _truncate_text(raw_content, limit=6000)
+                                if record.display_path.lower().endswith("skill.md"):
+                                    skill_name = _extract_skill_name(raw_content)
+                                    if skill_name:
+                                        meta["skill_name"] = skill_name
                             await self.broadcast(
                                 {
                                     "type": "file.op",
@@ -306,6 +318,10 @@ class Session:
                                         "bytes_written": record.metrics.bytes_written,
                                     },
                                     "diff": record.diff,
+                                    "content": content,
+                                    "content_preview": content_preview,
+                                    "content_truncated": content_truncated,
+                                    "meta": meta,
                                 }
                             )
 
@@ -675,6 +691,22 @@ def _parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
             return parsed
         return {"value": parsed}
     return {"value": raw_args}
+
+
+def _truncate_text(text: str, limit: int) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
+def _extract_skill_name(text: str) -> str | None:
+    # SKILL.md commonly uses a YAML header with `name: ...`.
+    for line in text.splitlines()[:200]:
+        match = re.match(r"\s*name\s*:\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        return match.group(1).strip().strip('"').strip("'") or None
+    return None
 
 
 def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:

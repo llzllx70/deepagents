@@ -393,6 +393,13 @@ class DeepAgentsClient {
         const { tool_name, args, tool_call_id } = data;
         this.closeAssistantSegment();
 
+        if (tool_call_id && this.currentToolCalls.has(tool_call_id)) {
+            const toolElement = this.currentToolCalls.get(tool_call_id);
+            this.updateToolCallElement(toolElement, { name: tool_name, args, status: 'running' });
+            this.scrollToBottom();
+            return;
+        }
+
         // Create tool call element
         const toolElement = this.createToolCallElement({
             name: tool_name,
@@ -476,7 +483,7 @@ class DeepAgentsClient {
     }
 
     handleFileOp(data) {
-        const { tool_name, path, status, error, metrics, diff } = data;
+        const { tool_name, path, status, error, metrics, diff, content, content_preview, content_truncated, meta } = data;
         this.closeAssistantSegment();
 
         const fileOpElement = this.createFileOpElement({
@@ -485,7 +492,10 @@ class DeepAgentsClient {
             status: status,
             error: error,
             metrics: metrics,
-            diff: diff
+            diff: diff,
+            content: typeof content === 'string' && content.length ? content : content_preview,
+            contentTruncated: Boolean(content_truncated),
+            meta: meta || {}
         });
 
         if (!this.currentMessageElement) {
@@ -519,12 +529,15 @@ class DeepAgentsClient {
         } else {
             // Update existing todo list
             todoElement.innerHTML = `
-                <div class="todo-list-header">
+                <div class="todo-list-header" onclick="this.parentElement.classList.toggle('expanded')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M9 11l3 3L22 4"></path>
                         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                     </svg>
                     <span>任务</span>
+                    <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
                 </div>
                 <div class="todo-items">
                     ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
@@ -643,6 +656,7 @@ class DeepAgentsClient {
         toolDiv.setAttribute('data-tool-id', id);
 
         const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
+        const summary = this.formatToolSummary(name, args);
 
         toolDiv.innerHTML = `
             <div class="tool-call-header" onclick="this.parentElement.classList.toggle('expanded')">
@@ -651,7 +665,10 @@ class DeepAgentsClient {
                     <path d="M12 1v6m0 6v6"></path>
                     <path d="m1 12h6m6 0h6"></path>
                 </svg>
-                <span class="tool-name">${this.escapeHtml(name)}</span>
+                <div class="tool-title">
+                    <span class="tool-name">${this.escapeHtml(name)}</span>
+                    ${summary ? `<span class="tool-summary">${this.escapeHtml(summary)}</span>` : ''}
+                </div>
                 <span class="tool-status ${status}">${this.escapeHtml(this.formatToolStatus(status))}</span>
                 <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -668,13 +685,23 @@ class DeepAgentsClient {
         return toolDiv;
     }
 
-    createFileOpElement({ toolName, path, status, error, metrics, diff }) {
+    createFileOpElement({ toolName, path, status, error, metrics, diff, content, contentTruncated, meta }) {
         const fileOpDiv = document.createElement('div');
-        const hasBody = Boolean(metrics || diff);
-        fileOpDiv.className = hasBody ? 'file-operation expanded' : 'file-operation';
+        const hasBody = Boolean(metrics || diff || content);
+        fileOpDiv.className = 'file-operation';
 
         // Check if file is PDF
         const isPdf = path.toLowerCase().endsWith('.pdf');
+
+        let skillName =
+            meta && typeof meta.skill_name === 'string' && meta.skill_name ? meta.skill_name : '';
+        if (!skillName && typeof path === 'string' && path.toLowerCase().endsWith('skill.md') && typeof content === 'string') {
+            const match = content.match(/^\s*name\s*:\s*(.+?)\s*$/m);
+            if (match && match[1]) {
+                skillName = match[1].trim().replace(/^['"]|['"]$/g, '');
+            }
+        }
+        const headerMeta = skillName ? `（技能：${skillName}）` : '';
 
         const metricsHtml = metrics ? `
             <div class="file-op-metrics">
@@ -689,6 +716,13 @@ class DeepAgentsClient {
         const diffHtml = diff ? `
             <div class="file-op-diff">
                 <pre>${this.formatDiff(diff)}</pre>
+            </div>
+        ` : '';
+
+        const contentHtml = (toolName === 'read_file' && content) ? `
+            <div class="file-op-content">
+                <div class="file-op-content-label">内容${contentTruncated ? '（已截断）' : ''}</div>
+                <pre><code class="${this.escapeHtml(this.guessLanguageClass(path))}">${this.escapeHtml(String(content))}</code></pre>
             </div>
         ` : '';
 
@@ -714,6 +748,7 @@ class DeepAgentsClient {
             <div class="file-operation-body">
                 ${metricsHtml}
                 ${diffHtml}
+                ${contentHtml}
             </div>
         ` : '';
 
@@ -723,7 +758,7 @@ class DeepAgentsClient {
                     <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
                     <polyline points="13 2 13 9 20 9"></polyline>
                 </svg>
-                <span class="file-op-path">${this.escapeHtml(path)}</span>
+                <span class="file-op-path">${this.escapeHtml(path)}${this.escapeHtml(headerMeta)}</span>
                 <span class="file-op-status ${status}">${this.escapeHtml(this.formatFileOpStatus(status))}</span>
                 ${downloadButtonHtml}
                 ${chevronHtml}
@@ -734,16 +769,122 @@ class DeepAgentsClient {
         return fileOpDiv;
     }
 
+    updateToolCallElement(toolElement, { name, args, status }) {
+        if (!toolElement) return;
+
+        const headerName = toolElement.querySelector('.tool-name');
+        if (headerName && name) headerName.textContent = name;
+
+        const summaryText = this.formatToolSummary(name, args);
+        const title = toolElement.querySelector('.tool-title');
+        if (title) {
+            let summary = title.querySelector('.tool-summary');
+            if (summaryText) {
+                if (!summary) {
+                    summary = document.createElement('span');
+                    summary.className = 'tool-summary';
+                    title.appendChild(summary);
+                }
+                summary.textContent = summaryText;
+            } else if (summary) {
+                summary.remove();
+            }
+        }
+
+        const argsElement = toolElement.querySelector('.tool-args-content');
+        if (argsElement) {
+            const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
+            argsElement.textContent = argsJson;
+        }
+
+        const statusElement = toolElement.querySelector('.tool-status');
+        if (statusElement && status) {
+            statusElement.className = `tool-status ${status}`;
+            statusElement.textContent = this.formatToolStatus(status);
+        }
+    }
+
+    formatToolSummary(toolName, args) {
+        const name = String(toolName || '');
+        const a = args && typeof args === 'object' ? args : {};
+
+        if (name === 'web_search') {
+            const query = a.query || a.q || a.text || '';
+            return query ? `查询：\n${String(query)}` : '';
+        }
+
+        if (name === 'read_file' || name === 'write_file' || name === 'edit_file') {
+            const filePath = a.file_path || a.path || a.file || '';
+            return filePath ? `路径：\n${String(filePath)}` : '';
+        }
+
+        if (name === 'ls') {
+            const path = a.path || a.dir || a.directory || '';
+            return path ? `路径：\n${String(path)}` : '';
+        }
+
+        if (name === 'shell') {
+            const command = a.command || a.cmd || a.value || '';
+            return command ? `命令：\n${String(command)}` : '';
+        }
+
+        if (name === 'glob') {
+            const pattern = a.pattern || a.glob || a.value || '';
+            const path = a.path || a.dir || a.directory || '';
+            if (!pattern && !path) return '';
+            const lines = [];
+            if (pattern) lines.push(`匹配：\n${String(pattern)}`);
+            if (path) lines.push(`目录：\n${String(path)}`);
+            return lines.join('\n');
+        }
+
+        if (name === 'grep') {
+            const pattern = a.pattern || a.query || a.q || a.value || '';
+            const path = a.path || a.dir || a.directory || '';
+            const glob = a.glob || a.include || a.file_glob || '';
+            if (!pattern && !path && !glob) return '';
+            const lines = [];
+            if (pattern) lines.push(`查找：\n${String(pattern)}`);
+            if (glob) lines.push(`文件：\n${String(glob)}`);
+            if (path) lines.push(`目录：\n${String(path)}`);
+            return lines.join('\n');
+        }
+
+        return '';
+    }
+
+    truncateText(text, maxLen) {
+        const s = String(text || '');
+        if (s.length <= maxLen) return s;
+        return s.slice(0, Math.max(0, maxLen - 1)) + '…';
+    }
+
+    guessLanguageClass(path) {
+        const p = String(path || '').toLowerCase();
+        if (p.endsWith('.md')) return 'language-markdown';
+        if (p.endsWith('.py')) return 'language-python';
+        if (p.endsWith('.js')) return 'language-javascript';
+        if (p.endsWith('.ts')) return 'language-typescript';
+        if (p.endsWith('.json')) return 'language-json';
+        if (p.endsWith('.yaml') || p.endsWith('.yml')) return 'language-yaml';
+        if (p.endsWith('.html') || p.endsWith('.htm')) return 'language-html';
+        if (p.endsWith('.css')) return 'language-css';
+        return 'language-text';
+    }
+
     createTodoListElement(todos) {
         const todoDiv = document.createElement('div');
         todoDiv.className = 'todo-list';
         todoDiv.innerHTML = `
-            <div class="todo-list-header">
+            <div class="todo-list-header" onclick="this.parentElement.classList.toggle('expanded')">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M9 11l3 3L22 4"></path>
                     <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                 </svg>
                 <span>任务</span>
+                <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
             </div>
             <div class="todo-items">
                 ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
