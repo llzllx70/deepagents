@@ -28,6 +28,7 @@ class DeepAgentsClient {
         this.currentRunStatusElement = null;
         this.sessions = [];
         this.chatHistory = this.loadHistory();
+        this.todoState = null; // Track last todos to compute progress diffs
 
         // UI elements
         this.elements = {};
@@ -513,6 +514,8 @@ class DeepAgentsClient {
         const todos = data.todos;
         if (!todos || !Array.isArray(todos)) return;
 
+        const prevTodos = this.todoState;
+
         // Create or update todo list
         let todoElement = this.currentMessageElement?.querySelector('.todo-list');
 
@@ -528,23 +531,10 @@ class DeepAgentsClient {
             contentElement.appendChild(todoElement);
         } else {
             // Update existing todo list
-            todoElement.innerHTML = `
-                <div class="todo-list-header" onclick="this.parentElement.classList.toggle('expanded')">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 11l3 3L22 4"></path>
-                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                    </svg>
-                    <span>任务</span>
-                    <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </div>
-                <div class="todo-items">
-                    ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
-                </div>
-            `;
+            todoElement.innerHTML = this.renderTodoListHtml(todos, prevTodos);
         }
 
+        this.todoState = JSON.parse(JSON.stringify(todos));
         this.scrollToBottom();
     }
 
@@ -557,7 +547,11 @@ class DeepAgentsClient {
     }
 
     handleInterruptAutoApproved(data) {
-        this.addLogMessage('info', `已自动批准：${data.interrupt_id.slice(0, 8)}`);
+        // Keep the UI clean: auto-approve is expected behavior when enabled.
+        // Still log to console for debugging.
+        try {
+            console.debug('Auto-approved interrupt:', data?.interrupt_id);
+        } catch {}
     }
 
     handleSessionAutoApprove(data) {
@@ -813,6 +807,16 @@ class DeepAgentsClient {
             return query ? `查询：\n${String(query)}` : '';
         }
 
+        if (name === 'write_todos') {
+            const todos = Array.isArray(a.todos) ? a.todos : [];
+            const progress = this.getTodoProgress(this.todoState, todos);
+            if (progress.summary) return progress.summary;
+            const counts = this.countTodosByStatus(todos);
+            const total = counts.pending + counts.in_progress + counts.completed;
+            if (!total) return '';
+            return `处理中：${counts.in_progress}  待处理：${counts.pending}  已完成：${counts.completed}`;
+        }
+
         if (name === 'read_file' || name === 'write_file' || name === 'edit_file') {
             const filePath = a.file_path || a.path || a.file || '';
             return filePath ? `路径：\n${String(filePath)}` : '';
@@ -853,6 +857,147 @@ class DeepAgentsClient {
         return '';
     }
 
+    countTodosByStatus(todos) {
+        const counts = { pending: 0, in_progress: 0, completed: 0 };
+        if (!Array.isArray(todos) || !todos.length) return counts;
+        for (const todo of todos) {
+            const status = String(todo?.status || 'pending');
+            if (status === 'completed') counts.completed += 1;
+            else if (status === 'in_progress') counts.in_progress += 1;
+            else counts.pending += 1;
+        }
+        return counts;
+    }
+
+    normalizeTodos(todos) {
+        if (!Array.isArray(todos) || !todos.length) return [];
+        return todos
+            .map(t => ({
+                content: String(t?.content || '').trim(),
+                status: String(t?.status || 'pending'),
+            }))
+            .filter(t => t.content.length > 0);
+    }
+
+    getTodoProgress(prevTodos, nextTodos) {
+        const prev = this.normalizeTodos(prevTodos);
+        const next = this.normalizeTodos(nextTodos);
+        if (!prev.length || !next.length) return { started: [], completed: [], summary: '', tooltip: '' };
+
+        const prevByContent = new Map();
+        const nextByContent = new Map();
+
+        for (const t of prev) {
+            const existing = prevByContent.get(t.content);
+            if (existing) {
+                prevByContent.set(t.content, null);
+            } else {
+                prevByContent.set(t.content, t.status);
+            }
+        }
+        for (const t of next) {
+            const existing = nextByContent.get(t.content);
+            if (existing) {
+                nextByContent.set(t.content, null);
+            } else {
+                nextByContent.set(t.content, t.status);
+            }
+        }
+
+        const started = [];
+        const completed = [];
+        for (const [content, prevStatus] of prevByContent.entries()) {
+            if (prevStatus == null) continue; // skip ambiguous duplicates
+            const nextStatus = nextByContent.get(content);
+            if (nextStatus == null) continue; // missing or ambiguous duplicates
+            if (prevStatus === 'pending' && nextStatus === 'in_progress') started.push(content);
+            if (
+                (prevStatus === 'in_progress' && nextStatus === 'completed') ||
+                (prevStatus === 'pending' && nextStatus === 'completed')
+            ) {
+                completed.push(content);
+            }
+        }
+
+        const tooltipLines = [];
+        for (const c of completed) tooltipLines.push(`已完成: ${c}`);
+        for (const c of started) tooltipLines.push(`开始处理: ${c}`);
+
+        const summaryLines = [];
+        if (completed.length) {
+            summaryLines.push(
+                `已完成：${completed[0]}${completed.length > 1 ? `（+${completed.length - 1}）` : ''}`
+            );
+        }
+        if (started.length) {
+            summaryLines.push(
+                `开始处理：${started[0]}${started.length > 1 ? `（+${started.length - 1}）` : ''}`
+            );
+        }
+        const summary = summaryLines.join('\n');
+
+        return {
+            started,
+            completed,
+            summary,
+            tooltip: tooltipLines.join('\n'),
+        };
+    }
+
+    renderTodoListHtml(todos, prevTodos = null) {
+        const progress = this.getTodoProgress(prevTodos, todos);
+        const counts = this.countTodosByStatus(todos);
+
+        const progressChips = [];
+        if (progress.completed.length) {
+            const label = `已完成：${progress.completed[0]}${progress.completed.length > 1 ? `（+${progress.completed.length - 1}）` : ''}`;
+            progressChips.push({ cls: 'completed', label });
+        }
+        if (progress.started.length) {
+            const label = `开始处理：${progress.started[0]}${progress.started.length > 1 ? `（+${progress.started.length - 1}）` : ''}`;
+            progressChips.push({ cls: 'started', label });
+        }
+
+        const progressHtml = progressChips.length
+            ? `
+                <div class="todo-progress-chips" title="${this.escapeHtml(progress.tooltip || progressChips.map(c => c.label).join('\n'))}">
+                    ${progressChips.map(c => `<span class="todo-progress ${c.cls}">${this.escapeHtml(c.label)}</span>`).join('')}
+                </div>
+            `
+            : '';
+
+        const badges = [
+            { cls: 'in-progress', label: `处理中 ${counts.in_progress}` },
+            { cls: 'pending', label: `待处理 ${counts.pending}` },
+            { cls: 'completed', label: `已完成 ${counts.completed}` },
+        ];
+        const badgesHtml = `
+            <div class="todo-badges">
+                ${badges.map(b => `<span class="todo-badge ${b.cls}">${this.escapeHtml(b.label)}</span>`).join('')}
+            </div>
+        `;
+
+        return `
+            <div class="todo-list-header" onclick="this.parentElement.classList.toggle('expanded')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 11l3 3L22 4"></path>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                </svg>
+                <div class="todo-header-text">
+                    <span class="todo-title">任务</span>
+                    ${progressHtml}
+                    ${badgesHtml}
+                </div>
+                <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+            </div>
+            <div class="todo-items">
+                ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
+            </div>
+        `;
+    }
+
     truncateText(text, maxLen) {
         const s = String(text || '');
         if (s.length <= maxLen) return s;
@@ -875,21 +1020,7 @@ class DeepAgentsClient {
     createTodoListElement(todos) {
         const todoDiv = document.createElement('div');
         todoDiv.className = 'todo-list';
-        todoDiv.innerHTML = `
-            <div class="todo-list-header" onclick="this.parentElement.classList.toggle('expanded')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M9 11l3 3L22 4"></path>
-                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                </svg>
-                <span>任务</span>
-                <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-            </div>
-            <div class="todo-items">
-                ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
-            </div>
-        `;
+        todoDiv.innerHTML = this.renderTodoListHtml(todos, this.todoState);
         return todoDiv;
     }
 
