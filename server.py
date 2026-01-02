@@ -249,7 +249,7 @@ class Session:
                         continue
 
                     if isinstance(message, AIMessage):
-                        text = message.content if isinstance(message.content, str) else None
+                        text = _normalize_text_content(message.content)
                         if text:
                             await self.broadcast(
                                 {
@@ -258,12 +258,35 @@ class Session:
                                     "text": text,
                                 }
                             )
+
+                        for tool_call in _extract_tool_calls(message):
+                            if isinstance(tool_call, dict):
+                                tool_name = tool_call.get("name")
+                                tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id")
+                                raw_args = tool_call.get("args")
+                                if tool_name is None and isinstance(tool_call.get("function"), dict):
+                                    tool_name = tool_call["function"].get("name")
+                                    raw_args = raw_args or tool_call["function"].get("arguments")
+                                if not tool_name:
+                                    continue
+                                parsed_args = _parse_tool_args(raw_args)
+                                if parsed_args is None:
+                                    continue
+                                await _emit_tool_call_started(
+                                    session=self,
+                                    run_id=run_request.run_id,
+                                    tool_name=str(tool_name),
+                                    tool_call_id=str(tool_call_id) if tool_call_id else None,
+                                    args=parsed_args,
+                                    file_op_tracker=file_op_tracker,
+                                    displayed_tool_ids=displayed_tool_ids,
+                                )
                         continue
 
                     if isinstance(message, ToolMessage):
                         tool_name = getattr(message, "name", "") or "tool"
                         tool_status = getattr(message, "status", "success")
-                        tool_content = _format_tool_content(message.content)
+                        tool_full_content = _normalize_text_content(message.content)
                         record = file_op_tracker.complete_with_message(message)
 
                         if record is not None:
@@ -286,6 +309,7 @@ class Session:
                                 }
                             )
 
+                        preview_limit = 400
                         await self.broadcast(
                             {
                                 "type": "tool.call.ended",
@@ -293,10 +317,25 @@ class Session:
                                 "tool_name": tool_name,
                                 "status": tool_status,
                                 "tool_call_id": getattr(message, "tool_call_id", None),
-                                "content_preview": tool_content,
+                                "content": tool_full_content,
+                                "content_preview": _format_tool_content(tool_full_content, limit=preview_limit),
+                                "content_truncated": len(tool_full_content) > preview_limit,
                             }
                         )
                         continue
+
+                    tool_call_chunks = getattr(message, "tool_call_chunks", None)
+                    if isinstance(tool_call_chunks, list) and tool_call_chunks:
+                        for chunk in tool_call_chunks:
+                            if isinstance(chunk, dict):
+                                await _handle_tool_call_block(
+                                    chunk,
+                                    tool_call_buffers,
+                                    displayed_tool_ids,
+                                    file_op_tracker,
+                                    run_request.run_id,
+                                    self,
+                                )
 
                     if not hasattr(message, "content_blocks"):
                         text_content = getattr(message, "content", None)
@@ -591,15 +630,91 @@ def _inject_file_context(user_input: str) -> tuple[str, list[str]]:
 
 
 def _format_tool_content(content: Any, limit: int = 400) -> str:
+    text = _normalize_text_content(content)
+    if len(text) > limit:
+        return text[:limit] + "...(truncated)"
+    return text
+
+
+def _normalize_text_content(content: Any) -> str:
     if content is None:
         return ""
+    if isinstance(content, str):
+        return content
     if isinstance(content, list):
-        content = "\n".join(str(item) for item in content)
-    if not isinstance(content, str):
-        content = str(content)
-    if len(content) > limit:
-        return content[:limit] + "...(truncated)"
-    return content
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item:
+                    parts.append(item)
+                continue
+            if isinstance(item, dict):
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    text = item["text"]
+                    if text:
+                        parts.append(text)
+                continue
+            parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
+    if raw_args is None:
+        return None
+    if isinstance(raw_args, dict):
+        return raw_args
+    if isinstance(raw_args, str):
+        if not raw_args:
+            return None
+        try:
+            parsed = json.loads(raw_args)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    return {"value": raw_args}
+
+
+def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:
+    tool_calls = getattr(message, "tool_calls", None)
+    if isinstance(tool_calls, list) and tool_calls:
+        return tool_calls
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        maybe = additional_kwargs.get("tool_calls")
+        if isinstance(maybe, list) and maybe:
+            return maybe
+    return []
+
+
+async def _emit_tool_call_started(
+    *,
+    session: Session,
+    run_id: str,
+    tool_name: str,
+    tool_call_id: str | None,
+    args: dict[str, Any],
+    file_op_tracker: FileOpTracker,
+    displayed_tool_ids: set[str],
+) -> None:
+    if tool_call_id is not None:
+        if tool_call_id not in displayed_tool_ids:
+            displayed_tool_ids.add(tool_call_id)
+            file_op_tracker.start_operation(tool_name, args, tool_call_id)
+        else:
+            file_op_tracker.update_args(tool_call_id, args)
+
+    await session.broadcast(
+        {
+            "type": "tool.call.started",
+            "run_id": run_id,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "args": args,
+        }
+    )
 
 
 async def _handle_tool_call_block(

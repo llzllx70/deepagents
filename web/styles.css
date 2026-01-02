@@ -410,6 +410,8 @@ body {
 
 .message.assistant .message-text {
     line-height: 1.7;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .message.assistant .message-text p {

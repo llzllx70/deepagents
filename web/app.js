@@ -357,7 +357,19 @@ class DeepAgentsClient {
 
         const runId = data.run_id || this.currentRunId || 'default';
         const currentText = this.messageBuffer.get(runId) || '';
-        const nextText = currentText + text;
+        let nextText = '';
+        if (!currentText) {
+            nextText = text;
+        } else if (text.startsWith(currentText)) {
+            // Some backends send cumulative "delta" payloads; treat as full text update.
+            nextText = text;
+        } else if (currentText.startsWith(text)) {
+            // Ignore out-of-order shorter updates.
+            nextText = currentText;
+        } else {
+            // True incremental delta.
+            nextText = currentText + text;
+        }
         this.messageBuffer.set(runId, nextText);
 
         // Get or create current message element
@@ -377,7 +389,21 @@ class DeepAgentsClient {
         if (!text) return;
 
         const runId = data.run_id || this.currentRunId || 'default';
-        this.messageBuffer.set(runId, text);
+        const currentText = this.messageBuffer.get(runId) || '';
+        let nextText = '';
+        if (!currentText) {
+            nextText = text;
+        } else if (text.startsWith(currentText)) {
+            // Cumulative update (common for some streaming implementations).
+            nextText = text;
+        } else if (currentText.startsWith(text)) {
+            // Ignore out-of-order shorter updates.
+            nextText = currentText;
+        } else {
+            // Treat as incremental chunk and append.
+            nextText = currentText + text;
+        }
+        this.messageBuffer.set(runId, nextText);
 
         if (!this.currentMessageElement) {
             this.currentMessageElement = this.createMessageElement('assistant');
@@ -385,7 +411,7 @@ class DeepAgentsClient {
         }
 
         const markdownElement = this.getOrCreateAssistantMarkdownElement(this.currentMessageElement);
-        markdownElement.innerHTML = this.parseMarkdown(text);
+        markdownElement.innerHTML = this.parseMarkdown(nextText);
 
         this.scrollToBottom();
     }
@@ -419,34 +445,59 @@ class DeepAgentsClient {
     }
 
     handleToolCallEnded(data) {
-        const { tool_name, status, tool_call_id, content_preview } = data;
+        const { tool_name, status, tool_call_id, content_preview, content } = data;
+        const toolContent = typeof content === 'string' && content.length ? content : content_preview;
 
+        let toolElement = null;
         if (tool_call_id && this.currentToolCalls.has(tool_call_id)) {
-            const toolElement = this.currentToolCalls.get(tool_call_id);
+            toolElement = this.currentToolCalls.get(tool_call_id);
+        } else {
+            // Fallback: create a tool card even if we missed the started event
+            toolElement = this.createToolCallElement({
+                name: tool_name || 'tool',
+                args: {},
+                id: tool_call_id,
+                status: status || 'success'
+            });
 
-            // Update status
-            const statusElement = toolElement.querySelector('.tool-status');
-            if (statusElement) {
-                statusElement.className = `tool-status ${status}`;
-                statusElement.textContent = status;
+            if (!this.currentMessageElement) {
+                this.currentMessageElement = this.createMessageElement('assistant');
+                this.elements.messages.appendChild(this.currentMessageElement);
             }
+            const contentElement = this.currentMessageElement.querySelector('.message-text');
+            contentElement.appendChild(toolElement);
+        }
 
-            // Add result if available
-            if (content_preview) {
-                const bodyElement = toolElement.querySelector('.tool-call-body');
-                if (bodyElement && !bodyElement.querySelector('.tool-result')) {
-                    const resultElement = document.createElement('div');
+        // Update status
+        const statusElement = toolElement.querySelector('.tool-status');
+        if (statusElement) {
+            statusElement.className = `tool-status ${status}`;
+            statusElement.textContent = status;
+        }
+
+        // Add or update result
+        if (toolContent) {
+            const bodyElement = toolElement.querySelector('.tool-call-body');
+            if (bodyElement) {
+                let resultElement = bodyElement.querySelector('.tool-result');
+                if (!resultElement) {
+                    resultElement = document.createElement('div');
                     resultElement.className = 'tool-result';
                     resultElement.innerHTML = `
                         <div class="tool-result-label">Result</div>
-                        <div class="tool-result-content">${this.formatToolResult(content_preview)}</div>
+                        <div class="tool-result-content"></div>
                     `;
                     bodyElement.appendChild(resultElement);
+                }
+                const resultContent = resultElement.querySelector('.tool-result-content');
+                if (resultContent) {
+                    resultContent.innerHTML = this.formatToolResult(toolContent);
                 }
             }
         }
 
-        this.currentToolCalls.delete(tool_call_id);
+        if (tool_call_id) this.currentToolCalls.delete(tool_call_id);
+        this.scrollToBottom();
     }
 
     handleFileOp(data) {
@@ -1041,6 +1092,8 @@ class DeepAgentsClient {
     }
 
     formatToolResult(content) {
+        if (content == null) return '';
+        content = String(content);
         // Check if content is HTML (contains <!DOCTYPE html> or <html tag)
         const isHtml = content.includes('<!DOCTYPE html>') ||
                       content.includes('<html') ||
