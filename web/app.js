@@ -185,7 +185,7 @@ class DeepAgentsClient {
             });
 
             if (!response.ok) {
-                throw new Error(`Failed to create session: ${response.statusText}`);
+                throw new Error(`创建会话失败：${response.statusText}`);
             }
 
             const data = await response.json();
@@ -200,8 +200,8 @@ class DeepAgentsClient {
             this.connectWebSocket();
 
         } catch (error) {
-            console.error('Failed to create session:', error);
-            this.addLogMessage('error', `Failed to connect to server: ${error.message}`);
+            console.error('创建会话失败：', error);
+            this.addLogMessage('error', `连接服务器失败：${error.message}`);
             this.updateConnectionStatus('disconnected');
         }
     }
@@ -210,7 +210,7 @@ class DeepAgentsClient {
         this.ws = new WebSocket(this.wsUrl);
 
         this.ws.onopen = () => {
-            console.log('WebSocket connected');
+            console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
             this.reconnectAttempts = 0;
         };
@@ -220,18 +220,18 @@ class DeepAgentsClient {
                 const data = JSON.parse(event.data);
                 this.handleMessage(data);
             } catch (error) {
-                console.error('Failed to parse message:', error);
+                console.error('解析消息失败：', error);
             }
         };
 
         this.ws.onclose = () => {
-            console.log('WebSocket closed');
+            console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
             this.attemptReconnect();
         };
 
         this.ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
+            console.error('WebSocket 错误：', error);
             this.updateConnectionStatus('disconnected');
         };
     }
@@ -239,14 +239,14 @@ class DeepAgentsClient {
     attemptReconnect() {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-            this.addLogMessage('info', `Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+            console.log(`正在尝试重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
+            this.addLogMessage('info', `正在重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
 
             setTimeout(() => {
                 this.connectWebSocket();
             }, this.reconnectDelay);
         } else {
-            this.addLogMessage('error', 'Failed to reconnect. Please refresh the page.');
+            this.addLogMessage('error', '重连失败，请刷新页面。');
         }
     }
 
@@ -297,16 +297,16 @@ class DeepAgentsClient {
                 this.handleLog(data);
                 break;
             default:
-                console.log('Unknown event type:', eventType, data);
+                console.log('未知事件类型：', eventType, data);
         }
     }
 
     handleRunQueued(data) {
-        console.log('Run queued:', data.run_id);
+        console.log('任务已排队：', data.run_id);
     }
 
     handleRunStarted(data) {
-        console.log('Run started:', data.run_id);
+        console.log('任务开始：', data.run_id);
         this.currentRunId = data.run_id;
         this.isRunning = true;
         this.updateCancelButton(true);
@@ -318,12 +318,12 @@ class DeepAgentsClient {
         this.elements.welcomeMessage.style.display = 'none';
 
         // Add run status indicator
-        this.addRunStatus('running', data.run_id, `Running: ${data.run_id.slice(0, 8)}`);
+        this.addRunStatus('running', data.run_id, `运行中：${data.run_id.slice(0, 8)}`);
     }
 
     handleRunEnded(data) {
         const status = data.type.split('.')[1];
-        console.log('Run ended:', status, data);
+        console.log('任务结束：', status, data);
 
         const runId = data.run_id || this.currentRunId;
 
@@ -341,7 +341,7 @@ class DeepAgentsClient {
             Array.from(document.querySelectorAll('.run-status')).pop();
         if (statusElement) {
             statusElement.className = `run-status ${status}`;
-            statusElement.innerHTML = `<span>${status.charAt(0).toUpperCase() + status.slice(1)}</span>`;
+            statusElement.innerHTML = `<span>${this.formatRunStatus(status)}</span>`;
         }
 
         if (runId) this.runStatusElements.delete(runId);
@@ -423,7 +423,7 @@ class DeepAgentsClient {
         const statusElement = toolElement.querySelector('.tool-status');
         if (statusElement) {
             statusElement.className = `tool-status ${status}`;
-            statusElement.textContent = status;
+            statusElement.textContent = this.formatToolStatus(status);
         }
 
         // Add or update result
@@ -435,7 +435,7 @@ class DeepAgentsClient {
                     resultElement = document.createElement('div');
                     resultElement.className = 'tool-result';
                     resultElement.innerHTML = `
-                        <div class="tool-result-label">Result</div>
+                        <div class="tool-result-label">结果</div>
                         <div class="tool-result-content"></div>
                     `;
                     bodyElement.appendChild(resultElement);
@@ -500,7 +500,7 @@ class DeepAgentsClient {
                         <path d="M9 11l3 3L22 4"></path>
                         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                     </svg>
-                    <span>Tasks</span>
+                    <span>任务</span>
                 </div>
                 <div class="todo-items">
                     ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
@@ -520,7 +520,7 @@ class DeepAgentsClient {
     }
 
     handleInterruptAutoApproved(data) {
-        this.addLogMessage('info', `Auto-approved: ${data.interrupt_id.slice(0, 8)}`);
+        this.addLogMessage('info', `已自动批准：${data.interrupt_id.slice(0, 8)}`);
     }
 
     handleSessionAutoApprove(data) {
@@ -628,14 +628,14 @@ class DeepAgentsClient {
                     <path d="m1 12h6m6 0h6"></path>
                 </svg>
                 <span class="tool-name">${this.escapeHtml(name)}</span>
-                <span class="tool-status ${status}">${status}</span>
+                <span class="tool-status ${status}">${this.escapeHtml(this.formatToolStatus(status))}</span>
                 <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
             </div>
             <div class="tool-call-body">
                 <div class="tool-args">
-                    <div class="tool-args-label">Arguments</div>
+                    <div class="tool-args-label">参数</div>
                     <div class="tool-args-content">${this.escapeHtml(argsJson)}</div>
                 </div>
             </div>
@@ -654,11 +654,11 @@ class DeepAgentsClient {
 
         const metricsHtml = metrics ? `
             <div class="file-op-metrics">
-                ${metrics.lines_read ? `<span>Read: ${metrics.lines_read} lines</span>` : ''}
-                ${metrics.lines_written ? `<span>Written: ${metrics.lines_written} lines</span>` : ''}
+                ${metrics.lines_read ? `<span>读取：${metrics.lines_read} 行</span>` : ''}
+                ${metrics.lines_written ? `<span>写入：${metrics.lines_written} 行</span>` : ''}
                 ${metrics.lines_added ? `<span>+${metrics.lines_added}</span>` : ''}
                 ${metrics.lines_removed ? `<span>-${metrics.lines_removed}</span>` : ''}
-                ${metrics.bytes_written ? `<span>Size: ${this.formatFileSize(metrics.bytes_written)}</span>` : ''}
+                ${metrics.bytes_written ? `<span>大小：${this.formatFileSize(metrics.bytes_written)}</span>` : ''}
             </div>
         ` : '';
 
@@ -676,7 +676,7 @@ class DeepAgentsClient {
                     <polyline points="7 10 12 15 17 10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                 </svg>
-                Download PDF
+                下载 PDF
             </a>
         ` : '';
 
@@ -700,7 +700,7 @@ class DeepAgentsClient {
                     <polyline points="13 2 13 9 20 9"></polyline>
                 </svg>
                 <span class="file-op-path">${this.escapeHtml(path)}</span>
-                <span class="file-op-status ${status}">${status}</span>
+                <span class="file-op-status ${status}">${this.escapeHtml(this.formatFileOpStatus(status))}</span>
                 ${downloadButtonHtml}
                 ${chevronHtml}
             </div>
@@ -719,7 +719,7 @@ class DeepAgentsClient {
                     <path d="M9 11l3 3L22 4"></path>
                     <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                 </svg>
-                <span>Tasks</span>
+                <span>任务</span>
             </div>
             <div class="todo-items">
                 ${todos.map(todo => this.createTodoItemHTML(todo)).join('')}
@@ -757,7 +757,7 @@ class DeepAgentsClient {
         this.closeAssistantSegment();
         const logDiv = document.createElement('div');
         logDiv.className = `log-message ${level}`;
-        logDiv.textContent = `[${level.toUpperCase()}] ${message}`;
+        logDiv.textContent = `[${this.formatLogLevel(level)}] ${message}`;
 
         if (!this.currentMessageElement) {
             this.currentMessageElement = this.createMessageElement('assistant');
@@ -783,7 +783,7 @@ class DeepAgentsClient {
                         <line x1="12" y1="16" x2="12.01" y2="16"></line>
                     </svg>
                     <div>
-                        <div class="interrupt-action-name">${this.escapeHtml(action.name || 'tool')}</div>
+                        <div class="interrupt-action-name">${this.escapeHtml(action.name || '工具')}</div>
                         ${action.description ? `<div class="interrupt-action-description">${this.escapeHtml(action.description)}</div>` : ''}
                     </div>
                 </div>
@@ -796,8 +796,8 @@ class DeepAgentsClient {
         `).join('');
 
         this.elements.interruptModalFooter.innerHTML = `
-            <button class="btn btn-danger" onclick="app.respondToInterrupt('${interruptId}', '${runId}', 'reject')">Reject All</button>
-            <button class="btn btn-primary" onclick="app.respondToInterrupt('${interruptId}', '${runId}', 'approve')">Approve All</button>
+            <button class="btn btn-danger" onclick="app.respondToInterrupt('${interruptId}', '${runId}', 'reject')">全部拒绝</button>
+            <button class="btn btn-primary" onclick="app.respondToInterrupt('${interruptId}', '${runId}', 'approve')">全部批准</button>
         `;
 
         this.elements.interruptModal.classList.add('active');
@@ -859,7 +859,7 @@ class DeepAgentsClient {
         if (!this.isRunning) return;
 
         this.send({ type: 'cancel' });
-        this.addLogMessage('info', 'Cancelling current run...');
+        this.addLogMessage('info', '正在取消当前任务…');
     }
 
     newChat() {
@@ -873,7 +873,7 @@ class DeepAgentsClient {
         this.elements.welcomeMessage.style.display = 'flex';
 
         // Update title
-        this.elements.chatTitle.textContent = 'New Conversation';
+        this.elements.chatTitle.textContent = '新对话';
 
         // Reset state
         this.currentRunId = null;
@@ -887,8 +887,59 @@ class DeepAgentsClient {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(data));
         } else {
-            console.warn('WebSocket not connected, message not sent:', data);
+            console.warn('WebSocket 未连接，消息未发送：', data);
         }
+    }
+
+    // Text helpers (zh-CN)
+    formatConnectionStatus(status) {
+        const map = {
+            connected: '已连接',
+            connecting: '连接中',
+            disconnected: '未连接',
+        };
+        return map[status] || String(status || '');
+    }
+
+    formatRunStatus(status) {
+        const map = {
+            running: '运行中',
+            completed: '已完成',
+            failed: '失败',
+            cancelled: '已取消',
+            rejected: '已拒绝',
+            queued: '已排队',
+        };
+        return map[status] || String(status || '');
+    }
+
+    formatToolStatus(status) {
+        const map = {
+            running: '运行中',
+            success: '成功',
+            error: '失败',
+            cancelled: '已取消',
+        };
+        return map[status] || String(status || '');
+    }
+
+    formatFileOpStatus(status) {
+        const map = {
+            pending: '进行中',
+            success: '成功',
+            error: '失败',
+        };
+        return map[status] || String(status || '');
+    }
+
+    formatLogLevel(level) {
+        const normalized = String(level || '').toLowerCase();
+        const map = {
+            info: '信息',
+            warning: '警告',
+            error: '错误',
+        };
+        return map[normalized] || normalized.toUpperCase() || '信息';
     }
 
     // UI Updates
@@ -897,7 +948,7 @@ class DeepAgentsClient {
         statusElement.className = `connection-status ${status}`;
 
         const textElement = statusElement.querySelector('.status-text');
-        textElement.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        textElement.textContent = this.formatConnectionStatus(status);
     }
 
     updateCancelButton(enabled) {
@@ -945,7 +996,7 @@ class DeepAgentsClient {
         const chat = {
             id: Date.now().toString(),
             sessionId: this.sessionId,
-            title: messages[0]?.content?.slice(0, 50) + '...' || 'New Chat',
+            title: messages[0]?.content?.slice(0, 50) + '…' || '新对话',
             timestamp: Date.now(),
             messages: messages
         };
@@ -972,7 +1023,7 @@ class DeepAgentsClient {
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
                 <span class="history-item-title">${this.escapeHtml(chat.title)}</span>
-                <button class="history-delete-btn" data-chat-id="${chat.id}" title="Delete chat">
+                <button class="history-delete-btn" data-chat-id="${chat.id}" title="删除对话">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="3 6 5 6 21 6"></polyline>
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -1115,7 +1166,7 @@ class DeepAgentsClient {
                             <polyline points="16 18 22 12 16 6"></polyline>
                             <polyline points="8 6 2 12 8 18"></polyline>
                         </svg>
-                        <span>HTML Code (Click to expand)</span>
+                        <span>HTML 代码（点击展开）</span>
                         <svg class="html-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="6 9 12 15 18 9"></polyline>
                         </svg>
