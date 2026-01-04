@@ -525,3 +525,7 @@ _return_command_with_state_update()
 3. **Strategy Pattern** - 不同 `BackendProtocol` 实现可插拔
 4. **Chain of Responsibility** - Middleware 按顺序处理请求/响应
 
+
+## 运行流程
+
+![1767513655408](image/remark/1767513655408.png)

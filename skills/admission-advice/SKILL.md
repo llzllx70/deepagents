@@ -68,13 +68,21 @@ case_xxx/
 ```
 注意，源excel文件中并不是完全规范的结构化信息，你需要借助LLM提取相关信息
 
-## 六、分析流程（Workflow）
+## 六、工作流程 (todos)
 
-### Step 0：初始化目录
+为方便从整体上跟踪进度，你需要创建todos来处理子任务, 具体要求如下：
+1. 生成工作计划 analysis/analysis_plan.md
+2. 为每个子计划任务，启动subagent执行此计划
+3. 汇总各个子agent的结果
+4. 输出，如文本、文件
+
+## 七、各子任务参考
+
+### 初始化目录
 
 创建 input / infos / analysis / draft / charts / output
 
-### Step 1: 关键数据提取 (务必遵守下面的方式)
+### 关键数据提取 (务必遵守下面的方式)
 
 1. 对每个excel调用excel_to_llm_text.py提取数据，所有xxx.txt要保存在infos 目录下
 ```
@@ -82,18 +90,14 @@ python skills/admission-advice/scripts/excel_to_llm_text.py --input path_2_excel
 ```
 2. 分析所有xxx.txt中的数据，提取与本问题相关的信息
 
-### Step 2：结构化输入
+### 对提取的数据进行结构化
 
 * input/candidate_profile.md
 * input/data_contract.md
 
-### Step 3：分析计划
+### 分析类子任务（≤10 个）
 
-生成 analysis/analysis_plan.md
-
-### Step 4：分析子任务（≤10 个）
-
-依据用户问题，设计不同的分析任务，比如：
+依据用户问题，进一步设计不同的分析任务，比如：
 1. 报考学生所在省份招生政策解读
 2. 源数据中省控线对⽐
 3. 三年录取分数趋势
@@ -101,7 +105,7 @@ python skills/admission-advice/scripts/excel_to_llm_text.py --input path_2_excel
 5. 重要提醒
 6. 其他相关的分析任务
 
-每个子任务输出：
+每个分析类子任务输出：
 
 ```
 analysis/findings_<task>.md
