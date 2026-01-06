@@ -43,6 +43,16 @@ class CreateSessionResponse(BaseModel):
     session_id: str
 
 
+def _is_root_namespace(namespace: object) -> bool:
+    if namespace is None:
+        return True
+    if isinstance(namespace, (tuple, list)):
+        return len(namespace) == 0
+    if isinstance(namespace, str):
+        return namespace == ""
+    return False
+
+
 @dataclass
 class RunRequest:
     run_id: str
@@ -205,6 +215,7 @@ class Session:
                         continue
 
                     _namespace, current_stream_mode, data = chunk
+                    is_root = _is_root_namespace(_namespace)
 
                     if current_stream_mode == "updates":
                         if not isinstance(data, dict):
@@ -228,7 +239,7 @@ class Session:
                                         }
                                     )
                         chunk_data = next(iter(data.values())) if data else None
-                        if isinstance(chunk_data, dict) and "todos" in chunk_data:
+                        if is_root and isinstance(chunk_data, dict) and "todos" in chunk_data:
                             await self.broadcast(
                                 {
                                     "type": "todos.updated",
@@ -238,6 +249,8 @@ class Session:
                             )
 
                     if current_stream_mode != "messages":
+                        continue
+                    if not is_root:
                         continue
 
                     if not isinstance(data, tuple) or len(data) != 2:

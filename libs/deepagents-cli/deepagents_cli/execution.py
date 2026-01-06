@@ -40,6 +40,16 @@ from deepagents_cli.ui import (
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 
+def _is_root_namespace(namespace: object) -> bool:
+    if namespace is None:
+        return True
+    if isinstance(namespace, (tuple, list)):
+        return len(namespace) == 0
+    if isinstance(namespace, str):
+        return namespace == ""
+    return False
+
+
 def _display_user_message_with_images(text: str) -> None:
     """Display user message with image placeholders colored in magenta.
 
@@ -357,6 +367,7 @@ async def execute_task(
                     continue
 
                 _namespace, current_stream_mode, data = chunk
+                is_root = _is_root_namespace(_namespace)
 
                 # Handle UPDATES stream - for interrupts and todos
                 if current_stream_mode == "updates":
@@ -385,7 +396,7 @@ async def execute_task(
 
                     # Extract chunk_data from updates for todo checking
                     chunk_data = next(iter(data.values())) if data else None
-                    if chunk_data and isinstance(chunk_data, dict):
+                    if is_root and chunk_data and isinstance(chunk_data, dict):
                         # Check for todo updates
                         if "todos" in chunk_data:
                             new_todos = chunk_data["todos"]
@@ -401,6 +412,8 @@ async def execute_task(
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
+                    if not is_root:
+                        continue
                     # Messages stream returns (message, metadata) tuples
                     if not isinstance(data, tuple) or len(data) != 2:
                         continue
