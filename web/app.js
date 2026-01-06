@@ -1285,7 +1285,7 @@ class DeepAgentsClient {
     }
 
     scrollToBottom() {
-        this.elements.chatContainer.scrollTop = this.elements.chatContainer.scrollHeight;
+        // Auto-scroll disabled by request.
     }
 
     // History Management
