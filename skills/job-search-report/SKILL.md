@@ -65,7 +65,7 @@ python skills/job-search-report/scripts/extract_docx_text.py --input 个人就�
 
 按平台分别检索（Boss 直聘、智联招聘等），检索必须使用 `coze-search` skill：
 
-- 每个平台最多 3–5 次 Coze search
+- 岗位检索使用coze search, 不要使用web_search、http_request、fetch_url
 - 输出文件：`infos/boss_jobs.md`、`infos/zhilian_jobs.md`
 - 每条岗位至少包含：公司、岗位名、薪资、经验、学历、地点、链接、技能要求、信息来源
 - 记录检索关键词、筛选条件、信息来源到 `analysis/search_log.md`
@@ -116,7 +116,7 @@ python skills/job-search-report/scripts/build_job_charts.py --input analysis/job
 
 You have access to:
 
-- `coze-search`: 平台岗位检索（Boss 直聘、智联招聘等）
+- `skills/coze-search`: 平台岗位检索（Boss 直聘、智联招聘等）
 - `skills/job-search-report/scripts/extract_docx_text.py`: 从 docx 提取纯文本
 - `skills/job-search-report/scripts/build_job_charts.py`: 从结构化岗位数据生成图表（依赖 matplotlib）
 

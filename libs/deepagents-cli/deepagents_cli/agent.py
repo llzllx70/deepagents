@@ -2,6 +2,7 @@
 
 import os
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from deepagents import create_deep_agent
@@ -103,6 +104,9 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
         The system prompt string (without agent.md content)
     """
     agent_dir_path = f"~/.deepagents/{assistant_id}"
+    now = datetime.now().astimezone()
+    current_date = now.strftime("%Y-%m-%d")
+    current_datetime = now.isoformat(timespec="minutes")
 
     if sandbox_type:
         # Get provider-specific working directory
@@ -140,8 +144,16 @@ The filesystem backend is currently operating in: `{cwd}`
 
 """
 
+    current_time_section = f"""### Current Date and Time
+
+Current date: {current_date}
+Current datetime: {current_datetime}
+
+"""
+
     return (
         working_dir_section
+        + current_time_section
         + f"""### Skills Directory
 
 Your skills are stored at: `{agent_dir_path}/skills/`
