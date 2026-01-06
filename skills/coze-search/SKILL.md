@@ -1,6 +1,6 @@
 ---
 name: coze-search
-description: Run web searches through the Coze stream_run API and capture results for downstream tasks. Use when tasks require Coze search instead of default web_search/tavily, or when a process mandates logging queries, filters, and source links from Coze results.
+description: Run web searches through the Coze API and capture results for downstream tasks. Use when tasks require Coze search 
 ---
 
 # Coze Search

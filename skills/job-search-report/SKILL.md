@@ -65,11 +65,10 @@ python skills/job-search-report/scripts/extract_docx_text.py --input 个人就�
 
 为每个平台创建子代理（Boss直聘、智联招聘）。每个子代理只做本平台检索与整理：
 
+- 桧索必须使用 `coze-search` skill，你需要仔细阅读此skill，并遵照说明进行
 - 输出文件：`infos/boss_jobs.md`、`infos/zhilian_jobs.md`
 - 每条岗位至少包含：公司、岗位名、薪资、经验、学历、地点、链接、技能要求、信息来源
 - 记录检索关键词、筛选条件、信息来源到 `analysis/search_log.md`
-
-Web 搜索必须使用 `coze-search` skill（禁止使用默认 tavily/web_search）。在子代理中调用 `skills/coze-search/scripts/coze_search.sh "<关键词>"` 完成 Coze search，并按该 skill 的要求记录检索词、时间、来源与链接到 `analysis/search_log.md`。
 
 子代理模板：
 
