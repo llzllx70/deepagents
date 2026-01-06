@@ -216,7 +216,6 @@ __marimo__/
 
 .idea
 **/.DS_Store
-.deepagents/
 .vscode/
 docs/
 workspace/
