@@ -1,6 +1,6 @@
 ---
 name: job-search-report
-description: 个人就业岗位检索与图文报告生成技能。用于从简历出发，在Boss直聘与智联招聘等平台检索岗位、整理过程文件、计算匹配度并输出含图表的求职分析报告。
+description: 个人就业岗位检索与图文报告生成技能。用于从简历出发，使用coze search在Boss直聘与智联招聘等平台检索岗位、整理过程文件、计算匹配度并输出含图表的求职分析报告。
 ---
 # 个人就业岗位检索与报告 Skill
 
@@ -17,7 +17,7 @@ description: 个人就业岗位检索与图文报告生成技能。用于从简�
 统一在 `workspace/job_search/` 下建 case：
 
 ```
-workspace/job_search/case_[姓名]_[目标职位]_[城市]_[YYYYMMDD]/
+workspace/job_search/case_[姓名]_[目标职位]_[城市]/
 ```
 
 必须包含以下结构：
@@ -107,7 +107,7 @@ python skills/job-search-report/scripts/build_job_charts.py --input analysis/job
 
 1. 参考 `references/report-template.md` 生成 `draft/report.md`
 2. 报告以表格为主；如使用图片，将 `charts/` 中图片复制到 `output/charts/`
-3. 将最终版本保存为 `output/report.md`
+3. 如果没有明确要求，默认生成pdf
 
 ## 过程文件要求（对齐示例目录）
 
@@ -133,8 +133,3 @@ python skills/job-search-report/scripts/build_job_charts.py --input analysis/job
 - 禁止创建或指挥其他子代理
 - 默认不访问互联网；除非主代理明确要求且环境允许
 - 输出必须写入指定文件，不直接返回长文本
-
-## 参考资料
-
-- `个人就业/岗位检索分析过程文件/`：过程文件结构参考
-- `个人就业/岗位检索分析过程文件/analyze_jobs.py`：图表样式与指标参考
