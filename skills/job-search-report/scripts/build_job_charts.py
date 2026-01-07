@@ -15,6 +15,9 @@ import numpy as np
 COLOR_HIGH = "#FF6B6B"
 COLOR_MID = "#4ECDC4"
 COLOR_LOW = "#95A5A6"
+UNKNOWN_LABEL = "未知"
+UNKNOWN_ALIASES = {alias.casefold() for alias in ["未知", "不详", "未说明", "待定", "暂无", "n/a", "na", "-"]}
+MIN_KNOWN_RATIO = 0.5
 
 
 def parse_int(value: Any) -> int | None:
@@ -31,6 +34,30 @@ def parse_int(value: Any) -> int | None:
         return int(float(text))
     except ValueError:
         return None
+
+
+def normalize_label(value: Any, unknown_aliases: set[str]) -> str:
+    if value is None:
+        return UNKNOWN_LABEL
+    text = str(value).strip()
+    if not text:
+        return UNKNOWN_LABEL
+    if text.casefold() in unknown_aliases:
+        return UNKNOWN_LABEL
+    return text
+
+
+def filter_known_counts(counts: dict[str, int], min_known_ratio: float) -> dict[str, int] | None:
+    total = sum(counts.values())
+    if total == 0:
+        return None
+    unknown_count = counts.get(UNKNOWN_LABEL, 0)
+    known_count = total - unknown_count
+    if known_count == 0:
+        return None
+    if known_count / total < min_known_ratio:
+        return None
+    return {label: value for label, value in counts.items() if label != UNKNOWN_LABEL}
 
 
 def load_jobs(path: Path) -> list[dict[str, Any]]:
@@ -60,8 +87,8 @@ def normalize_job(item: dict[str, Any]) -> dict[str, Any]:
     job["match_score"] = parse_int(job.get("match_score")) or 0
     job["company"] = str(job.get("company") or "").strip()
     job["title"] = str(job.get("title") or "").strip()
-    job["experience"] = str(job.get("experience") or "未知")
-    job["platform"] = str(job.get("platform") or "未知")
+    job["experience"] = normalize_label(job.get("experience"), UNKNOWN_ALIASES)
+    job["platform"] = normalize_label(job.get("platform"), UNKNOWN_ALIASES)
     return job
 
 
@@ -111,14 +138,15 @@ def plot_salary_range(jobs: list[dict[str, Any]], output_dir: Path, top_n: int) 
 def plot_experience_distribution(jobs: list[dict[str, Any]], output_dir: Path) -> None:
     counts: dict[str, int] = {}
     for job in jobs:
-        key = job.get("experience", "未知") or "未知"
+        key = normalize_label(job.get("experience"), UNKNOWN_ALIASES)
         counts[key] = counts.get(key, 0) + 1
 
-    if not counts:
+    known_counts = filter_known_counts(counts, MIN_KNOWN_RATIO)
+    if not known_counts:
         return
 
-    labels = list(counts.keys())
-    values = list(counts.values())
+    labels = list(known_counts.keys())
+    values = list(known_counts.values())
     colors = [COLOR_HIGH, COLOR_MID, "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD"]
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -132,14 +160,15 @@ def plot_experience_distribution(jobs: list[dict[str, Any]], output_dir: Path) -
 def plot_platform_comparison(jobs: list[dict[str, Any]], output_dir: Path) -> None:
     counts: dict[str, int] = {}
     for job in jobs:
-        key = job.get("platform", "未知") or "未知"
+        key = normalize_label(job.get("platform"), UNKNOWN_ALIASES)
         counts[key] = counts.get(key, 0) + 1
 
-    if not counts:
+    known_counts = filter_known_counts(counts, MIN_KNOWN_RATIO)
+    if not known_counts:
         return
 
-    labels = list(counts.keys())
-    values = list(counts.values())
+    labels = list(known_counts.keys())
+    values = list(known_counts.values())
 
     fig, ax = plt.subplots(figsize=(8, 5))
     bars = ax.bar(labels, values, color=[COLOR_HIGH, COLOR_MID, "#45B7D1"])

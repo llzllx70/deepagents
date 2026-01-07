@@ -95,6 +95,8 @@ python skills/job-search-report/scripts/build_job_charts.py --input analysis/job
 - 平台岗位数量对比图
 - 匹配度排名图
 
+图表脚本会过滤 `未知/不详/未说明` 等缺失值，仅统计有效字段；当某维度有效数据占比低于 50% 时会自动跳过对应图表，避免信息不足的可视化结果。
+
 ### Step 6: Report Draft and Output
 
 1. 参考 `references/report-template.md` 生成 `draft/report.md`
