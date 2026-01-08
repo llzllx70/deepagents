@@ -10,15 +10,17 @@ const { chromium } = require('playwright');
 const PX_PER_IN = 96;
 const PT_PER_PX = 0.75;
 const EMU_PER_IN = 914400;
-const DEFAULT_MAX_SLIDE_HEIGHT_IN = 56;
+const DEFAULT_MAX_SLIDE_HEIGHT_IN = 7.5;
 
 function usage() {
   console.log(`Usage:
-  node scripts/html_to_pptx.js --in input.html --out output.pptx [options]
+  node skills/html2pptx/scripts/html2pptx.js --in input.html --out output.pptx [options]
 
 Options:
-  --scale <n>                 Scale output (default auto-fit if too tall)
-  --max-slide-height-in <n>   Max slide height in inches before auto-scale (default ${DEFAULT_MAX_SLIDE_HEIGHT_IN})
+  --scale <n>                 Scale output before slicing (default 1)
+  --max-slide-height-in <n>   Max slide height in inches before splitting (default ${DEFAULT_MAX_SLIDE_HEIGHT_IN})
+  --split                     Split long pages into multiple slides (default)
+  --no-split                  Keep a single slide and auto-scale to max height if needed
   --tmp-dir <dir>             Temp dir for background images (default $TMPDIR or /tmp)
   --debug                     Keep temp background images
   -h, --help                  Show help
@@ -32,7 +34,8 @@ function parseArgs(argv) {
     scale: null,
     maxSlideHeightIn: DEFAULT_MAX_SLIDE_HEIGHT_IN,
     tmpDir: process.env.TMPDIR || '/tmp',
-    debug: false
+    debug: false,
+    split: true
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -64,6 +67,16 @@ function parseArgs(argv) {
     if (arg === '--max-slide-height-in') {
       args.maxSlideHeightIn = parseFloat(argv[i + 1]);
       i += 1;
+      continue;
+    }
+
+    if (arg === '--split') {
+      args.split = true;
+      continue;
+    }
+
+    if (arg === '--no-split') {
+      args.split = false;
       continue;
     }
 
@@ -644,11 +657,61 @@ async function extractSlideData(page, options) {
       return 'rgba(0, 0, 0, 0)';
     };
 
+    const domOrderMap = new WeakMap();
+    let domOrderIndex = 0;
+    const domWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    while (domWalker.nextNode()) {
+      domOrderMap.set(domWalker.currentNode, domOrderIndex);
+      domOrderIndex += 1;
+    }
+
+    const sectionIdMap = new WeakMap();
+    let currentSectionId = null;
+    let sectionIndex = 0;
+    const sectionWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    while (sectionWalker.nextNode()) {
+      const node = sectionWalker.currentNode;
+      if (/^H[1-6]$/.test(node.tagName)) {
+        currentSectionId = `section-${sectionIndex}`;
+        sectionIndex += 1;
+      }
+      if (currentSectionId) {
+        sectionIdMap.set(node, currentSectionId);
+      }
+    }
+
+    const tableIdMap = new WeakMap();
+    let tableIndex = 0;
+    document.querySelectorAll('table').forEach((table) => {
+      tableIdMap.set(table, `table-${tableIndex}`);
+      tableIndex += 1;
+    });
+
+    const getElementMeta = (element) => {
+      if (!element || !element.tagName) return null;
+      const tagName = element.tagName.toLowerCase();
+      const sectionId = sectionIdMap.get(element) || null;
+      const tableEl = element.closest('table');
+      const tableId = tableEl ? tableIdMap.get(tableEl) || null : null;
+      const domOrder = domOrderMap.has(element) ? domOrderMap.get(element) : null;
+      const isHeading = /^h[1-6]$/.test(tagName);
+      return {
+        tagName,
+        sectionId,
+        tableId,
+        domOrder,
+        isHeading
+      };
+    };
+
     const errors = [];
     const elements = [];
     const placeholders = [];
     const processed = new Set();
     const textTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI'];
+    const pushElement = (element, data) => {
+      elements.push({ ...data, meta: getElementMeta(element) });
+    };
 
     const body = document.body;
     const bodyStyle = window.getComputedStyle(body);
@@ -689,7 +752,7 @@ async function extractSlideData(page, options) {
       if (el.hasAttribute('data-pptx-bg-id')) {
         const rect = el.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          elements.push({
+          pushElement(el, {
             type: 'bg-image',
             id: el.getAttribute('data-pptx-bg-id'),
             position: {
@@ -707,7 +770,7 @@ async function extractSlideData(page, options) {
       if (el.tagName === 'IMG') {
         const rect = el.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          elements.push({
+          pushElement(el, {
             type: 'image',
             src: el.src,
             position: {
@@ -728,7 +791,7 @@ async function extractSlideData(page, options) {
         const rectRadius = getRectRadius(computed, rect);
         const hasBorder = parseFloat(computed.borderWidth) > 0;
 
-        elements.push({
+        pushElement(el, {
           type: 'shape',
           text: '',
           position: {
@@ -766,7 +829,7 @@ async function extractSlideData(page, options) {
           const transparency = extractAlpha(computed.color);
           if (transparency !== null) baseStyle.transparency = transparency;
 
-          elements.push({
+          pushElement(el, {
             type: 'badge',
             text,
             position: {
@@ -796,7 +859,7 @@ async function extractSlideData(page, options) {
           const shadow = parseBoxShadow(computed.boxShadow);
 
           if (hasBg || shadow) {
-            elements.push({
+            pushElement(el, {
               type: 'shape',
               text: '',
               position: {
@@ -840,7 +903,7 @@ async function extractSlideData(page, options) {
         const h = pxToInch(rect.height);
 
         if (hasBg) {
-          elements.push({
+          pushElement(el, {
             type: 'shape',
             text: '',
             position: { x, y, w, h },
@@ -857,7 +920,7 @@ async function extractSlideData(page, options) {
           if (widthPx <= 0) return;
           const widthPt = pxToPoints(`${widthPx}px`);
           if (widthPt <= 0) return;
-          elements.push({
+          pushElement(el, {
             type: 'line',
             x1,
             y1,
@@ -945,7 +1008,7 @@ async function extractSlideData(page, options) {
                 }
               }
 
-              elements.push({
+              pushElement(el, {
                 type: 'cell',
                 text: runs,
                 position: { x, y, w, h },
@@ -955,7 +1018,7 @@ async function extractSlideData(page, options) {
           } else {
             const transformedText = applyTextTransform(rawText, computed.textTransform);
 
-            elements.push({
+            pushElement(el, {
               type: 'cell',
               text: transformedText,
               position: { x, y, w, h },
@@ -1088,7 +1151,7 @@ async function extractSlideData(page, options) {
           };
 
           if (markerText) {
-            elements.push({
+            pushElement(el, {
               type: 'list-marker',
               text: markerText,
               position: {
@@ -1101,7 +1164,7 @@ async function extractSlideData(page, options) {
             });
           }
 
-          elements.push({
+          pushElement(el, {
             type: 'list-item',
             text: runs,
             position: {
@@ -1116,7 +1179,7 @@ async function extractSlideData(page, options) {
           if (markerText) {
             runs.unshift({ text: `${markerText} `, options: {} });
           }
-          elements.push({
+          pushElement(el, {
             type: 'list-item',
             text: runs,
             position: {
@@ -1250,7 +1313,7 @@ async function extractSlideData(page, options) {
             const shadow = parseBoxShadow(computed.boxShadow);
 
             if (hasBg || hasUniformBorder) {
-              elements.push({
+              pushElement(el, {
                 type: 'shape',
                 text: '',
                 position: {
@@ -1271,7 +1334,9 @@ async function extractSlideData(page, options) {
               });
             }
 
-            elements.push(...borderLines);
+            borderLines.forEach((line) => {
+              pushElement(el, line);
+            });
           }
         }
 
@@ -1322,7 +1387,7 @@ async function extractSlideData(page, options) {
                 }
               }
 
-              elements.push({
+              pushElement(el, {
                 type: 'div-text',
                 text: runs,
                 position: { x: pxToInch(x), y: pxToInch(y), w: pxToInch(w), h: pxToInch(h) },
@@ -1400,7 +1465,7 @@ async function extractSlideData(page, options) {
           }
         }
 
-        elements.push({
+        pushElement(el, {
           type: el.tagName.toLowerCase(),
           text: runs,
           position: {
@@ -1414,7 +1479,7 @@ async function extractSlideData(page, options) {
       } else {
         const transformedText = applyTextTransform(text, computed.textTransform);
 
-        elements.push({
+        pushElement(el, {
           type: el.tagName.toLowerCase(),
           text: transformedText,
           position: {
@@ -1570,6 +1635,227 @@ function addElements(slideData, targetSlide, pres) {
   }
 }
 
+function getElementVerticalBounds(el) {
+  if (el.type === 'line') {
+    const top = Math.min(el.y1, el.y2);
+    const bottom = Math.max(el.y1, el.y2);
+    return { top, bottom };
+  }
+
+  if (el.position) {
+    return { top: el.position.y, bottom: el.position.y + el.position.h };
+  }
+
+  return null;
+}
+
+function offsetElementForSlice(el, offsetIn) {
+  if (el.type === 'line') {
+    return { ...el, y1: el.y1 - offsetIn, y2: el.y2 - offsetIn };
+  }
+
+  if (!el.position) return el;
+  return {
+    ...el,
+    position: {
+      ...el.position,
+      y: el.position.y - offsetIn
+    }
+  };
+}
+
+function collectSectionBounds(elements) {
+  const sectionBounds = new Map();
+
+  elements.forEach((el, index) => {
+    const bounds = getElementVerticalBounds(el);
+    if (!bounds) return;
+    const sectionId = el.meta && el.meta.sectionId ? el.meta.sectionId : null;
+    if (!sectionId) return;
+
+    const existing = sectionBounds.get(sectionId);
+    if (!existing) {
+      sectionBounds.set(sectionId, {
+        sectionId,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        domOrder: el.meta && Number.isFinite(el.meta.domOrder) ? el.meta.domOrder : index
+      });
+      return;
+    }
+
+    existing.top = Math.min(existing.top, bounds.top);
+    existing.bottom = Math.max(existing.bottom, bounds.bottom);
+    if (Number.isFinite(el.meta && el.meta.domOrder)) {
+      existing.domOrder = Math.min(existing.domOrder, el.meta.domOrder);
+    }
+  });
+
+  return sectionBounds;
+}
+
+function buildBlocks(elements, slideHeightIn) {
+  const sectionBounds = collectSectionBounds(elements);
+  const keepTogetherSections = new Set();
+
+  sectionBounds.forEach((section) => {
+    if (section.bottom - section.top <= slideHeightIn) {
+      keepTogetherSections.add(section.sectionId);
+    }
+  });
+
+  const groups = new Map();
+
+  elements.forEach((el, index) => {
+    const bounds = getElementVerticalBounds(el);
+    if (!bounds) return;
+
+    const meta = el.meta || {};
+    const sectionId = meta.sectionId || null;
+    const sectionKept = sectionId && keepTogetherSections.has(sectionId);
+    const tableId = meta.tableId || null;
+
+    let groupKey;
+    if (sectionKept) {
+      groupKey = `section:${sectionId}`;
+    } else if (tableId) {
+      groupKey = `table:${tableId}`;
+    } else if (el.type === 'image') {
+      groupKey = `image:${index}`;
+    } else {
+      groupKey = `el:${index}`;
+    }
+
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = {
+        key: groupKey,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        domOrder: Number.isFinite(meta.domOrder) ? meta.domOrder : index,
+        sectionId: sectionId,
+        keepWithNext: false,
+        elementIndices: []
+      };
+      groups.set(groupKey, group);
+    }
+
+    group.elementIndices.push(index);
+    group.top = Math.min(group.top, bounds.top);
+    group.bottom = Math.max(group.bottom, bounds.bottom);
+
+    if (Number.isFinite(meta.domOrder)) {
+      group.domOrder = Math.min(group.domOrder, meta.domOrder);
+    }
+
+    if (sectionId && group.sectionId && group.sectionId !== sectionId) {
+      group.sectionId = null;
+    }
+
+    if (meta.isHeading && !sectionKept) {
+      group.keepWithNext = true;
+    }
+  });
+
+  const blocks = Array.from(groups.values()).sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    if (a.domOrder !== b.domOrder) return a.domOrder - b.domOrder;
+    return a.bottom - b.bottom;
+  });
+
+  return blocks;
+}
+
+function mergeBlocks(first, second) {
+  return {
+    key: `${first.key}+${second.key}`,
+    top: Math.min(first.top, second.top),
+    bottom: Math.max(first.bottom, second.bottom),
+    domOrder: Math.min(first.domOrder, second.domOrder),
+    sectionId: first.sectionId === second.sectionId ? first.sectionId : null,
+    keepWithNext: second.keepWithNext,
+    elementIndices: [...first.elementIndices, ...second.elementIndices]
+  };
+}
+
+function mergeKeepWithNext(blocks, slideHeightIn) {
+  const merged = [];
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    let current = blocks[i];
+
+    while (current.keepWithNext && i + 1 < blocks.length) {
+      const next = blocks[i + 1];
+      if (!current.sectionId || current.sectionId !== next.sectionId) break;
+
+      const mergedHeight = Math.max(current.bottom, next.bottom) - Math.min(current.top, next.top);
+      if (mergedHeight > slideHeightIn) break;
+
+      current = mergeBlocks(current, next);
+      i += 1;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
+}
+
+function paginateSlideData(slideData, slideHeightIn) {
+  const blocks = mergeKeepWithNext(buildBlocks(slideData.elements, slideHeightIn), slideHeightIn);
+  const slides = [];
+  const oversizedBlocks = [];
+
+  if (blocks.length === 0) {
+    return { slides: [{ offsetIn: 0, elements: [] }], oversizedBlocks };
+  }
+
+  blocks.forEach((block) => {
+    const blockHeight = block.bottom - block.top;
+    if (blockHeight > slideHeightIn) {
+      oversizedBlocks.push(block);
+    }
+  });
+
+  let currentSlide = null;
+
+  blocks.forEach((block) => {
+    if (!currentSlide) {
+      currentSlide = { top: block.top, blocks: [block] };
+      return;
+    }
+
+    const heightWithBlock = block.bottom - currentSlide.top;
+    if (heightWithBlock <= slideHeightIn || currentSlide.blocks.length === 0) {
+      currentSlide.blocks.push(block);
+      return;
+    }
+
+    slides.push(currentSlide);
+    currentSlide = { top: block.top, blocks: [block] };
+  });
+
+  if (currentSlide) slides.push(currentSlide);
+
+  const elementToSlide = new Array(slideData.elements.length).fill(null);
+  slides.forEach((slide, slideIndex) => {
+    slide.blocks.forEach((block) => {
+      block.elementIndices.forEach((elementIndex) => {
+        elementToSlide[elementIndex] = slideIndex;
+      });
+    });
+  });
+
+  const slideElements = slides.map((slide) => ({ offsetIn: slide.top, elements: [] }));
+  slideData.elements.forEach((el, index) => {
+    const slideIndex = elementToSlide[index];
+    if (slideIndex === null || slideIndex === undefined) return;
+    slideElements[slideIndex].elements.push(offsetElementForSlice(el, slideElements[slideIndex].offsetIn));
+  });
+
+  return { slides: slideElements, oversizedBlocks };
+}
+
 async function buildPptx(inputPath, outputPath, options) {
   const absInput = path.resolve(inputPath);
   const absOutput = path.resolve(outputPath);
@@ -1605,23 +1891,26 @@ async function buildPptx(inputPath, outputPath, options) {
 
     const { bgMap, bgIds } = await captureGradientBackgrounds(page, options.tmpDir);
 
-    let scale = options.scale;
+    const widthIn = dims.width / PX_PER_IN;
     const heightIn = dims.height / PX_PER_IN;
+    const scaleProvided = Number.isFinite(options.scale);
+    let scale = scaleProvided ? options.scale : 1;
 
-    if (!scale) {
-      if (heightIn > options.maxSlideHeightIn) {
-        scale = options.maxSlideHeightIn / heightIn;
-        console.warn(
-          `Slide height ${heightIn.toFixed(2)}" exceeds ${options.maxSlideHeightIn}". ` +
-          `Auto-scaling to ${(scale * 100).toFixed(1)}%.`
-        );
-      } else {
-        scale = 1;
-      }
+    if (!scaleProvided && !options.split && heightIn > options.maxSlideHeightIn) {
+      scale = options.maxSlideHeightIn / heightIn;
+      console.warn(
+        `Slide height ${heightIn.toFixed(2)}" exceeds ${options.maxSlideHeightIn}". ` +
+        `Auto-scaling to ${(scale * 100).toFixed(1)}%.`
+      );
     }
 
-    const slideWidthIn = (dims.width / PX_PER_IN) * scale;
-    const slideHeightIn = (dims.height / PX_PER_IN) * scale;
+    const slideWidthIn = widthIn * scale;
+    const scaledHeightIn = heightIn * scale;
+
+    let slideHeightIn = scaledHeightIn;
+    if (options.split && scaledHeightIn > options.maxSlideHeightIn) {
+      slideHeightIn = options.maxSlideHeightIn;
+    }
 
     const slideData = await extractSlideData(page, { scale, bgIds });
 
@@ -1637,18 +1926,42 @@ async function buildPptx(inputPath, outputPath, options) {
         return {
           type: 'image',
           src: pathForBg,
-          position: el.position
+          position: el.position,
+          meta: el.meta || null
         };
       }
       return el;
     }).filter(Boolean);
 
+    let slides = [{ offsetIn: 0, elements: slideData.elements }];
+    let oversizedBlocks = [];
+    if (options.split) {
+      const pagination = paginateSlideData(slideData, slideHeightIn);
+      slides = pagination.slides;
+      oversizedBlocks = pagination.oversizedBlocks;
+
+      if (slides.length > 1) {
+        console.warn(
+          `Slide height ${scaledHeightIn.toFixed(2)}" exceeds ${slideHeightIn}". ` +
+          `Splitting into ${slides.length} slides (content-aware).`
+        );
+      }
+      if (oversizedBlocks.length > 0) {
+        console.warn(
+          `${oversizedBlocks.length} block(s) exceed slide height ${slideHeightIn}". ` +
+          'Consider --scale or increasing --max-slide-height-in to avoid clipping.'
+        );
+      }
+    }
+
     const pptx = new pptxgen();
     defineLayout(pptx, slideWidthIn, slideHeightIn);
 
-    const slide = pptx.addSlide();
-    addBackground(slideData, slide);
-    addElements(slideData, slide, pptx);
+    slides.forEach((slideInfo) => {
+      const slide = pptx.addSlide();
+      addBackground(slideData, slide);
+      addElements({ ...slideData, elements: slideInfo.elements }, slide, pptx);
+    });
 
     await pptx.writeFile({ fileName: absOutput });
 
