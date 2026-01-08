@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人就业岗位检索与匹配报告</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f9f9f9;
+        }
+
+        .container {
+            background: white;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 28px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .meta-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            font-size: 22px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+
+        h3 {
+            color: #2c3e50;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        p, li {
+            margin-bottom: 10px;
+        }
+
+        ul {
+            margin-left: 25px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 13px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: #3498db;
+            color: white;
+            font-weight: bold;
+        }
+
+        tr:nth-child(even) {
+            background: #f2f2f2;
+        }
+
+        tr:hover {
+            background: #e8f4f8;
+        }
+
+        a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+
+        .score-high {
+            color: #27ae60;
+            font-weight: bold;
+        }
+
+        .score-medium {
+            color: #f39c12;
+            font-weight: bold;
+        }
+
+        .score-low {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+
+        .chart-placeholder {
+            background: #f8f9fa;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            color: #999;
+            font-size: 16px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .priority-box {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+
+        .priority-box h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .appendix {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin-top: 40px;
+        }
+
+        .appendix h3 {
+            margin-top: 0;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>个人就业岗位检索与匹配报告</h1>
+
+        <div class="meta-info">
+            <strong>简历来源：</strong> 个人就业/学生简历.docx<br>
+            <strong>报告日期：</strong> 2026-01-07<br>
+            <strong>目标岗位：</strong> WEB工程师<br>
+            <strong>目标城市：</strong> 杭州
+        </div>
+
+        <div class="section">
+            <h2>一、结论摘要</h2>
+            <ul>
+                <li><strong>推荐岗位数量：</strong> 从Boss直聘和智联招聘共检索到35个岗位，其中高匹配度（≥80分）岗位8个</li>
+                <li><strong>高匹配（≥80）岗位：</strong> 8个，主要为校招、实习、经验不限类岗位</li>
+                <li><strong>主要短板与建议：</strong>
+                    <ul>
+                        <li>大部分岗位要求1-3年及以上经验，应届生可选择范围有限</li>
+                        <li>缺少TypeScript、Node.js深度使用经验、React Native、前端工程化等高级技能</li>
+                        <li>建议优先投递校招岗位，同时补齐前端工程化、TypeScript等技能</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>二、候选人画像摘要</h2>
+
+            <h3>基本信息</h3>
+            <ul>
+                <li><strong>姓名：</strong> 张明</li>
+                <li><strong>学校：</strong> 温州大学 · 计算机科学与技术</li>
+                <li><strong>学历：</strong> 工学学士（2026年6月毕业）</li>
+                <li><strong>求职状态：</strong> 应届毕业生</li>
+            </ul>
+
+            <h3>核心技能</h3>
+            <ul>
+                <li><strong>编程语言：</strong> Java（面向对象/集合框架）、Python（数据处理）、JavaScript（基础+ES6）、C++</li>
+                <li><strong>Web开发：</strong> HTML/CSS/JavaScript、React（基础）、Spring Boot（基础）、RESTful API</li>
+                <li><strong>数据库：</strong> MySQL（增删改查/优化）、MongoDB（基础）</li>
+                <li><strong>工程工具：</strong> Git、敏捷开发、软件测试基础</li>
+                <li><strong>其他：</strong> 微信小程序开发（基础）、云计算/深度学习（概念）</li>
+            </ul>
+
+            <h3>项目/实习亮点</h3>
+            <ul>
+                <li><strong>电商平台原型开发：</strong> Spring Boot + React + MySQL，实践前后端交互</li>
+                <li><strong>微信校园资讯小程序：</strong> 独立开发，掌握移动端开发</li>
+                <li><strong>校园二手平台：</strong> 核心成员，获校级大赛入围奖</li>
+                <li><strong>实习经历：</strong> XX软件公司开发实习生（2025.07-2025.09），维护OA系统，学习企业级Java开发规范</li>
+            </ul>
+
+            <h3>目标岗位与城市偏好</h3>
+            <ul>
+                <li><strong>目标岗位：</strong> WEB工程师</li>
+                <li><strong>目标城市：</strong> 杭州</li>
+                <li><strong>薪资偏好：</strong> 应届生标准（未明确）</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>三、岗位检索概况</h2>
+
+            <h3>检索范围</h3>
+            <ul>
+                <li><strong>Boss直聘：</strong> 19个岗位</li>
+                <li><strong>智联招聘：</strong> 16个岗位（含少量猎聘转岗）</li>
+                <li><strong>检索关键词：</strong>
+                    <ul>
+                        <li>"杭州 WEB工程师 前端开发 Java React Boss直聘"</li>
+                        <li>"杭州 WEB工程师 前端开发 Java React 智联招聘"</li>
+                    </ul>
+                </li>
+                <li><strong>筛选条件：</strong> 地区=杭州，岗位=WEB前端/前端开发，技能=React/Java/JavaScript</li>
+            </ul>
+
+            <h3>岗位特点</h3>
+            <ul>
+                <li><strong>公司类型：</strong> 大厂（阿里、网易、蚂蚁、海康威视、天猫）+ 中型科技公司</li>
+                <li><strong>经验要求：</strong> 应届生/校招（2个）、经验不限（3个）、1年以内（1个）、1-3年（8个）、3-5年（13个）、5-10年（6个）</li>
+                <li><strong>薪资范围：</strong> 5k-8k（1个）、8k-11k（1个）、11k-20k（3个）、12k-18k（3个）、15k-25k（2个）、18k-35k（3个）</li>
+                <li><strong>学历要求：</strong> 本科为主（25个），大专（3个），硕士（1个），未说明（6个）</li>
+                <li><strong>主要技术栈：</strong> React、Vue、JavaScript、HTML/CSS、Node.js、Java、TypeScript、前端工程化工具</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>四、岗位匹配与推荐</h2>
+
+            <h3>4.1 推荐岗位清单（Top 10）</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>排名</th>
+                        <th>公司</th>
+                        <th>岗位</th>
+                        <th>薪资</th>
+                        <th>经验</th>
+                        <th>学历</th>
+                        <th>平台</th>
+                        <th>匹配度</th>
+                        <th>链接</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1</td>
+                        <td>海康威视</td>
+                        <td>研究院-Web前端开发工程师(校招)</td>
+                        <td>未说明</td>
+                        <td>校招应届生</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-high">92</td>
+                        <td><a href="https://m.zhipin.com/job_detail/d53fef52eb0d9e0003x-2t21EVtX.html">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>浙江天猫技术有限公司</td>
+                        <td>web前端开发工程师（实习）</td>
+                        <td>7.5k-8.8k/月</td>
+                        <td>实习</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-high">90</td>
+                        <td><a href="https://m.zhipin.com/job_detail/c2cf1672ca3626b91HB-296-FFRX.html">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>浙江数维科技有限公司</td>
+                        <td>前端开发工程师</td>
+                        <td>8k-11k/月</td>
+                        <td>经验不限</td>
+                        <td>本科</td>
+                        <td>智联招聘</td>
+                        <td class="score-high">88</td>
+                        <td><a href="https://m.zhaopin.com/jobs/CC318413930J40790419313.htm">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>外企德科数字技术有限公司</td>
+                        <td>软件研发工程师(前后端测试均有)</td>
+                        <td>18k-35k/月</td>
+                        <td>经验不限</td>
+                        <td>本科</td>
+                        <td>智联招聘</td>
+                        <td class="score-high">85</td>
+                        <td><a href="https://m.zhaopin.com/jobs/CCL1480117890J40765513805.htm">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td>杭州城市大脑有限公司</td>
+                        <td>初级前端开发工程师(react方向)</td>
+                        <td>未说明</td>
+                        <td>1年以内</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-high">85</td>
+                        <td><a href="https://m.zhipin.com/job_detail/ea87d3e02c7acd8d1XB73ty_E1BW.html">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td>浙江宇视科技有限公司</td>
+                        <td>WEB前端开发工程师(RD41)</td>
+                        <td>11k-20k/月</td>
+                        <td>1-3年</td>
+                        <td>本科</td>
+                        <td>智联招聘</td>
+                        <td class="score-medium">82</td>
+                        <td><a href="https://m.zhaopin.com/jobs/CC451534410J40790159114.htm">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td>软通动力信息技术(集团)股份有限公司</td>
+                        <td>Java开发</td>
+                        <td>未说明</td>
+                        <td>1-3年</td>
+                        <td>本科</td>
+                        <td>智联招聘</td>
+                        <td class="score-medium">80</td>
+                        <td><a href="https://m.zhaopin.com/jobs/CC000544460J40706038116.htm">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>8</td>
+                        <td>阿里集团</td>
+                        <td>web前端开发工程师</td>
+                        <td>未说明</td>
+                        <td>1-3年</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-medium">80</td>
+                        <td><a href="https://m.zhipin.com/job_detail/33114e5160e5b5f11XR73Nm7EVdR.html">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>9</td>
+                        <td>顺丰速运有限公司</td>
+                        <td>WEB前端开发工程师</td>
+                        <td>未说明</td>
+                        <td>1-3年</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-medium">78</td>
+                        <td><a href="https://m.zhipin.com/job_detail/56f1c4869f8b6eaf1nZ52dS5FlBS.html">链接</a></td>
+                    </tr>
+                    <tr>
+                        <td>10</td>
+                        <td>蚂蚁集团</td>
+                        <td>web前端</td>
+                        <td>未说明</td>
+                        <td>经验不限</td>
+                        <td>本科</td>
+                        <td>BOSS直聘</td>
+                        <td class="score-medium">78</td>
+                        <td><a href="https://m.zhipin.com/job_detail/88b7f9ef4059a5ff1nx709W4FlRV.html">链接</a></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>4.2 匹配度分析</h3>
+
+            <h4>主要匹配点</h4>
+            <ol>
+                <li><strong>技能匹配度高：</strong>
+                    <ul>
+                        <li>React基础技能与80%+岗位需求吻合</li>
+                        <li>JavaScript、HTML/CSS基础扎实，符合前端开发核心要求</li>
+                        <li>Java技能匹配部分全栈岗位</li>
+                        <li>有Spring Boot项目经验，适合前后端结合的岗位</li>
+                    </ul>
+                </li>
+                <li><strong>经验要求匹配：</strong>
+                    <ul>
+                        <li>校招、实习岗位与应届生身份完美匹配</li>
+                        <li>3个"经验不限"岗位提供了更多选择</li>
+                        <li>1-3年经验岗位可以尝试投递，有实习经历作为加分项</li>
+                    </ul>
+                </li>
+                <li><strong>城市匹配度：</strong> 所有检索岗位均在杭州，完全符合目标城市</li>
+            </ol>
+
+            <h4>主要差距与补齐建议</h4>
+            <ol>
+                <li><strong>经验差距：</strong>
+                    <ul>
+                        <li>大部分优质岗位要求1-3年及以上经验</li>
+                        <li>建议：优先投递校招和实习岗位，积累经验后再考虑跳槽</li>
+                    </ul>
+                </li>
+                <li><strong>技能缺口：</strong>
+                    <ul>
+                        <li><strong>TypeScript：</strong> 60%以上岗位要求，但候选人未掌握</li>
+                        <li><strong>Node.js深度使用：</strong> 40%岗位要求，仅了解基础</li>
+                        <li><strong>前端工程化：</strong> webpack/vite等工具实战经验不足</li>
+                        <li><strong>React Native：</strong> 部分移动端岗位要求</li>
+                        <li><strong>Vue框架：</strong> 30%岗位要求Vue，候选人主要掌握React</li>
+                    </ul>
+                </li>
+                <li><strong>补齐建议：</strong>
+                    <ul>
+                        <li>短期（1个月内）：学习TypeScript基础，完成小项目练习</li>
+                        <li>中期（2-3个月）：深入学习前端工程化工具（webpack/vite）</li>
+                        <li>长期（3-6个月）：补充Vue框架知识，考虑学习Node.js后端开发</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>五、图表分析</h2>
+
+            <h3>5.1 薪资范围对比图</h3>
+            <div class="chart-placeholder">
+                [图表：薪资范围对比 - 请查看 charts/salary_range.png]
+            </div>
+            <p><strong>分析：</strong></p>
+            <ul>
+                <li>高端岗位（18k-35k）主要面向3-5年+经验的开发者</li>
+                <li>应届生合理薪资区间为8k-11k（经验不限）或实习300-400元/天</li>
+                <li>中等薪资区间（12k-18k）对应1-3年经验，可作为中期目标</li>
+            </ul>
+
+            <h3>5.2 经验要求分布图</h3>
+            <div class="chart-placeholder">
+                [图表：经验要求分布 - 请查看 charts/experience_distribution.png]
+            </div>
+            <p><strong>分析：</strong></p>
+            <ul>
+                <li>3-5年经验岗位占比最高（37%），但应届生无法直接匹配</li>
+                <li>应届生可投递岗位：校招（2个，6%）、经验不限（3个，9%）、实习（1个，3%）</li>
+                <li>1-3年经验岗位（8个，23%）可以尝试投递，但有竞争压力</li>
+                <li>建议关注春招、秋招等校招专场活动</li>
+            </ul>
+
+            <h3>5.3 平台岗位数量对比图</h3>
+            <div class="chart-placeholder">
+                [图表：平台岗位数量对比 - 请查看 charts/platform_comparison.png]
+            </div>
+            <p><strong>分析：</strong></p>
+            <ul>
+                <li>Boss直聘岗位数量略多于智联招聘</li>
+                <li>两个平台各有优势，建议同时关注</li>
+                <li>Boss直聘：大厂岗位更多（阿里、网易、蚂蚁、天猫）</li>
+                <li>智联招聘：中型企业岗位丰富，薪资范围明确</li>
+            </ul>
+
+            <h3>5.4 匹配度排名图</h3>
+            <div class="chart-placeholder">
+                [图表：匹配度排名 - 请查看 charts/match_ranking.png]
+            </div>
+            <p><strong>分析：</strong></p>
+            <ul>
+                <li>高匹配度（≥80）岗位：8个，占总数23%</li>
+                <li>中等匹配度（60-79）岗位：12个，占总数34%</li>
+                <li>低匹配度（<60）岗位：15个，占总数43%</li>
+                <li>应届生应重点关注高匹配度岗位，中等匹配度岗位可尝试投递</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>六、行动建议</h2>
+
+            <h3>6.1 近期优先投递岗位（按优先级排序）</h3>
+
+            <div class="priority-box">
+                <h4>第1优先级（强烈推荐）</h4>
+                <ol>
+                    <li><strong>海康威视 - 研究院-Web前端开发工程师(校招) [匹配度92]</strong>
+                        <ul>
+                            <li>理由：校招岗位，与应届生身份完美匹配，大厂平台</li>
+                            <li>行动：立即投递，准备技术面（React、前端基础、算法）</li>
+                        </ul>
+                    </li>
+                    <li><strong>浙江天猫技术有限公司 - web前端开发工程师（实习） [匹配度90]</strong>
+                        <ul>
+                            <li>理由：暑期实习，可转正，300-400元/天待遇优厚</li>
+                            <li>行动：确认实习时间，准备React和JavaScript面试</li>
+                        </ul>
+                    </li>
+                </ol>
+            </div>
+
+            <div class="priority-box">
+                <h4>第2优先级（重点投递）</h4>
+                <ol>
+                    <li><strong>浙江数维科技有限公司 - 前端开发工程师 [匹配度88]</strong>
+                        <ul>
+                            <li>理由：经验不限，薪资8k-11k合理</li>
+                            <li>行动：投递简历，重点关注前端基础面试</li>
+                        </ul>
+                    </li>
+                    <li><strong>外企德科数字技术有限公司 - 软件研发工程师 [匹配度85]</strong>
+                        <ul>
+                            <li>理由：经验不限，涵盖前后端，Java、Python、web技能匹配</li>
+                            <li>行动：了解具体项目，准备Java和前端相关面试</li>
+                        </ul>
+                    </li>
+                    <li><strong>杭州城市大脑有限公司 - 初级前端开发工程师 [匹配度85]</strong>
+                        <ul>
+                            <li>理由：1年以内岗位，React技能匹配</li>
+                            <li>行动：投递简历，准备React相关项目展示</li>
+                        </ul>
+                    </li>
+                </ol>
+            </div>
+
+            <div class="priority-box">
+                <h4>第3优先级（尝试投递）</h4>
+                <ol>
+                    <li>浙江宇视科技有限公司 - WEB前端开发工程师 [匹配度82]</li>
+                    <li>软通动力信息技术(集团)股份有限公司 - Java开发 [匹配度80]</li>
+                    <li>阿里集团 - web前端开发工程师 [匹配度80]</li>
+                    <li>顺丰速运有限公司 - WEB前端开发工程师 [匹配度78]</li>
+                    <li>蚂蚁集团 - web前端 [匹配度78]</li>
+                </ol>
+            </div>
+
+            <h3>6.2 简历优化建议</h3>
+            <ol>
+                <li><strong>突出前端项目经验：</strong>
+                    <ul>
+                        <li>将"电商平台原型开发"置顶，强调Spring Boot + React + MySQL技术栈</li>
+                        <li>补充项目中的前端技术细节（组件封装、状态管理、性能优化等）</li>
+                    </ul>
+                </li>
+                <li><strong>补充技能描述：</strong>
+                    <ul>
+                        <li>JavaScript：补充ES6+特性使用经验（箭头函数、Promise、async/await等）</li>
+                        <li>React：补充组件生命周期、Hooks使用经验</li>
+                        <li>工具：补充Git工作流经验（分支管理、代码review等）</li>
+                    </ul>
+                </li>
+                <li><strong>实习经历量化：</strong>
+                    <ul>
+                        <li>XX软件公司实习：补充具体修复Bug数量、参与模块、技术栈使用等</li>
+                    </ul>
+                </li>
+                <li><strong>增加开源/个人项目：</strong>
+                    <ul>
+                        <li>建议在GitHub上补充2-3个前端个人项目，展示React实战能力</li>
+                    </ul>
+                </li>
+            </ol>
+
+            <h3>6.3 技能补齐建议</h3>
+            <p><strong>短期学习计划（1个月内）：</strong></p>
+            <ul>
+                <li><strong>TypeScript：</strong> 学习基础语法、类型系统，完成TypeScript + React小项目</li>
+                <li><strong>前端工程化：</strong> 学习webpack/vite基础配置，理解构建流程</li>
+            </ul>
+
+            <p><strong>中期学习计划（2-3个月）：</strong></p>
+            <ul>
+                <li><strong>Vue框架：</strong> 学习Vue3基础，对比React，拓宽技术栈</li>
+                <li><strong>前端性能优化：</strong> 学习网络优化、渲染优化、代码分割等</li>
+            </ul>
+
+            <p><strong>长期学习计划（3-6个月）：</strong></p>
+            <ul>
+                <li><strong>Node.js后端开发：</strong> 学习Express/Koa，掌握服务端开发能力</li>
+                <li><strong>全栈开发：</strong> 结合Java和Node.js，提升全栈能力</li>
+                <li><strong>面试准备：</strong> 系统复习前端基础、算法、数据结构，准备大厂面试</li>
+            </ul>
+
+            <h3>6.4 求职策略建议</h3>
+            <ol>
+                <li><strong>投递策略：</strong>
+                    <ul>
+                        <li>优先投递校招、实习、经验不限岗位</li>
+                        <li>大厂岗位（阿里、网易、蚂蚁、海康威视）重点准备，可同时投递</li>
+                        <li>中型企业岗位广撒网，积累面试经验</li>
+                    </ul>
+                </li>
+                <li><strong>时间安排：</strong>
+                    <ul>
+                        <li>前2周：投递高匹配度岗位（前5名）</li>
+                        <li>第3-4周：投递中等匹配度岗位（第6-10名），同时准备面试</li>
+                        <li>第5-8周：根据面试反馈调整策略，持续投递</li>
+                    </ul>
+                </li>
+                <li><strong>备选方案：</strong>
+                    <ul>
+                        <li>如果校招竞争激烈，可考虑实习转正路径</li>
+                        <li>关注春招、秋招等校招专场活动</li>
+                        <li>准备校招笔试、面试（算法、数据结构、前端基础）</li>
+                    </ul>
+                </li>
+                <li><strong>心态调整：</strong>
+                    <ul>
+                        <li>应届生求职需要耐心，接受被拒的可能性</li>
+                        <li>面试失败是常态，总结经验，持续提升</li>
+                        <li>平时多刷LeetCode，保持技术敏感度</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <div class="appendix">
+            <h3>附录：检索过程文件</h3>
+            <ul>
+                <li><strong>候选人档案：</strong> <code>input/candidate_profile.md</code></li>
+                <li><strong>简历文本：</strong> <code>input/resume_text.txt</code></li>
+                <li><strong>Boss直聘岗位信息：</strong> <code>infos/boss_jobs.md</code></li>
+                <li><strong>智联招聘岗位信息：</strong> <code>infos/zhilian_jobs.md</code></li>
+                <li><strong>结构化岗位数据：</strong> <code>analysis/jobs_data.json</code></li>
+                <li><strong>图表文件：</strong> <code>charts/</code> 目录下4张图表</li>
+            </ul>
+        </div>
+
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #999; font-size: 12px;">
+            <p><strong>报告生成时间：</strong> 2026-01-07</p>
+            <p><strong>数据来源：</strong> Boss直聘、智联招聘（通过Coze Search API检索）</p>
+            <p><strong>工具支持：</strong> job-search-report技能（简历提取、岗位检索、数据分析、图表生成）</p>
+        </div>
+    </div>
+</body>
+</html>
