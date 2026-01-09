@@ -97,6 +97,7 @@ class Session:
     agent: Any
     backend: Any
     run_queue: asyncio.Queue[RunRequest] = field(default_factory=asyncio.Queue)
+    run_status: dict[str, str] = field(default_factory=dict)
     connections: set[WebSocket] = field(default_factory=set)
     current_run: RunExecution | None = None
     current_task: asyncio.Task | None = None
@@ -118,6 +119,7 @@ class Session:
                 if worker_task is not None and worker_task.cancelling():
                     raise
             except Exception as exc:
+                self.run_status[run_request.run_id] = "failed"
                 await self.broadcast(
                     {
                         "type": "run.failed",
@@ -131,6 +133,7 @@ class Session:
 
     async def enqueue_run(self, run_request: RunRequest) -> None:
         await self.run_queue.put(run_request)
+        self.run_status[run_request.run_id] = "queued"
         await self.broadcast(
             {"type": "run.queued", "run_id": run_request.run_id, "session_id": self.session_id}
         )
@@ -140,6 +143,7 @@ class Session:
             return False
         self.current_run.cancel_event.set()
         self.current_task.cancel()
+        self.run_status[self.current_run.run_id] = "cancelled"
         await self.broadcast(
             {
                 "type": "run.cancelled",
@@ -165,6 +169,7 @@ class Session:
     async def _execute_run(self, run_request: RunRequest) -> None:
         run_ctx = RunExecution(run_id=run_request.run_id)
         self.current_run = run_ctx
+        self.run_status[run_request.run_id] = "running"
         await self.broadcast(
             {"type": "run.started", "run_id": run_request.run_id, "session_id": self.session_id}
         )
@@ -437,6 +442,7 @@ class Session:
                         for response in hitl_response.values()
                         for decision in response.get("decisions", [])
                     ):
+                        self.run_status[run_request.run_id] = "rejected"
                         await self.broadcast(
                             {
                                 "type": "run.rejected",
@@ -451,10 +457,12 @@ class Session:
 
                 break
 
+            self.run_status[run_request.run_id] = "completed"
             await self.broadcast(
                 {"type": "run.completed", "run_id": run_request.run_id, "session_id": self.session_id}
             )
         except asyncio.CancelledError:
+            self.run_status[run_request.run_id] = "cancelled"
             await self._update_cancelled_state(config)
             raise
         finally:
@@ -585,6 +593,34 @@ async def _handle_client_message(session: Session, data: dict[str, Any]) -> None
             await session.broadcast(
                 {"type": "log", "level": "warning", "message": "No active run to cancel."}
             )
+        return
+
+    if msg_type == "run.status":
+        run_id = data.get("run_id")
+        if not run_id:
+            await session.broadcast(
+                {
+                    "type": "log",
+                    "level": "warning",
+                    "message": "Missing run_id for run.status request.",
+                }
+            )
+            return
+        current_run_id = session.current_run.run_id if session.current_run else None
+        status = session.run_status.get(run_id)
+        if status is None and current_run_id == run_id:
+            status = "running"
+        if status is None:
+            status = "unknown"
+        await session.broadcast(
+            {
+                "type": "run.status",
+                "run_id": run_id,
+                "status": status,
+                "session_id": session.session_id,
+                "current_run_id": current_run_id,
+            }
+        )
         return
 
     if msg_type == "interrupt_response":

@@ -29,6 +29,18 @@ class DeepAgentsClient {
         this.sessions = [];
         this.chatHistory = this.loadHistory();
         this.todoState = null; // Track last todos to compute progress diffs
+        this.activeChatId = null;
+        this.runIdToChatId = new Map();
+        this.currentRunStatus = null;
+        this.shouldReconnect = true;
+        this.pendingRunStatusId = null;
+        this.reconnectLogElement = null;
+
+        this.chatHistory.forEach(chat => {
+            if (chat && chat.runId) {
+                this.runIdToChatId.set(chat.runId, chat.id);
+            }
+        });
 
         // UI elements
         this.elements = {};
@@ -192,6 +204,11 @@ class DeepAgentsClient {
                 this.cancelRun();
             }
         });
+
+        window.addEventListener('pagehide', () => {
+            this.backgroundCurrentChat('pagehide');
+            this.disconnectWebSocket({ allowReconnect: false });
+        });
     }
 
     async createSession() {
@@ -212,14 +229,7 @@ class DeepAgentsClient {
             }
 
             const data = await response.json();
-            this.sessionId = data.session_id;
-
-            // Build WebSocket URL
-            const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
-            const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
-            this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
-
-            // Connect WebSocket
+            this.setSessionId(data.session_id);
             this.connectWebSocket();
 
         } catch (error) {
@@ -229,13 +239,57 @@ class DeepAgentsClient {
         }
     }
 
+    setSessionId(sessionId) {
+        this.sessionId = sessionId;
+        const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
+        const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
+        this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
+    }
+
+    connectToSession(sessionId, { requestRunStatusId = null } = {}) {
+        if (!sessionId) return;
+        this.updateConnectionStatus('connecting');
+        this.setSessionId(sessionId);
+        this.pendingRunStatusId = requestRunStatusId;
+        this.connectWebSocket();
+    }
+
+    switchSession(sessionId, { requestRunStatusId = null } = {}) {
+        if (!sessionId) return;
+        if (this.sessionId === sessionId && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            if (requestRunStatusId) {
+                this.send({ type: 'run.status', run_id: requestRunStatusId });
+            }
+            return;
+        }
+        this.disconnectWebSocket({ allowReconnect: false });
+        this.connectToSession(sessionId, { requestRunStatusId });
+    }
+
+    disconnectWebSocket({ allowReconnect = false } = {}) {
+        this.shouldReconnect = allowReconnect;
+        if (!this.ws) return;
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+            this.ws.close();
+        }
+    }
+
     connectWebSocket() {
+        if (!this.wsUrl) return;
+        this.shouldReconnect = true;
         this.ws = new WebSocket(this.wsUrl);
 
         this.ws.onopen = () => {
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
             this.reconnectAttempts = 0;
+            this.hideReconnectNotice();
+            this.send({ type: 'auto_approve', enabled: this.autoApprove });
+            const runId = this.pendingRunStatusId || (this.isRunning ? this.currentRunId : null);
+            this.pendingRunStatusId = null;
+            if (runId) {
+                this.send({ type: 'run.status', run_id: runId });
+            }
         };
 
         this.ws.onmessage = (event) => {
@@ -250,7 +304,9 @@ class DeepAgentsClient {
         this.ws.onclose = () => {
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
-            this.attemptReconnect();
+            if (this.shouldReconnect) {
+                this.attemptReconnect();
+            }
         };
 
         this.ws.onerror = (error) => {
@@ -263,7 +319,7 @@ class DeepAgentsClient {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`正在尝试重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
-            this.addLogMessage('info', `正在重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
+            this.showReconnectNotice(this.reconnectAttempts, this.maxReconnectAttempts);
 
             setTimeout(() => {
                 this.connectWebSocket();
@@ -288,6 +344,9 @@ class DeepAgentsClient {
             case 'run.cancelled':
             case 'run.rejected':
                 this.handleRunEnded(data);
+                break;
+            case 'run.status':
+                this.handleRunStatus(data);
                 break;
             case 'assistant.delta':
                 this.handleAssistantDelta(data);
@@ -326,11 +385,24 @@ class DeepAgentsClient {
 
     handleRunQueued(data) {
         console.log('任务已排队：', data.run_id);
+        if (!this.currentRunId) {
+            this.currentRunId = data.run_id;
+        }
+        this.currentRunStatus = 'queued';
+        if (data.run_id && this.activeChatId) {
+            this.runIdToChatId.set(data.run_id, this.activeChatId);
+        }
+        this.updateChatStatus(data.run_id, 'queued');
+        this.syncRunStatusElement(data.run_id, 'queued', { createIfMissing: true });
     }
 
     handleRunStarted(data) {
         console.log('任务开始：', data.run_id);
         this.currentRunId = data.run_id;
+        this.currentRunStatus = 'running';
+        if (data.run_id && this.activeChatId) {
+            this.runIdToChatId.set(data.run_id, this.activeChatId);
+        }
         this.isRunning = true;
         this.updateCancelButton(true);
         this.updateSendButton();
@@ -341,8 +413,10 @@ class DeepAgentsClient {
         // Hide welcome message
         this.elements.welcomeMessage.style.display = 'none';
 
-        // Add run status indicator
-        this.addRunStatus('running', data.run_id, `运行中：${data.run_id.slice(0, 8)}`);
+        // Add/update run status indicator
+        this.finalizeStaleRunStatuses(data.run_id);
+        this.syncRunStatusElement(data.run_id, 'running', { createIfMissing: true });
+        this.updateChatStatus(data.run_id, 'running');
     }
 
     handleRunEnded(data) {
@@ -350,14 +424,20 @@ class DeepAgentsClient {
         console.log('任务结束：', status, data);
 
         const runId = data.run_id || this.currentRunId;
+        if (runId) {
+            this.currentRunStatus = status;
+            this.updateChatStatus(runId, status);
+        }
 
         if (runId) this.messageBuffer.delete(runId);
-        this.currentRunId = null;
-        this.isRunning = false;
-        this.updateCancelButton(false);
-        this.updateSendButton();
-        this.currentAssistantSegmentElement = null;
-        this.currentAssistantSegmentText = '';
+        if (!this.currentRunId || runId === this.currentRunId) {
+            this.currentRunId = null;
+            this.isRunning = false;
+            this.updateCancelButton(false);
+            this.updateSendButton();
+            this.currentAssistantSegmentElement = null;
+            this.currentAssistantSegmentText = '';
+        }
 
         // Update run status
         const statusElement =
@@ -373,12 +453,38 @@ class DeepAgentsClient {
         this.currentRunStatusElement = null;
 
         // Save to history
-        this.saveCurrentChat();
+        this.saveCurrentChat({ status, runId });
 
         // Remove typing indicator
         if (this.typingIndicator) {
             this.typingIndicator.remove();
             this.typingIndicator = null;
+        }
+    }
+
+    handleRunStatus(data) {
+        const runId = data.run_id;
+        const status = data.status;
+        if (!runId || !status || status === 'unknown') return;
+
+        if (this.activeChatId && !this.runIdToChatId.has(runId)) {
+            this.runIdToChatId.set(runId, this.activeChatId);
+        }
+        this.updateChatStatus(runId, status);
+        if (status === 'running' || status === 'queued') {
+            this.finalizeStaleRunStatuses(runId);
+        }
+        this.syncRunStatusElement(runId, status, { createIfMissing: status === 'running' || status === 'queued' });
+
+        if (this.currentRunId && runId === this.currentRunId) {
+            this.currentRunStatus = status;
+            const active = this.isActiveRunStatus(status);
+            this.isRunning = active;
+            this.updateCancelButton(active);
+            this.updateSendButton();
+            if (!active) {
+                this.currentRunId = null;
+            }
         }
     }
 
@@ -1038,6 +1144,53 @@ class DeepAgentsClient {
         this.currentRunStatusElement = statusDiv;
     }
 
+    getRunStatusElement(runId) {
+        if (!runId) return null;
+        if (this.runStatusElements.has(runId)) {
+            return this.runStatusElements.get(runId);
+        }
+        const nodes = this.elements.messages.querySelectorAll(`.run-status[data-run-id="${runId}"]`);
+        if (nodes.length > 0) {
+            const [first, ...rest] = Array.from(nodes);
+            rest.forEach(node => node.remove());
+            this.runStatusElements.set(runId, first);
+            return first;
+        }
+        return null;
+    }
+
+    finalizeStaleRunStatuses(activeRunId) {
+        const statusNodes = this.elements.messages.querySelectorAll('.run-status.running, .run-status.queued');
+        statusNodes.forEach(node => {
+            const nodeRunId = node.dataset.runId || '';
+            if (activeRunId && nodeRunId === activeRunId) return;
+            node.className = 'run-status completed';
+            node.innerHTML = `<span>${this.formatRunStatus('completed')}</span>`;
+            if (nodeRunId) this.runStatusElements.delete(nodeRunId);
+        });
+    }
+
+    syncRunStatusElement(runId, status, { createIfMissing = false } = {}) {
+        if (!runId || !status) return;
+        const existing = this.getRunStatusElement(runId);
+        const isRunning = status === 'running';
+        const label = isRunning
+            ? `运行中：${runId.slice(0, 8)}`
+            : this.formatRunStatus(status);
+
+        if (existing) {
+            existing.className = `run-status ${status}`;
+            existing.innerHTML = isRunning
+                ? `<div class="spinner"></div><span>${label}</span>`
+                : `<span>${label}</span>`;
+            this.currentRunStatusElement = existing;
+            return;
+        }
+        if (createIfMissing) {
+            this.addRunStatus(status, runId, label);
+        }
+    }
+
     addLogMessage(level, message) {
         this.closeAssistantSegment();
         const logDiv = document.createElement('div');
@@ -1053,6 +1206,37 @@ class DeepAgentsClient {
         contentElement.appendChild(logDiv);
 
         this.scrollToBottom();
+        return logDiv;
+    }
+
+    showReconnectNotice(attempt, total) {
+        const message = `正在重连…（${attempt}/${total}）`;
+        if (this.reconnectLogElement && this.reconnectLogElement.isConnected) {
+            this.reconnectLogElement.textContent = `[${this.formatLogLevel('info')}] ${message}`;
+            return;
+        }
+        this.reconnectLogElement = this.addLogMessage('info', message);
+        if (this.reconnectLogElement) {
+            this.reconnectLogElement.dataset.transient = 'reconnect';
+        }
+    }
+
+    hideReconnectNotice() {
+        if (this.reconnectLogElement && this.reconnectLogElement.isConnected) {
+            const messageElement = this.reconnectLogElement.closest('.message');
+            this.reconnectLogElement.remove();
+            if (messageElement) {
+                const content = messageElement.querySelector('.message-text');
+                const hasContent = content && (content.children.length > 0 || content.textContent.trim().length > 0);
+                if (!hasContent) {
+                    messageElement.remove();
+                    if (this.currentMessageElement === messageElement) {
+                        this.currentMessageElement = null;
+                    }
+                }
+            }
+        }
+        this.reconnectLogElement = null;
     }
 
     // Interrupt Modal
@@ -1131,6 +1315,13 @@ class DeepAgentsClient {
 
         // Send to server
         const runId = this.generateRunId();
+        this.currentRunId = runId;
+        this.currentRunStatus = 'queued';
+        if (!this.activeChatId) {
+            this.activeChatId = this.generateTaskId();
+        }
+        this.runIdToChatId.set(runId, this.activeChatId);
+        this.saveCurrentChat({ status: 'queued', runId, title: input });
         this.send({
             type: 'run',
             input: input,
@@ -1148,24 +1339,40 @@ class DeepAgentsClient {
     }
 
     newChat() {
-        // Clear messages
+        this.backgroundCurrentChat('new_chat');
+        this.resetChatView();
+        this.activeChatId = this.generateTaskId();
+        this.currentRunId = null;
+        this.currentRunStatus = null;
+        this.isRunning = false;
+        this.updateCancelButton(false);
+        this.updateSendButton();
+        this.elements.chatTitle.textContent = '新对话';
+        this.elements.welcomeMessage.style.display = 'flex';
+
+        this.disconnectWebSocket({ allowReconnect: false });
+        this.createSession();
+    }
+
+    resetChatView() {
         this.elements.messages.innerHTML = '';
         this.currentMessageElement = null;
         this.currentAssistantSegmentElement = null;
         this.currentAssistantSegmentText = '';
-
-        // Show welcome message
-        this.elements.welcomeMessage.style.display = 'flex';
-
-        // Update title
-        this.elements.chatTitle.textContent = '新对话';
-
-        // Reset state
-        this.currentRunId = null;
-        this.isRunning = false;
         this.messageBuffer.clear();
+        this.currentToolCalls.clear();
         this.runStatusElements.clear();
         this.currentRunStatusElement = null;
+        this.todoState = null;
+        this.pendingInterrupts = [];
+        this.hideReconnectNotice();
+        if (this.typingIndicator) {
+            this.typingIndicator.remove();
+            this.typingIndicator = null;
+        }
+        if (this.elements.interruptModal.classList.contains('active')) {
+            this.elements.interruptModal.classList.remove('active');
+        }
     }
 
     send(data) {
@@ -1277,18 +1484,63 @@ class DeepAgentsClient {
         // Auto-scroll disabled by request.
     }
 
+    isActiveRunStatus(status) {
+        return status === 'running' || status === 'queued';
+    }
+
+    getHistoryStatusLabel(status) {
+        if (this.isActiveRunStatus(status)) return '进行中';
+        return '';
+    }
+
+    normalizeTaskId(rawId) {
+        const value = rawId == null ? '' : String(rawId).trim();
+        if (!value) return this.generateTaskId();
+        if (value.startsWith('task_')) return value;
+        return `task_${value}`;
+    }
+
+    normalizeHistoryEntry(chat) {
+        if (!chat || typeof chat !== 'object') return null;
+        const rawTaskId = chat.taskId || chat.id || chat.runId || String(chat.timestamp || Date.now());
+        const taskId = this.normalizeTaskId(rawTaskId);
+        const messages = Array.isArray(chat.messages) ? chat.messages : [];
+        const timestamp = typeof chat.timestamp === 'number' ? chat.timestamp : Date.now();
+        const createdAt = typeof chat.createdAt === 'number'
+            ? chat.createdAt
+            : (typeof chat.timestamp === 'number' ? chat.timestamp : Date.now());
+        return {
+            ...chat,
+            id: taskId,
+            taskId,
+            runId: chat.runId || null,
+            sessionId: chat.sessionId || null,
+            status: chat.status || null,
+            createdAt,
+            timestamp,
+            messages,
+        };
+    }
+
     // History Management
     loadHistory() {
         const stored = localStorage.getItem('deepagents_chat_history');
-        return stored ? JSON.parse(stored) : [];
+        if (!stored) return [];
+        try {
+            const parsed = JSON.parse(stored);
+            if (!Array.isArray(parsed)) return [];
+            return parsed.map(item => this.normalizeHistoryEntry(item)).filter(Boolean);
+        } catch {
+            return [];
+        }
     }
 
     saveHistory() {
         localStorage.setItem('deepagents_chat_history', JSON.stringify(this.chatHistory));
     }
 
-    saveCurrentChat() {
-        const messages = Array.from(this.elements.messages.children).map(msg => {
+    collectCurrentMessages() {
+        return Array.from(this.elements.messages.children).map(msg => {
             const isUser = msg.classList.contains('message') && msg.classList.contains('user');
             const textElement = msg.querySelector('.message-text');
             return {
@@ -1297,58 +1549,148 @@ class DeepAgentsClient {
                 html: textElement ? textElement.innerHTML : ''
             };
         }).filter(m => m.content);
+    }
 
-        if (messages.length === 0) return;
+    buildChatTitle(messages, fallback) {
+        const base = fallback || messages[0]?.content || '新对话';
+        const trimmed = String(base).trim();
+        if (!trimmed) return '新对话';
+        return trimmed.length > 50 ? trimmed.slice(0, 50) + '…' : trimmed;
+    }
 
-        const chat = {
-            id: Date.now().toString(),
-            sessionId: this.sessionId,
-            title: messages[0]?.content?.slice(0, 50) + '…' || '新对话',
-            timestamp: Date.now(),
-            messages: messages
+    findChatIndex({ id, runId }) {
+        if (id) {
+            const normalizedId = this.normalizeTaskId(id);
+            const byId = this.chatHistory.findIndex(c => c.id === normalizedId);
+            if (byId >= 0) return byId;
+        }
+        if (runId) {
+            return this.chatHistory.findIndex(c => c.runId === runId);
+        }
+        return -1;
+    }
+
+    resolveChatIdForRun(runId) {
+        if (runId && this.runIdToChatId.has(runId)) {
+            return this.runIdToChatId.get(runId);
+        }
+        if (this.activeChatId) return this.activeChatId;
+        if (!runId) return null;
+        const index = this.findChatIndex({ runId });
+        if (index >= 0) return this.chatHistory[index].id;
+        return null;
+    }
+
+    upsertChatRecord(chat, { promote = false } = {}) {
+        const now = Date.now();
+        const normalizedId = this.normalizeTaskId(chat.id || chat.taskId || chat.runId || now);
+        const index = this.findChatIndex({ id: normalizedId, runId: chat.runId });
+        const existing = index >= 0 ? this.chatHistory[index] : null;
+        const nextMessages = Array.isArray(chat.messages) && chat.messages.length
+            ? chat.messages
+            : (existing?.messages || []);
+        const nextTitle = chat.title || existing?.title || this.buildChatTitle(nextMessages, null);
+        const next = {
+            ...(existing || {}),
+            ...chat,
+            id: normalizedId,
+            taskId: normalizedId,
+            runId: chat.runId || existing?.runId || null,
+            sessionId: chat.sessionId || existing?.sessionId || null,
+            status: chat.status || existing?.status || null,
+            createdAt: existing?.createdAt || chat.createdAt || now,
+            timestamp: now,
+            title: nextTitle,
+            messages: nextMessages,
         };
 
-        // Avoid duplicates
-        const existingIndex = this.chatHistory.findIndex(c => c.id === chat.id);
-        if (existingIndex >= 0) {
-            this.chatHistory[existingIndex] = chat;
+        if (index >= 0) {
+            this.chatHistory.splice(index, 1, next);
+        } else if (promote) {
+            this.chatHistory.unshift(next);
         } else {
-            this.chatHistory.unshift(chat);
+            this.chatHistory.push(next);
         }
-
-        // Keep only last 50 chats
+        if (next.runId) {
+            this.runIdToChatId.set(next.runId, next.id);
+        }
         this.chatHistory = this.chatHistory.slice(0, 50);
-
         this.saveHistory();
         this.renderHistory();
     }
 
-    renderHistory() {
-        this.elements.historyList.innerHTML = this.chatHistory.map(chat => `
-            <div class="history-item" data-chat-id="${chat.id}">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                </svg>
-                <span class="history-item-title">${this.escapeHtml(chat.title)}</span>
-                <button class="history-delete-btn" data-chat-id="${chat.id}" title="删除对话">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                </button>
-            </div>
-        `).join('');
+    updateChatStatus(runId, status) {
+        const chatId = this.resolveChatIdForRun(runId);
+        if (!chatId) return;
+        this.upsertChatRecord({
+            id: chatId,
+            taskId: chatId,
+            runId: runId || this.currentRunId,
+            sessionId: this.sessionId,
+            status: status,
+        });
+    }
 
-        // Add click handlers for loading chat
+    backgroundCurrentChat(reason) {
+        if (!this.activeChatId) return;
+        const messages = this.collectCurrentMessages();
+        if (!messages.length) return;
+        const status = this.currentRunStatus || (this.isRunning ? 'running' : null);
+        this.saveCurrentChat({ status, runId: this.currentRunId });
+    }
+
+    saveCurrentChat({ status = null, runId = null, title = null } = {}) {
+        const messages = this.collectCurrentMessages();
+        if (messages.length === 0) return;
+
+        const chatId = this.activeChatId || this.generateTaskId();
+        this.activeChatId = chatId;
+
+        const nextStatus = status || this.currentRunStatus || (this.isRunning ? 'running' : null);
+        const existingIndex = this.findChatIndex({ id: chatId, runId });
+        this.upsertChatRecord({
+            id: chatId,
+            taskId: chatId,
+            runId: runId || this.currentRunId,
+            sessionId: this.sessionId,
+            title: title || this.buildChatTitle(messages, null),
+            status: nextStatus,
+            messages: messages,
+        }, { promote: existingIndex < 0 });
+    }
+
+    renderHistory() {
+        this.elements.historyList.innerHTML = this.chatHistory.map(chat => {
+            const statusLabel = this.getHistoryStatusLabel(chat.status);
+            const statusHtml = statusLabel
+                ? `<span class="history-item-status running">${this.escapeHtml(statusLabel)}</span>`
+                : '';
+            const activeClass = chat.id === this.activeChatId ? ' active' : '';
+            return `
+                <div class="history-item${activeClass}" data-chat-id="${chat.id}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span class="history-item-title">${this.escapeHtml(chat.title || '新对话')}</span>
+                    ${statusHtml}
+                    <button class="history-delete-btn" data-chat-id="${chat.id}" title="删除对话">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </div>
+            `;
+        }).join('');
+
         this.elements.historyList.querySelectorAll('.history-item').forEach(item => {
-            const titleSpan = item.querySelector('.history-item-title');
-            titleSpan.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.history-delete-btn')) return;
                 const chatId = item.getAttribute('data-chat-id');
                 this.loadChat(chatId);
             });
         });
 
-        // Add click handlers for delete buttons
         this.elements.historyList.querySelectorAll('.history-delete-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1361,9 +1703,21 @@ class DeepAgentsClient {
     loadChat(chatId) {
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
+        if (this.isRunning && this.currentRunId && this.currentRunId !== chat.runId) {
+            this.backgroundCurrentChat('switch_chat');
+        }
 
-        this.newChat();
-        this.elements.chatTitle.textContent = chat.title;
+        this.resetChatView();
+        this.elements.chatTitle.textContent = chat.title || '对话';
+        this.activeChatId = chat.id;
+        this.currentRunId = chat.runId || null;
+        this.currentRunStatus = chat.status || null;
+        this.isRunning = this.isActiveRunStatus(chat.status);
+        this.updateCancelButton(this.isRunning);
+        this.updateSendButton();
+        if (chat.runId) {
+            this.runIdToChatId.set(chat.runId, chat.id);
+        }
 
         chat.messages.forEach(msg => {
             const messageElement = this.createMessageElement(msg.role);
@@ -1378,12 +1732,26 @@ class DeepAgentsClient {
             this.elements.messages.appendChild(messageElement);
         });
 
-        this.elements.welcomeMessage.style.display = 'none';
+        this.elements.welcomeMessage.style.display = chat.messages.length ? 'none' : 'flex';
+
+        if (chat.sessionId) {
+            this.switchSession(chat.sessionId, { requestRunStatusId: chat.runId });
+        }
+
+        this.renderHistory();
     }
 
     deleteChat(chatId) {
         // Remove from history array
         this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
+        if (this.activeChatId === chatId) {
+            this.activeChatId = null;
+        }
+        for (const [runId, mappedChatId] of this.runIdToChatId.entries()) {
+            if (mappedChatId === chatId) {
+                this.runIdToChatId.delete(runId);
+            }
+        }
 
         // Save and re-render
         this.saveHistory();
@@ -1576,6 +1944,10 @@ class DeepAgentsClient {
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         const size = (bytes / Math.pow(k, i)).toFixed(1);
         return `${size} ${units[i]}`;
+    }
+
+    generateTaskId() {
+        return `task_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     }
 
     generateRunId() {
