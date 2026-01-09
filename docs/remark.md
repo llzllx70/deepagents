@@ -565,3 +565,11 @@ _return_command_with_state_update()
 
 
 ![1767684637327](image/remark/1767684637327.png)
+
+# manus
+
+1. 先生成了md
+2. md 转 pdf
+3. md通过LLM生成html
+4. 而pptx是另外生成的，不是html转pptx
+
