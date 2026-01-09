@@ -684,8 +684,7 @@ class DeepAgentsClient {
         const hasBody = Boolean(metrics || diff || content);
         fileOpDiv.className = 'file-operation';
 
-        // Check if file is PDF
-        const isPdf = path.toLowerCase().endsWith('.pdf');
+        const downloadUrl = this.getDownloadUrl(path);
 
         let skillName =
             meta && typeof meta.skill_name === 'string' && meta.skill_name ? meta.skill_name : '';
@@ -720,17 +719,7 @@ class DeepAgentsClient {
             </div>
         ` : '';
 
-        // Add download button for PDF files
-        const downloadButtonHtml = isPdf ? `
-            <a href="${this.escapeHtml(path)}" download class="file-download-btn" onclick="event.stopPropagation()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="7 10 12 15 17 10"></polyline>
-                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
-                下载 PDF
-            </a>
-        ` : '';
+        const actionsHtml = '';
 
         const chevronHtml = hasBody ? `
             <svg class="file-op-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -754,7 +743,7 @@ class DeepAgentsClient {
                 </svg>
                 <span class="file-op-path">${this.escapeHtml(path)}${this.escapeHtml(headerMeta)}</span>
                 <span class="file-op-status ${status}">${this.escapeHtml(this.formatFileOpStatus(status))}</span>
-                ${downloadButtonHtml}
+                ${actionsHtml}
                 ${chevronHtml}
             </div>
             ${bodyHtml}
@@ -1426,9 +1415,89 @@ class DeepAgentsClient {
         return div.innerHTML;
     }
 
+    encodePathSegments(pathValue) {
+        return pathValue.split('/').map(encodeURIComponent).join('/');
+    }
+
+    getWorkspaceRelativePath(rawPath) {
+        if (rawPath == null) return null;
+        let cleaned = String(rawPath).trim();
+        cleaned = cleaned.replace(/^["'`]+|["'`]+$/g, '');
+        if (!cleaned) return null;
+
+        const normalized = cleaned.replace(/\\/g, '/');
+        if (/^[a-z]+:\/\//i.test(normalized)) return null;
+
+        const lower = normalized.toLowerCase();
+        const workspaceToken = '/workspace/';
+        let relative = null;
+
+        if (lower.includes(workspaceToken)) {
+            const idx = lower.lastIndexOf(workspaceToken);
+            relative = normalized.slice(idx + workspaceToken.length);
+        } else if (lower.startsWith('workspace/')) {
+            relative = normalized.slice('workspace/'.length);
+        } else if (lower.startsWith('./workspace/')) {
+            relative = normalized.slice('./workspace/'.length);
+        } else if (!normalized.startsWith('/') && !/^[a-zA-Z]:/.test(normalized)) {
+            relative = normalized.replace(/^\.?\//, '');
+        }
+
+        if (!relative) return null;
+        relative = relative.replace(/^\/+/, '');
+        if (!relative || relative.split('/').some(part => part === '..')) return null;
+        return relative;
+    }
+
+    getDownloadUrl(rawPath) {
+        const relative = this.getWorkspaceRelativePath(rawPath);
+        if (!relative) return null;
+        return `${this.serverUrl}/files/${this.encodePathSegments(relative)}`;
+    }
+
+    linkifyWorkspacePaths(text) {
+        if (!text) return text;
+        const codeBlocks = [];
+        const placeholderPrefix = '__CODE_BLOCK__';
+        let processed = text.replace(/```[\s\S]*?```/g, (match) => {
+            const token = `${placeholderPrefix}${codeBlocks.length}__`;
+            codeBlocks.push(match);
+            return token;
+        });
+
+        const getFileLabel = (value) => {
+            const normalized = value.replace(/\\/g, '/').split('?')[0];
+            const parts = normalized.split('/').filter(Boolean);
+            return parts.length ? parts[parts.length - 1] : '文件下载';
+        };
+
+        const urlPattern = /https?:\/\/[^\s'"<>),]+/g;
+        processed = processed.replace(urlPattern, (match) => {
+            const url = this.getDownloadUrl(match) || match;
+            if (!url.includes('/files/')) return match;
+            const label = `下载：${getFileLabel(match)}`;
+            return `[${label}](${url})`;
+        });
+
+        const pathPattern = /(?:[A-Za-z]:)?[\\/][^\s'"<>),]+?workspace[\\/][^\s'"<>),]+\.[A-Za-z0-9]+|workspace\/[^\s'"<>),]+\.[A-Za-z0-9]+|\.\/[^\s'"<>),]+\.[A-Za-z0-9]+|[^\s'"<>),]+\/[^\s'"<>),]+\.[A-Za-z0-9]+/g;
+        processed = processed.replace(pathPattern, (match) => {
+            const url = this.getDownloadUrl(match);
+            if (!url) return match;
+            const label = `下载：${getFileLabel(match)}`;
+            return `[${label}](${url})`;
+        });
+
+        codeBlocks.forEach((block, index) => {
+            processed = processed.replace(`${placeholderPrefix}${index}__`, block);
+        });
+
+        return processed;
+    }
+
     parseMarkdown(text) {
         if (typeof marked !== 'undefined') {
-            let html = marked.parse(text);
+            const processedText = this.linkifyWorkspacePaths(text);
+            let html = marked.parse(processedText);
             // Wrap all code blocks with collapsible containers
             // This regex matches both <pre><code class="language-xxx"> and <pre><code>
             html = html.replace(/<pre><code(?: class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g, (match, lang, code) => {

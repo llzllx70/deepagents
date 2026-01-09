@@ -11,10 +11,13 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+WORKSPACE_DIR = ROOT / "workspace"
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT / "libs" / "deepagents-cli"))
 sys.path.insert(0, str(ROOT / "libs" / "deepagents"))
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -519,6 +522,7 @@ class SessionManager:
 
 
 app = FastAPI()
+app.mount("/files", StaticFiles(directory=WORKSPACE_DIR), name="files")
 
 # Add CORS middleware
 app.add_middleware(
