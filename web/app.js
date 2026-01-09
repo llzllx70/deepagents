@@ -34,7 +34,9 @@ class DeepAgentsClient {
         this.currentRunStatus = null;
         this.shouldReconnect = true;
         this.pendingRunStatusId = null;
+        this.pendingSessionSwitch = null;
         this.reconnectLogElement = null;
+        this.runStates = new Map();
 
         this.chatHistory.forEach(chat => {
             if (chat && chat.runId) {
@@ -268,18 +270,22 @@ class DeepAgentsClient {
 
     disconnectWebSocket({ allowReconnect = false } = {}) {
         this.shouldReconnect = allowReconnect;
-        if (!this.ws) return;
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-            this.ws.close();
+        const ws = this.ws;
+        if (!ws) return;
+        this.ws = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close();
         }
     }
 
     connectWebSocket() {
         if (!this.wsUrl) return;
         this.shouldReconnect = true;
-        this.ws = new WebSocket(this.wsUrl);
+        const ws = new WebSocket(this.wsUrl);
+        this.ws = ws;
 
-        this.ws.onopen = () => {
+        ws.onopen = () => {
+            if (this.ws !== ws) return;
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
             this.reconnectAttempts = 0;
@@ -292,7 +298,8 @@ class DeepAgentsClient {
             }
         };
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
+            if (this.ws !== ws) return;
             try {
                 const data = JSON.parse(event.data);
                 this.handleMessage(data);
@@ -301,7 +308,8 @@ class DeepAgentsClient {
             }
         };
 
-        this.ws.onclose = () => {
+        ws.onclose = () => {
+            if (this.ws !== ws) return;
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
             if (this.shouldReconnect) {
@@ -309,7 +317,8 @@ class DeepAgentsClient {
             }
         };
 
-        this.ws.onerror = (error) => {
+        ws.onerror = (error) => {
+            if (this.ws !== ws) return;
             console.error('WebSocket 错误：', error);
             this.updateConnectionStatus('disconnected');
         };
@@ -389,20 +398,23 @@ class DeepAgentsClient {
             this.currentRunId = data.run_id;
         }
         this.currentRunStatus = 'queued';
-        if (data.run_id && this.activeChatId) {
+        if (data.run_id && this.activeChatId && !this.runIdToChatId.has(data.run_id)) {
             this.runIdToChatId.set(data.run_id, this.activeChatId);
         }
         this.updateChatStatus(data.run_id, 'queued');
-        this.syncRunStatusElement(data.run_id, 'queued', { createIfMissing: true });
+        if (this.isRunActiveChat(data.run_id)) {
+            this.syncRunStatusElement(data.run_id, 'queued', { createIfMissing: true });
+        }
     }
 
     handleRunStarted(data) {
         console.log('任务开始：', data.run_id);
         this.currentRunId = data.run_id;
         this.currentRunStatus = 'running';
-        if (data.run_id && this.activeChatId) {
+        if (data.run_id && this.activeChatId && !this.runIdToChatId.has(data.run_id)) {
             this.runIdToChatId.set(data.run_id, this.activeChatId);
         }
+        const isActiveChatRun = this.isRunActiveChat(data.run_id);
         this.isRunning = true;
         this.updateCancelButton(true);
         this.updateSendButton();
@@ -410,12 +422,14 @@ class DeepAgentsClient {
         this.currentAssistantSegmentElement = null;
         this.currentAssistantSegmentText = '';
 
-        // Hide welcome message
-        this.elements.welcomeMessage.style.display = 'none';
+        if (isActiveChatRun) {
+            // Hide welcome message
+            this.elements.welcomeMessage.style.display = 'none';
 
-        // Add/update run status indicator
-        this.finalizeStaleRunStatuses(data.run_id);
-        this.syncRunStatusElement(data.run_id, 'running', { createIfMissing: true });
+            // Add/update run status indicator
+            this.finalizeStaleRunStatuses(data.run_id);
+            this.syncRunStatusElement(data.run_id, 'running', { createIfMissing: true });
+        }
         this.updateChatStatus(data.run_id, 'running');
     }
 
@@ -429,7 +443,6 @@ class DeepAgentsClient {
             this.updateChatStatus(runId, status);
         }
 
-        if (runId) this.messageBuffer.delete(runId);
         if (!this.currentRunId || runId === this.currentRunId) {
             this.currentRunId = null;
             this.isRunning = false;
@@ -440,26 +453,31 @@ class DeepAgentsClient {
         }
 
         // Update run status
-        const statusElement =
-            (runId ? this.runStatusElements.get(runId) : null) ||
-            this.currentRunStatusElement ||
-            Array.from(document.querySelectorAll('.run-status')).pop();
-        if (statusElement) {
-            statusElement.className = `run-status ${status}`;
-            statusElement.innerHTML = `<span>${this.formatRunStatus(status)}</span>`;
+        if (runId && this.isRunActiveChat(runId)) {
+            const statusElement =
+                (runId ? this.runStatusElements.get(runId) : null) ||
+                this.currentRunStatusElement ||
+                Array.from(document.querySelectorAll('.run-status')).pop();
+            if (statusElement) {
+                statusElement.className = `run-status ${status}`;
+                statusElement.innerHTML = `<span>${this.formatRunStatus(status)}</span>`;
+            }
+            this.runStatusElements.delete(runId);
+            this.currentRunStatusElement = null;
         }
 
-        if (runId) this.runStatusElements.delete(runId);
-        this.currentRunStatusElement = null;
-
-        // Save to history
-        this.saveCurrentChat({ status, runId });
+        // Save to history for the correct chat
+        if (runId) {
+            this.finalizeRunState(runId, status);
+        }
 
         // Remove typing indicator
         if (this.typingIndicator) {
             this.typingIndicator.remove();
             this.typingIndicator = null;
         }
+
+        this.maybeApplyPendingSessionSwitch();
     }
 
     handleRunStatus(data) {
@@ -470,11 +488,14 @@ class DeepAgentsClient {
         if (this.activeChatId && !this.runIdToChatId.has(runId)) {
             this.runIdToChatId.set(runId, this.activeChatId);
         }
+        const isActiveChatRun = this.isRunActiveChat(runId);
         this.updateChatStatus(runId, status);
-        if (status === 'running' || status === 'queued') {
+        if (isActiveChatRun && (status === 'running' || status === 'queued')) {
             this.finalizeStaleRunStatuses(runId);
         }
-        this.syncRunStatusElement(runId, status, { createIfMissing: status === 'running' || status === 'queued' });
+        if (isActiveChatRun) {
+            this.syncRunStatusElement(runId, status, { createIfMissing: status === 'running' || status === 'queued' });
+        }
 
         if (this.currentRunId && runId === this.currentRunId) {
             this.currentRunStatus = status;
@@ -498,12 +519,16 @@ class DeepAgentsClient {
 
     handleToolCallStarted(data) {
         const { tool_name, args, tool_call_id } = data;
-        this.closeAssistantSegment();
+        const runId = data.run_id || this.currentRunId || 'default';
+        const state = this.getRunState(runId);
+        this.closeAssistantSegment(state);
 
-        if (tool_call_id && this.currentToolCalls.has(tool_call_id)) {
-            const toolElement = this.currentToolCalls.get(tool_call_id);
-            this.updateToolCallElement(toolElement, { name: tool_name, args, status: 'running' });
-            this.scrollToBottom();
+        if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
+            const toolElement = state.toolCalls.get(tool_call_id);
+            this.updateToolCallElement(toolElement, { name: tool_name, args, status: 'running', todoState: state?.todoState || null });
+            if (state.chatId === this.activeChatId) {
+                this.scrollToBottom();
+            }
             return;
         }
 
@@ -512,48 +537,49 @@ class DeepAgentsClient {
             name: tool_name,
             args: args,
             id: tool_call_id,
-            status: 'running'
+            status: 'running',
+            todoState: state?.todoState || null
         });
 
         // Append to current message or create new one
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
-        }
-
-        const contentElement = this.currentMessageElement.querySelector('.message-text');
+        const messageElement = this.getOrCreateRunMessageElement(runId, state);
+        if (!messageElement) return;
+        const contentElement = messageElement.querySelector('.message-text');
         contentElement.appendChild(toolElement);
 
         // Store reference
-        if (tool_call_id) {
-            this.currentToolCalls.set(tool_call_id, toolElement);
+        if (tool_call_id && state) {
+            state.toolCalls.set(tool_call_id, toolElement);
         }
 
-        this.scrollToBottom();
+        if (state?.chatId === this.activeChatId) {
+            this.scrollToBottom();
+        }
     }
 
     handleToolCallEnded(data) {
         const { tool_name, status, tool_call_id, content_preview, content } = data;
         const toolContent = typeof content === 'string' && content.length ? content : content_preview;
+        const runId = data.run_id || this.currentRunId || 'default';
+        const state = this.getRunState(runId);
 
         let toolElement = null;
-        if (tool_call_id && this.currentToolCalls.has(tool_call_id)) {
-            toolElement = this.currentToolCalls.get(tool_call_id);
+        if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
+            toolElement = state.toolCalls.get(tool_call_id);
         } else {
             // Fallback: create a tool card even if we missed the started event
-            this.closeAssistantSegment();
+            this.closeAssistantSegment(state);
             toolElement = this.createToolCallElement({
                 name: tool_name || 'tool',
                 args: {},
                 id: tool_call_id,
-                status: status || 'success'
+                status: status || 'success',
+                todoState: state?.todoState || null
             });
 
-            if (!this.currentMessageElement) {
-                this.currentMessageElement = this.createMessageElement('assistant');
-                this.elements.messages.appendChild(this.currentMessageElement);
-            }
-            const contentElement = this.currentMessageElement.querySelector('.message-text');
+            const messageElement = this.getOrCreateRunMessageElement(runId, state);
+            if (!messageElement) return;
+            const contentElement = messageElement.querySelector('.message-text');
             contentElement.appendChild(toolElement);
         }
 
@@ -585,13 +611,17 @@ class DeepAgentsClient {
             }
         }
 
-        if (tool_call_id) this.currentToolCalls.delete(tool_call_id);
-        this.scrollToBottom();
+        if (tool_call_id && state) state.toolCalls.delete(tool_call_id);
+        if (state?.chatId === this.activeChatId) {
+            this.scrollToBottom();
+        }
     }
 
     handleFileOp(data) {
         const { tool_name, path, status, error, metrics, diff, content, content_preview, content_truncated, meta } = data;
-        this.closeAssistantSegment();
+        const runId = data.run_id || this.currentRunId || 'default';
+        const state = this.getRunState(runId);
+        this.closeAssistantSegment(state);
 
         const fileOpElement = this.createFileOpElement({
             toolName: tool_name,
@@ -605,43 +635,47 @@ class DeepAgentsClient {
             meta: meta || {}
         });
 
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
-        }
-
-        const contentElement = this.currentMessageElement.querySelector('.message-text');
+        const messageElement = this.getOrCreateRunMessageElement(runId, state);
+        if (!messageElement) return;
+        const contentElement = messageElement.querySelector('.message-text');
         contentElement.appendChild(fileOpElement);
 
-        this.scrollToBottom();
+        if (state?.chatId === this.activeChatId) {
+            this.scrollToBottom();
+        }
     }
 
     handleTodosUpdated(data) {
         const todos = data.todos;
         if (!todos || !Array.isArray(todos)) return;
+        const runId = data.run_id || this.currentRunId || 'default';
+        const state = this.getRunState(runId);
 
-        const prevTodos = this.todoState;
+        const prevTodos = state?.todoState || null;
 
         // Create or update todo list
-        let todoElement = this.currentMessageElement?.querySelector('.todo-list');
+        let todoElement = state?.messageElement?.querySelector('.todo-list');
 
         if (!todoElement) {
-            this.closeAssistantSegment();
-            if (!this.currentMessageElement) {
-                this.currentMessageElement = this.createMessageElement('assistant');
-                this.elements.messages.appendChild(this.currentMessageElement);
-            }
+            this.closeAssistantSegment(state);
+            const messageElement = this.getOrCreateRunMessageElement(runId, state);
+            if (!messageElement) return;
 
-            todoElement = this.createTodoListElement(todos);
-            const contentElement = this.currentMessageElement.querySelector('.message-text');
+            todoElement = this.createTodoListElement(todos, prevTodos);
+            const contentElement = messageElement.querySelector('.message-text');
             contentElement.appendChild(todoElement);
         } else {
             // Update existing todo list
             todoElement.innerHTML = this.renderTodoListHtml(todos, prevTodos);
         }
 
-        this.todoState = JSON.parse(JSON.stringify(todos));
-        this.scrollToBottom();
+        if (state) {
+            state.todoState = JSON.parse(JSON.stringify(todos));
+        }
+        if (state?.chatId === this.activeChatId) {
+            this.todoState = state.todoState;
+            this.scrollToBottom();
+        }
     }
 
     handleInterruptRequest(data) {
@@ -666,8 +700,8 @@ class DeepAgentsClient {
     }
 
     handleLog(data) {
-        const { level, message } = data;
-        this.addLogMessage(level || 'info', message);
+        const { level, message, run_id } = data;
+        this.addLogMessage(level || 'info', message, run_id || null);
     }
 
     // UI Creation Methods
@@ -692,21 +726,143 @@ class DeepAgentsClient {
         return messageDiv;
     }
 
-    closeAssistantSegment() {
-        this.currentAssistantSegmentElement = null;
-        this.currentAssistantSegmentText = '';
+    getRunState(runId) {
+        if (!runId) return null;
+        let state = this.runStates.get(runId);
+        if (!state) {
+            const chatId = this.resolveChatIdForRun(runId) || this.activeChatId;
+            state = {
+                runId,
+                chatId,
+                messageElement: null,
+                assistantSegmentElement: null,
+                assistantSegmentText: '',
+                toolCalls: new Map(),
+                todoState: null
+            };
+            this.runStates.set(runId, state);
+        } else if (!state.chatId) {
+            state.chatId = this.resolveChatIdForRun(runId) || this.activeChatId;
+        }
+        return state;
     }
 
-    getOrCreateAssistantSegmentElement(messageElement) {
+    isRunActiveChat(runId) {
+        const state = this.getRunState(runId);
+        return Boolean(state && state.chatId && state.chatId === this.activeChatId);
+    }
+
+    getOrCreateRunMessageElement(runId, state) {
+        if (!state) return null;
+        if (!state.messageElement) {
+            state.messageElement = this.createMessageElement('assistant');
+        }
+        if (state.chatId && state.chatId === this.activeChatId && !state.messageElement.isConnected) {
+            this.elements.messages.appendChild(state.messageElement);
+        }
+        if (state.chatId && state.chatId === this.activeChatId) {
+            this.currentMessageElement = state.messageElement;
+        }
+        return state.messageElement;
+    }
+
+    closeAssistantSegment(state) {
+        if (!state) return;
+        state.assistantSegmentElement = null;
+        state.assistantSegmentText = '';
+    }
+
+    getOrCreateAssistantSegmentElement(messageElement, state) {
         const contentElement = messageElement.querySelector('.message-text');
-        if (!this.currentAssistantSegmentElement) {
+        if (!state.assistantSegmentElement) {
             const segment = document.createElement('div');
             segment.className = 'assistant-markdown assistant-segment';
             contentElement.appendChild(segment);
-            this.currentAssistantSegmentElement = segment;
-            this.currentAssistantSegmentText = '';
+            state.assistantSegmentElement = segment;
+            state.assistantSegmentText = '';
         }
-        return this.currentAssistantSegmentElement;
+        return state.assistantSegmentElement;
+    }
+
+    attachRunMessagesForChat(chatId) {
+        if (!chatId) return;
+        let lastMessageElement = null;
+        for (const state of this.runStates.values()) {
+            if (state.chatId !== chatId || !state.messageElement) continue;
+            if (!state.messageElement.isConnected) {
+                this.elements.messages.appendChild(state.messageElement);
+            }
+            lastMessageElement = state.messageElement;
+        }
+        if (lastMessageElement) {
+            this.currentMessageElement = lastMessageElement;
+        }
+    }
+
+    getMessagePayloadFromElement(messageElement) {
+        if (!messageElement) return { content: '', html: '' };
+        const textElement = messageElement.querySelector('.message-text');
+        return {
+            content: textElement ? textElement.textContent : '',
+            html: textElement ? textElement.innerHTML : ''
+        };
+    }
+
+    saveRunStateToHistory(runId, status) {
+        const state = this.runStates.get(runId);
+        if (!state || !state.chatId) return;
+
+        const index = this.findChatIndex({ id: state.chatId, runId });
+        const existing = index >= 0 ? this.chatHistory[index] : null;
+        const messages = Array.isArray(existing?.messages) ? [...existing.messages] : [];
+
+        if (state.messageElement) {
+            const payload = this.getMessagePayloadFromElement(state.messageElement);
+            if (payload.content || payload.html) {
+                const last = messages[messages.length - 1];
+                if (last && last.role === 'assistant' && !last.content && !last.html) {
+                    messages[messages.length - 1] = { role: 'assistant', ...payload };
+                } else {
+                    messages.push({ role: 'assistant', ...payload });
+                }
+            }
+        }
+
+        this.upsertChatRecord({
+            id: state.chatId,
+            taskId: state.chatId,
+            runId: runId,
+            sessionId: existing?.sessionId || this.sessionId || null,
+            status: status,
+            messages: messages
+        });
+    }
+
+    finalizeRunState(runId, status) {
+        const state = this.runStates.get(runId);
+        const chatId = state?.chatId || this.resolveChatIdForRun(runId);
+        if (chatId && chatId === this.activeChatId) {
+            this.saveCurrentChat({ status, runId });
+        } else if (state) {
+            this.saveRunStateToHistory(runId, status);
+        }
+        this.runStates.delete(runId);
+        this.messageBuffer.delete(runId);
+    }
+
+    maybeApplyPendingSessionSwitch() {
+        if (this.isRunning || !this.pendingSessionSwitch) return;
+        const { sessionId, runId, chatId } = this.pendingSessionSwitch;
+        const targetSessionId = sessionId || null;
+        if (!targetSessionId || targetSessionId === this.sessionId) {
+            this.pendingSessionSwitch = null;
+            return;
+        }
+        if (chatId && chatId !== this.activeChatId) {
+            return;
+        }
+        this.pendingSessionSwitch = null;
+        this.switchSession(targetSessionId, { requestRunStatusId: runId || null });
     }
 
     ingestAssistantText(runId, incomingText) {
@@ -739,24 +895,25 @@ class DeepAgentsClient {
         const appended = this.ingestAssistantText(runId, text);
         if (!appended) return;
 
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
-        }
+        const state = this.getRunState(runId);
+        const messageElement = this.getOrCreateRunMessageElement(runId, state);
+        if (!messageElement || !state) return;
 
-        const segmentElement = this.getOrCreateAssistantSegmentElement(this.currentMessageElement);
-        this.currentAssistantSegmentText += appended;
-        segmentElement.innerHTML = this.parseMarkdown(this.currentAssistantSegmentText);
-        this.scrollToBottom();
+        const segmentElement = this.getOrCreateAssistantSegmentElement(messageElement, state);
+        state.assistantSegmentText += appended;
+        segmentElement.innerHTML = this.parseMarkdown(state.assistantSegmentText);
+        if (state.chatId === this.activeChatId) {
+            this.scrollToBottom();
+        }
     }
 
-    createToolCallElement({ name, args, id, status }) {
+    createToolCallElement({ name, args, id, status, todoState = null }) {
         const toolDiv = document.createElement('div');
         toolDiv.className = 'tool-call';
         toolDiv.setAttribute('data-tool-id', id);
 
         const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-        const summary = this.formatToolSummary(name, args);
+        const summary = this.formatToolSummary(name, args, todoState);
 
         toolDiv.innerHTML = `
             <div class="tool-call-header" onclick="this.parentElement.classList.toggle('expanded')">
@@ -858,13 +1015,13 @@ class DeepAgentsClient {
         return fileOpDiv;
     }
 
-    updateToolCallElement(toolElement, { name, args, status }) {
+    updateToolCallElement(toolElement, { name, args, status, todoState = null }) {
         if (!toolElement) return;
 
         const headerName = toolElement.querySelector('.tool-name');
         if (headerName && name) headerName.textContent = name;
 
-        const summaryText = this.formatToolSummary(name, args);
+        const summaryText = this.formatToolSummary(name, args, todoState);
         const title = toolElement.querySelector('.tool-title');
         if (title) {
             let summary = title.querySelector('.tool-summary');
@@ -893,7 +1050,7 @@ class DeepAgentsClient {
         }
     }
 
-    formatToolSummary(toolName, args) {
+    formatToolSummary(toolName, args, todoStateOverride = null) {
         const name = String(toolName || '');
         const a = args && typeof args === 'object' ? args : {};
 
@@ -904,7 +1061,8 @@ class DeepAgentsClient {
 
         if (name === 'write_todos') {
             const todos = Array.isArray(a.todos) ? a.todos : [];
-            const progress = this.getTodoProgress(this.todoState, todos);
+            const todoState = todoStateOverride ?? this.todoState;
+            const progress = this.getTodoProgress(todoState, todos);
             if (progress.summary) return progress.summary;
             const counts = this.countTodosByStatus(todos);
             const total = counts.pending + counts.in_progress + counts.completed;
@@ -1112,10 +1270,10 @@ class DeepAgentsClient {
         return 'language-text';
     }
 
-    createTodoListElement(todos) {
+    createTodoListElement(todos, prevTodos = null) {
         const todoDiv = document.createElement('div');
         todoDiv.className = 'todo-list';
-        todoDiv.innerHTML = this.renderTodoListHtml(todos, this.todoState);
+        todoDiv.innerHTML = this.renderTodoListHtml(todos, prevTodos);
         return todoDiv;
     }
 
@@ -1191,21 +1349,32 @@ class DeepAgentsClient {
         }
     }
 
-    addLogMessage(level, message) {
-        this.closeAssistantSegment();
+    addLogMessage(level, message, runId = null) {
+        const targetRunId = runId || this.currentRunId || null;
+        const state = targetRunId ? this.getRunState(targetRunId) : null;
+        this.closeAssistantSegment(state);
         const logDiv = document.createElement('div');
         logDiv.className = `log-message ${level}`;
         logDiv.textContent = `[${this.formatLogLevel(level)}] ${message}`;
 
-        if (!this.currentMessageElement) {
-            this.currentMessageElement = this.createMessageElement('assistant');
-            this.elements.messages.appendChild(this.currentMessageElement);
+        let messageElement = null;
+        if (targetRunId && state) {
+            messageElement = this.getOrCreateRunMessageElement(targetRunId, state);
+        }
+        if (!messageElement) {
+            if (!this.currentMessageElement) {
+                this.currentMessageElement = this.createMessageElement('assistant');
+                this.elements.messages.appendChild(this.currentMessageElement);
+            }
+            messageElement = this.currentMessageElement;
         }
 
-        const contentElement = this.currentMessageElement.querySelector('.message-text');
+        const contentElement = messageElement.querySelector('.message-text');
         contentElement.appendChild(logDiv);
 
-        this.scrollToBottom();
+        if (!state || state.chatId === this.activeChatId) {
+            this.scrollToBottom();
+        }
         return logDiv;
     }
 
@@ -1345,6 +1514,7 @@ class DeepAgentsClient {
         this.currentRunId = null;
         this.currentRunStatus = null;
         this.isRunning = false;
+        this.pendingSessionSwitch = null;
         this.updateCancelButton(false);
         this.updateSendButton();
         this.elements.chatTitle.textContent = '新对话';
@@ -1359,7 +1529,6 @@ class DeepAgentsClient {
         this.currentMessageElement = null;
         this.currentAssistantSegmentElement = null;
         this.currentAssistantSegmentText = '';
-        this.messageBuffer.clear();
         this.currentToolCalls.clear();
         this.runStatusElements.clear();
         this.currentRunStatusElement = null;
@@ -1635,8 +1804,12 @@ class DeepAgentsClient {
         if (!this.activeChatId) return;
         const messages = this.collectCurrentMessages();
         if (!messages.length) return;
-        const status = this.currentRunStatus || (this.isRunning ? 'running' : null);
-        this.saveCurrentChat({ status, runId: this.currentRunId });
+        const chat = this.chatHistory.find(c => c.id === this.activeChatId);
+        const activeRunId = this.currentRunId && this.resolveChatIdForRun(this.currentRunId) === this.activeChatId
+            ? this.currentRunId
+            : (chat?.runId || null);
+        const status = chat?.status || this.currentRunStatus || (this.isRunning ? 'running' : null);
+        this.saveCurrentChat({ status, runId: activeRunId });
     }
 
     saveCurrentChat({ status = null, runId = null, title = null } = {}) {
@@ -1646,13 +1819,17 @@ class DeepAgentsClient {
         const chatId = this.activeChatId || this.generateTaskId();
         this.activeChatId = chatId;
 
+        const inferredRunId = this.currentRunId && this.resolveChatIdForRun(this.currentRunId) === chatId
+            ? this.currentRunId
+            : null;
         const nextStatus = status || this.currentRunStatus || (this.isRunning ? 'running' : null);
         const existingIndex = this.findChatIndex({ id: chatId, runId });
+        const existing = existingIndex >= 0 ? this.chatHistory[existingIndex] : null;
         this.upsertChatRecord({
             id: chatId,
             taskId: chatId,
-            runId: runId || this.currentRunId,
-            sessionId: this.sessionId,
+            runId: runId || inferredRunId,
+            sessionId: existing?.sessionId || this.sessionId,
             title: title || this.buildChatTitle(messages, null),
             status: nextStatus,
             messages: messages,
@@ -1707,12 +1884,19 @@ class DeepAgentsClient {
             this.backgroundCurrentChat('switch_chat');
         }
 
+        const activeRunId = this.currentRunId;
+        const activeRunChatId = activeRunId ? this.resolveChatIdForRun(activeRunId) : null;
+        const hasActiveRun = Boolean(activeRunId && this.isActiveRunStatus(this.currentRunStatus));
+        const viewingBackgroundRun = hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
+
         this.resetChatView();
         this.elements.chatTitle.textContent = chat.title || '对话';
         this.activeChatId = chat.id;
-        this.currentRunId = chat.runId || null;
-        this.currentRunStatus = chat.status || null;
-        this.isRunning = this.isActiveRunStatus(chat.status);
+        if (!viewingBackgroundRun) {
+            this.currentRunId = chat.runId || null;
+            this.currentRunStatus = chat.status || null;
+            this.isRunning = this.isActiveRunStatus(chat.status);
+        }
         this.updateCancelButton(this.isRunning);
         this.updateSendButton();
         if (chat.runId) {
@@ -1732,10 +1916,20 @@ class DeepAgentsClient {
             this.elements.messages.appendChild(messageElement);
         });
 
-        this.elements.welcomeMessage.style.display = chat.messages.length ? 'none' : 'flex';
+        this.attachRunMessagesForChat(chat.id);
+
+        const hasMessages = this.elements.messages.children.length > 0;
+        this.elements.welcomeMessage.style.display = hasMessages ? 'none' : 'flex';
 
         if (chat.sessionId) {
-            this.switchSession(chat.sessionId, { requestRunStatusId: chat.runId });
+            if (viewingBackgroundRun && chat.sessionId !== this.sessionId) {
+                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: chat.runId || null, chatId: chat.id };
+            } else {
+                this.pendingSessionSwitch = null;
+                this.switchSession(chat.sessionId, { requestRunStatusId: chat.runId });
+            }
+        } else {
+            this.pendingSessionSwitch = null;
         }
 
         this.renderHistory();
@@ -1750,6 +1944,12 @@ class DeepAgentsClient {
         for (const [runId, mappedChatId] of this.runIdToChatId.entries()) {
             if (mappedChatId === chatId) {
                 this.runIdToChatId.delete(runId);
+            }
+        }
+        for (const [runId, state] of this.runStates.entries()) {
+            if (state.chatId === chatId) {
+                this.runStates.delete(runId);
+                this.messageBuffer.delete(runId);
             }
         }
 
