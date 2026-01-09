@@ -9,6 +9,7 @@
 - 示例：图片存放在 workspace/assets/img.png，则 HTML 中写 /files/assets/img.png
 - 若使用相对路径，仅允许在 HTML 通过 /files/`<path>`.html 访问时使用。
 - 禁止引用 workspace 之外的路径。
+- 示例下载地址: http://127.0.0.1:8000/files/career_growth/case_xxx/output/report.pdf
 
 结果输出说明：
 
