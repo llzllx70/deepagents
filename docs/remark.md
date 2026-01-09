@@ -2,6 +2,10 @@
 
 下面是 `create_agent()` 的流程图（Mermaid），可直接在支持 Mermaid 的 Markdown 渲染器中查看。
 
+## DeepAgents 三层架构补充说明
+
+DeepAgents 位于顶层，提供 agent 运行时与封装能力，统一管理 context、tools、skills、memory，并以中间件方式组织行为。中间层是 LangGraph，把 agent 运行拆成可组合的计算图节点与状态流，负责编排工具调用与循环。底层依赖 LangChain，提供 prompt、LLM 接入与基础组件抽象。
+
 ```mermaid
 flowchart TD
     A["开始 create_agent()"] --> B{model 是字符串?}
@@ -572,4 +576,3 @@ _return_command_with_state_update()
 2. md 转 pdf
 3. md通过LLM生成html
 4. 而pptx是另外生成的，不是html转pptx
-

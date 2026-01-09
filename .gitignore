@@ -224,3 +224,4 @@ node_modules/**
 *.pdf
 个人就业/**
 logs
+restart.sh
