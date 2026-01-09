@@ -37,6 +37,8 @@ class DeepAgentsClient {
         this.pendingSessionSwitch = null;
         this.reconnectLogElement = null;
         this.runStates = new Map();
+        this.pendingMessages = [];
+        this.isCreatingSession = false;
 
         this.chatHistory.forEach(chat => {
             if (chat && chat.runId) {
@@ -214,6 +216,8 @@ class DeepAgentsClient {
     }
 
     async createSession() {
+        if (this.isCreatingSession) return;
+        this.isCreatingSession = true;
         try {
             this.updateConnectionStatus('connecting');
 
@@ -238,6 +242,8 @@ class DeepAgentsClient {
             console.error('创建会话失败：', error);
             this.addLogMessage('error', `连接服务器失败：${error.message}`);
             this.updateConnectionStatus('disconnected');
+        } finally {
+            this.isCreatingSession = false;
         }
     }
 
@@ -278,8 +284,39 @@ class DeepAgentsClient {
         }
     }
 
+    hasReconnectWork() {
+        if (this.pendingMessages.length > 0) return true;
+        if (this.pendingRunStatusId) return true;
+        return this.isRunning || this.isActiveRunStatus(this.currentRunStatus);
+    }
+
+    ensureConnection() {
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        if (this.wsUrl) {
+            this.updateConnectionStatus('connecting');
+            this.connectWebSocket();
+            return;
+        }
+        this.createSession();
+    }
+
+    flushPendingMessages() {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!this.pendingMessages.length) return;
+        const queued = this.pendingMessages.slice();
+        this.pendingMessages.length = 0;
+        queued.forEach(payload => {
+            this.ws.send(JSON.stringify(payload));
+        });
+    }
+
     connectWebSocket() {
         if (!this.wsUrl) return;
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
         this.shouldReconnect = true;
         const ws = new WebSocket(this.wsUrl);
         this.ws = ws;
@@ -296,6 +333,7 @@ class DeepAgentsClient {
             if (runId) {
                 this.send({ type: 'run.status', run_id: runId });
             }
+            this.flushPendingMessages();
         };
 
         ws.onmessage = (event) => {
@@ -312,8 +350,10 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
-            if (this.shouldReconnect) {
+            if (this.shouldReconnect && this.hasReconnectWork()) {
                 this.attemptReconnect();
+            } else {
+                this.reconnectAttempts = 0;
             }
         };
 
@@ -325,12 +365,20 @@ class DeepAgentsClient {
     }
 
     attemptReconnect() {
+        if (!this.hasReconnectWork()) {
+            this.reconnectAttempts = 0;
+            return;
+        }
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`正在尝试重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
             this.showReconnectNotice(this.reconnectAttempts, this.maxReconnectAttempts);
 
             setTimeout(() => {
+                if (!this.hasReconnectWork()) {
+                    this.reconnectAttempts = 0;
+                    return;
+                }
                 this.connectWebSocket();
             }, this.reconnectDelay);
         } else {
@@ -1547,9 +1595,17 @@ class DeepAgentsClient {
     send(data) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(data));
-        } else {
+            return true;
+        }
+        this.pendingMessages.push(data);
+        this.ensureConnection();
+        if (this.pendingMessages.length > 50) {
+            this.pendingMessages = this.pendingMessages.slice(-50);
+        }
+        if (!this.ws || this.ws.readyState !== WebSocket.CONNECTING) {
             console.warn('WebSocket 未连接，消息未发送：', data);
         }
+        return false;
     }
 
     // Text helpers (zh-CN)
@@ -1921,12 +1977,14 @@ class DeepAgentsClient {
         const hasMessages = this.elements.messages.children.length > 0;
         this.elements.welcomeMessage.style.display = hasMessages ? 'none' : 'flex';
 
+        const shouldRequestRunStatus = Boolean(chat.runId && this.isActiveRunStatus(chat.status));
+        const requestRunStatusId = shouldRequestRunStatus ? chat.runId : null;
         if (chat.sessionId) {
             if (viewingBackgroundRun && chat.sessionId !== this.sessionId) {
-                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: chat.runId || null, chatId: chat.id };
+                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: requestRunStatusId, chatId: chat.id };
             } else {
                 this.pendingSessionSwitch = null;
-                this.switchSession(chat.sessionId, { requestRunStatusId: chat.runId });
+                this.switchSession(chat.sessionId, { requestRunStatusId });
             }
         } else {
             this.pendingSessionSwitch = null;
@@ -2007,8 +2065,18 @@ class DeepAgentsClient {
             relative = normalized.slice('workspace/'.length);
         } else if (lower.startsWith('./workspace/')) {
             relative = normalized.slice('./workspace/'.length);
-        } else if (!normalized.startsWith('/') && !/^[a-zA-Z]:/.test(normalized)) {
-            relative = normalized.replace(/^\.?\//, '');
+        } else {
+            const bareToken = 'workspace/';
+            const idx = lower.lastIndexOf(bareToken);
+            if (idx !== -1) {
+                const prevChar = idx === 0 ? '' : lower[idx - 1];
+                if (idx === 0 || !/[a-z0-9_]/i.test(prevChar)) {
+                    relative = normalized.slice(idx + bareToken.length);
+                }
+            }
+            if (!relative && !normalized.startsWith('/') && !/^[a-zA-Z]:/.test(normalized)) {
+                relative = normalized.replace(/^\.?\//, '');
+            }
         }
 
         if (!relative) return null;
