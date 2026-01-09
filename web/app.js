@@ -2107,6 +2107,23 @@ class DeepAgentsClient {
             return parts.length ? parts[parts.length - 1] : '文件下载';
         };
 
+        const linkBlocks = [];
+        const linkPlaceholderPrefix = '__LINK_BLOCK__';
+        const downloadPattern = /下载[:：]\s*\/files\/[^\s'"<>),]+/g;
+        processed = processed.replace(downloadPattern, (match) => {
+            const rawPath = match.replace(/^下载[:：]\s*/, '');
+            const normalized = rawPath.replace(/\\/g, '/');
+            const filesPrefix = '/files/';
+            if (!normalized.startsWith(filesPrefix)) return match;
+            const relative = normalized.slice(filesPrefix.length);
+            if (!relative) return match;
+            const url = `${this.serverUrl}${filesPrefix}${this.encodePathSegments(relative)}`;
+            const label = `下载：${getFileLabel(normalized)}`;
+            const token = `${linkPlaceholderPrefix}${linkBlocks.length}__`;
+            linkBlocks.push(`[${label}](${url})`);
+            return token;
+        });
+
         const urlPattern = /https?:\/\/[^\s'"<>),]+/g;
         processed = processed.replace(urlPattern, (match) => {
             const url = this.getDownloadUrl(match) || match;
@@ -2125,6 +2142,10 @@ class DeepAgentsClient {
 
         codeBlocks.forEach((block, index) => {
             processed = processed.replace(`${placeholderPrefix}${index}__`, block);
+        });
+
+        linkBlocks.forEach((block, index) => {
+            processed = processed.replace(`${linkPlaceholderPrefix}${index}__`, block);
         });
 
         return processed;
