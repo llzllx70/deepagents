@@ -2,14 +2,13 @@
 name: career-growth-planner
 description: 基于 job-match 职业匹配诊断输出生成职业成长规划与行动路线图。用于把职业匹配结果转化为阶段策略、差距-资源映射、成长路线图与最终报告的场景；若缺少 job-match 输出，则先基于成绩单与职业/专业图谱进行简要诊断后再规划。
 ---
-
 # 职业成长规划 Skill
 
-将本 Skill 作为职业辅导系统的最终交付端，采用“诊断-规划一体化”策略：优先复用 job-match 的诊断结果，再生成可执行的成长路线图与报告。
+将本 Skill 作为职业辅导系统的最终交付端，采用“诊断-规划一体化”策略：优先复用 job-match skill的诊断结果，如果没有可先调用job-match skill 进行输出,再生成可执行的成长路线图与报告。
 
 ## Inputs and Sources
 
-- 优先使用 job-match 输出
+- 优先使用 job-match skill 输出
   - `workspace/job_match/case_[姓名]_[目标岗位]/output/report.md`
   - `workspace/job_match/case_[姓名]_[目标岗位]/analysis/gap_matrix.md`
   - `workspace/job_match/case_[姓名]_[目标岗位]/analysis/match_results.json`（若存在）
