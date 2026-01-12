@@ -576,3 +576,26 @@ _return_command_with_state_update()
 2. md 转 pdf
 3. md通过LLM生成html
 4. 而pptx是另外生成的，不是html转pptx
+
+# DeepAgentsClient
+
+- 一个页面对应一个DeepAgentsClient实例
+- 总实例数 = 打开的页面数
+- 成员变量sessionId, wsUrl只记录当前chat
+- 历史chat会记录在成员chatHistory中
+
+# session
+
+- 创建新页面时会生成session
+- 生成新对话时也会生成session
+- 如果init 后并不发送消息，多次点击newChat，会产生多个孤立的session
+- 一个sessionid对应一个wsUrl = ws/session.id
+- 先简单的理解: 一个chat对应一个session
+
+# runId
+
+- 用户每发送一次消息对应一个runId
+
+# task
+
+- client 的runId对应服务端的run_id，对应一个执行task
