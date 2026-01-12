@@ -6,6 +6,33 @@
 3. md通过LLM生成html
 4. 而pptx是另外生成的，不是html转pptx
 
+## 技术方案: 每一页先生成了html,再通过工具内部转为pptx
+
+- 其中一次看的结果
+- 存在如下问题：
+  1. 页面不统一，包括背景，配色
+  2. 内容不统一，其实就量插入图片和文字，如图片的背景色
+  3. 文本框内容不协调，包括字体的位置，溢出等
+
+- 应该是html转pptx时效果无法保证
+- 而html生成pdf时效果要好
+
+```
+ubuntu@sandbox:~ $ manus-export-slides manus-slides://kZdSk89cZLOYihfk3Nr2Jc pdf && manus-export-slides manus-slides://kZdSk89cZLOYihfk3Nr2Jc pptx
+Starting conversion: manus-slides://kZdSk89cZLOYihfk3Nr2Jc -> PDF
+Slides URI: manus-slides://kZdSk89cZLOYihfk3Nr2Jc
+Version ID: kZdSk89cZLOYihfk3Nr2Jc
+Export format: PDF
+Output file: 2025-2026_A.pdf
+Generated file: 2025-2026_A.pdf
+Conversion completed
+Starting conversion: manus-slides://kZdSk89cZLOYihfk3Nr2Jc -> PPTX
+Slides URI: manus-slides://kZdSk89cZLOYihfk3Nr2Jc
+Version ID: kZdSk89cZLOYihfk3Nr2Jc
+Export format: PPTX
+Output file: 2025-2026_A.pptx
+```
+
 # DeepAgentsClient
 
 - 一个页面对应一个DeepAgentsClient实例
@@ -80,3 +107,6 @@
     - 使用字符串替换功能将生成的图片链接替换到占位符
 
 
+# GenSpark
+
+- 每页分别先生成html代码，可以看到每页的html内容
