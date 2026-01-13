@@ -5,7 +5,7 @@
 
 - 所有生成文件与资源必须写入 workspace/ 目录或其子目录。
 - 当要求做报告、调研、规划、分享等需要结果输出时，内容要图文并茂，如果没有明确说明，默认输出pdf文档
-- 下载/预览基址为 /files/，对应 workspace/。
+- 下载/预览基址为 /files/，对应 workspace，所以你返回的路径不应该以workspace开头。
 - HTML 中所有资源引用必须使用 /files/<workspace相对路径> 的绝对路径。
 - 示例：图片存放在 workspace/assets/img.png，则 HTML 中写 /files/assets/img.png
 - 若使用相对路径，仅允许在 HTML 通过 /files/`<path>`.html 访问时使用。
@@ -17,4 +17,3 @@
 - 禁止输出 Markdown 链接或括号包裹链接（防止残留 `)` 或被二次转义）
 - 禁止输出完整 URL 或不带 `/files/` 的纯路径（避免重复拼接）
 - 完整 URL 由运行时/前端根据当前 hostname+8000 与 `?server=` 覆盖拼接，模型不应自行推断或硬编码
-
