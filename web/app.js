@@ -39,6 +39,8 @@ class DeepAgentsClient {
         this.runStates = new Map();
         this.pendingMessages = [];
         this.isCreatingSession = false;
+        this.cancelRequested = false;
+        this.pendingCancelLogElement = null;
 
         this.chatHistory.forEach(chat => {
             if (chat && chat.runId) {
@@ -459,6 +461,8 @@ class DeepAgentsClient {
         console.log('任务开始：', data.run_id);
         this.currentRunId = data.run_id;
         this.currentRunStatus = 'running';
+        this.cancelRequested = false;
+        this.pendingCancelLogElement = null;
         if (data.run_id && this.activeChatId && !this.runIdToChatId.has(data.run_id)) {
             this.runIdToChatId.set(data.run_id, this.activeChatId);
         }
@@ -490,6 +494,11 @@ class DeepAgentsClient {
             this.currentRunStatus = status;
             this.updateChatStatus(runId, status);
         }
+        if (status === 'cancelled' && this.pendingCancelLogElement && this.pendingCancelLogElement.isConnected) {
+            this.pendingCancelLogElement.textContent = `[${this.formatLogLevel('info')}] 已取消`;
+        }
+        this.cancelRequested = false;
+        this.pendingCancelLogElement = null;
 
         if (!this.currentRunId || runId === this.currentRunId) {
             this.currentRunId = null;
@@ -538,6 +547,9 @@ class DeepAgentsClient {
         }
         const isActiveChatRun = this.isRunActiveChat(runId);
         this.updateChatStatus(runId, status);
+        if (status === 'cancelled' && this.pendingCancelLogElement && this.pendingCancelLogElement.isConnected) {
+            this.pendingCancelLogElement.textContent = `[${this.formatLogLevel('info')}] 已取消`;
+        }
         if (isActiveChatRun && (status === 'running' || status === 'queued')) {
             this.finalizeStaleRunStatuses(runId);
         }
@@ -552,6 +564,8 @@ class DeepAgentsClient {
             this.updateCancelButton(active);
             this.updateSendButton();
             if (!active) {
+                this.cancelRequested = false;
+                this.pendingCancelLogElement = null;
                 this.currentRunId = null;
             }
         }
@@ -1549,10 +1563,15 @@ class DeepAgentsClient {
     }
 
     cancelRun() {
-        if (!this.isRunning) return;
+        if (this.currentRunStatus === 'cancelled') {
+            this.addLogMessage('info', '已取消');
+            return;
+        }
+        if (!this.isRunning || this.cancelRequested) return;
 
         this.send({ type: 'cancel' });
-        this.addLogMessage('info', '正在取消当前任务…');
+        this.cancelRequested = true;
+        this.pendingCancelLogElement = this.addLogMessage('info', '正在取消当前任务…');
     }
 
     newChat() {
@@ -1562,6 +1581,8 @@ class DeepAgentsClient {
         this.currentRunId = null;
         this.currentRunStatus = null;
         this.isRunning = false;
+        this.cancelRequested = false;
+        this.pendingCancelLogElement = null;
         this.pendingSessionSwitch = null;
         this.updateCancelButton(false);
         this.updateSendButton();
