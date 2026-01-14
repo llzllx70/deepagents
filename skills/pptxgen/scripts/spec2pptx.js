@@ -128,6 +128,27 @@ const THEMES = {
       success: '34D399'
     }
   },
+  techDark: {
+    name: 'techDark',
+    fonts: { head: 'Microsoft YaHei', body: 'Microsoft YaHei' },
+    pattern: 'techGrid',
+    patternStep: 0.95,
+    patternTransparency: 88,
+    colors: {
+      bg: '0A0F1E',
+      canvas: '070B14',
+      fg: 'E6F0FF',
+      muted: '9FB2D9',
+      subtle: '1A2338',
+      accent: '00D4FF',
+      accent2: '5B8CFF',
+      card: '0D1526',
+      danger: 'FF6B6B',
+      warn: 'FFB347',
+      success: '2BD98F',
+      grid: '122033'
+    }
+  },
   eduLight: {
     name: 'eduLight',
     fonts: { head: 'Microsoft YaHei', body: 'Microsoft YaHei' },
@@ -179,6 +200,38 @@ function pickTheme(specThemeName, specTheme) {
   return merged;
 }
 
+function addTechGrid(slide, size, theme) {
+  const color = theme.colors.grid || theme.colors.subtle || theme.colors.fg;
+  const transparency = Number.isFinite(theme.patternTransparency)
+    ? theme.patternTransparency
+    : theme.name.includes('Dark')
+      ? 90
+      : 80;
+  const step = Number.isFinite(theme.patternStep) ? theme.patternStep : 1.0;
+  const lineW = Number.isFinite(theme.patternLineW) ? theme.patternLineW : 0.02;
+
+  for (let x = 0; x <= size.w; x += step) {
+    slide.addShape('rect', {
+      x,
+      y: 0,
+      w: lineW,
+      h: size.h,
+      fill: { color, transparency },
+      line: { color, transparency }
+    });
+  }
+  for (let y = 0; y <= size.h; y += step) {
+    slide.addShape('rect', {
+      x: 0,
+      y,
+      w: size.w,
+      h: lineW,
+      fill: { color, transparency },
+      line: { color, transparency }
+    });
+  }
+}
+
 function addBg(slide, size, theme) {
   slide.addShape('rect', {
     x: 0,
@@ -188,6 +241,7 @@ function addBg(slide, size, theme) {
     fill: { color: theme.colors.canvas || theme.colors.bg },
     line: { color: theme.colors.canvas || theme.colors.bg }
   });
+  if (theme.pattern === 'techGrid') addTechGrid(slide, size, theme);
 }
 
 function addHeader(slide, size, theme, title, opts = {}) {
@@ -627,7 +681,8 @@ function slideSection(slide, size, theme, slideSpec) {
   addBg(slide, size, theme);
 
   // Small top-left label
-  slide.addText('SECTION', {
+  const label = slideSpec.label || slideSpec.kicker || 'SECTION';
+  slide.addText(String(label), {
     x: 0.95,
     y: 0.55,
     w: 3.0,
@@ -1173,6 +1228,67 @@ function slideQuote(slide, size, theme, slideSpec) {
   }
 }
 
+function slideThanks(slide, size, theme, slideSpec) {
+  addBg(slide, size, theme);
+
+  slide.addShape('rect', {
+    x: 0,
+    y: size.h - 1.35,
+    w: size.w,
+    h: 1.35,
+    fill: { color: theme.colors.accent2, transparency: theme.name.includes('Dark') ? 86 : 70 },
+    line: { color: theme.colors.accent2, transparency: 100 }
+  });
+
+  slide.addShape('ellipse', {
+    x: size.w - 3.4,
+    y: -1.0,
+    w: 3.8,
+    h: 3.8,
+    fill: { color: theme.colors.accent, transparency: theme.name.includes('Dark') ? 86 : 92 },
+    line: { color: theme.colors.accent, transparency: 100 }
+  });
+
+  const title = slideSpec.title || '感谢聆听';
+  slide.addText(String(title), {
+    x: 1.0,
+    y: 2.45,
+    w: size.w - 2.0,
+    h: 1.2,
+    fontFace: theme.fonts.head,
+    fontSize: 44,
+    bold: true,
+    color: theme.colors.fg,
+    align: 'center'
+  });
+
+  if (slideSpec.subtitle) {
+    slide.addText(String(slideSpec.subtitle), {
+      x: 1.2,
+      y: 3.6,
+      w: size.w - 2.4,
+      h: 0.6,
+      fontFace: theme.fonts.body,
+      fontSize: 18,
+      color: theme.colors.muted,
+      align: 'center'
+    });
+  }
+
+  if (slideSpec.meta) {
+    slide.addText(String(slideSpec.meta), {
+      x: 1.2,
+      y: 6.7,
+      w: size.w - 2.4,
+      h: 0.4,
+      fontFace: theme.fonts.body,
+      fontSize: 12,
+      color: theme.colors.muted,
+      align: 'center'
+    });
+  }
+}
+
 function isTocLike(slideSpec) {
   const title = String(slideSpec.title || '').trim();
   if (!/^(目录|报告目录|大纲|议程|Agenda)$/i.test(title)) return false;
@@ -1335,6 +1451,9 @@ async function main() {
     const t = slideSpec.type || 'content';
     if (t === 'title') slideTitle(slide, size, theme, slideSpec);
     else if (t === 'section') slideSection(slide, size, theme, slideSpec);
+    else if (t === 'transition') {
+      slideSection(slide, size, theme, { ...slideSpec, label: slideSpec.label || 'TRANSITION' });
+    }
     else if (t === 'toc') slideToc(slide, size, theme, slideSpec, slides);
     else if (t === 'content') {
       if (isTocLike(slideSpec)) slideToc(slide, size, theme, slideSpec, slides);
@@ -1344,6 +1463,7 @@ async function main() {
     else if (t === 'table') slideTable(slide, size, theme, slideSpec);
     else if (t === 'image') slideImage(slide, size, theme, slideSpec);
     else if (t === 'quote') slideQuote(slide, size, theme, slideSpec);
+    else if (t === 'thanks' || t === 'thankyou') slideThanks(slide, size, theme, slideSpec);
     else if (t === 'blank') addBg(slide, size, theme);
     else die(`Unknown slide.type: "${t}"`);
 

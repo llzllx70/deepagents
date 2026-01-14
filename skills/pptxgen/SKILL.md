@@ -1,6 +1,6 @@
 ---
 name: pptxgen
-description: 基于 PptxGenJS 生成精美 PPTX：当用户给出一段文本/大纲/结构化要点，希望自动排版成现代风格的 .pptx，并需要插入 charts/images/media/shapes/tables/text 时使用；本技能提供 deck-spec(JSON) 到 pptx 的生成脚本与工作流
+description: 当用户给出一段文本/大纲/结构化要点，比如markdown文件,自动排版成现代风格的 .pptx
 ---
 
 # PptxGenJS 精美 PPT 生成（pptxgen）
@@ -26,8 +26,74 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 - `modernLight`（默认，已针对中文报告优化）
 - `modernDark`
+- `techDark`（深色科技风，网格背景 + 霓虹强调）
 - `eduLight`（教育/招生报告更偏“政务简洁风”）
 - `eduDark`
+
+## 深色科技风默认方案（必含封面/目录/过渡/致谢）
+
+当用户未指定风格或明确要求“深色科技风”时，使用以下默认方案，确保全局一致性：
+
+- 主题：`techDark`（深色底 + 霓虹强调 + 轻网格背景）
+- 页面大小：`LAYOUT_16x9`
+- 字体：标题/正文统一 `Microsoft YaHei`（可按需覆盖 `meta.theme.fonts`）
+- 边距与安全区：左右 0.9 in，标题区 y=0.6 in，正文区 y=1.65 in，底部 0.55 in
+- 色彩基调（RRGGBB）：背景 `070B14`，卡片 `0D1526`，正文 `E6F0FF`，弱化字 `9FB2D9`，主强调 `00D4FF`，次强调 `5B8CFF`
+- 必含页面：封面、目录、过渡页（章节分隔）、内容页、致谢页
+
+## 需求到 Deck 的标准流程（必须产出 md 大纲）
+
+1) 设计原则与风格确认：受众/场景/语气 → 选择 `techDark` 并声明必含页面
+2) 制定计划：生成 `workspace/deck-outline.md`（先大纲，再分页）
+3) 分页设计：按“每页 1 个中心信息点”拆页，规划封面/目录/过渡/内容/致谢
+4) 产出 Deck Spec：根据分页落 `slide.type` 与结构化字段
+5) 生成 PPTX：运行 `spec2pptx.js` 验收
+
+### `deck-outline.md` 模板（示例）
+
+```md
+# 标题：深色科技风主题报告
+
+## 受众与目标
+- 受众：
+- 目标：
+
+## 设计风格与规范
+- 主题：techDark
+- 页面大小：LAYOUT_16x9
+- 字体：Microsoft YaHei
+- 色彩：070B14 / 0D1526 / E6F0FF / 9FB2D9 / 00D4FF / 5B8CFF
+
+## 目录（章节）
+1. ...
+2. ...
+3. ...
+
+## 分页计划
+| 页码 | 类型 | 标题 | 核心信息点 | 可视化/素材 |
+| --- | --- | --- | --- | --- |
+| 1 | 封面 | ... | 主题与副标题 | 主视觉 |
+| 2 | 目录 | ... | 章节列表 | 无 |
+| 3 | 过渡 | ... | 章节引入 | 无 |
+| 4 | 内容 | ... | 要点/数据 | 图表/表格 |
+| N | 致谢 | ... | 结尾与联系信息 | Logo/二维码 |
+```
+
+## 分页定位与页面类型
+
+- 封面页：`type: "title"`（主标题 + 副标题 + meta）
+- 目录页：`type: "toc"`（`items` 或 `bullets`）
+- 过渡页：`type: "transition"` 或 `type: "section"`（章节分隔）
+- 内容页：`type: "content" | "chart" | "table" | "image"`
+- 致谢页：`type: "thanks"`（结尾 + 联系方式）
+
+## 页面专用 Prompt（不同页面用不同提示词）
+
+- 封面页 prompt：只输出封面所需字段（title/subtitle/meta），强调“深色科技风 + 主题表达 + 简洁”
+- 目录页 prompt：只输出章节标题列表（items 或 bullets），长度 ≤ 6，保证并列语义
+- 过渡页 prompt：只输出章节标题 + 1 句引导语（subtitle），强调“章节切换”
+- 内容页 prompt：仅 1 个中心信息点，3–6 条短句要点，必要时指定 chart/table
+- 致谢页 prompt：只输出致谢标题 + 联系方式（meta 或 subtitle），避免长段落
 
 ## Deck Spec（JSON）结构
 
@@ -35,7 +101,7 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 ```json
 {
-  "meta": { "title": "示例标题", "author": "AI", "layout": "LAYOUT_16x9", "theme": "modernLight" },
+  "meta": { "title": "示例标题", "author": "AI", "layout": "LAYOUT_16x9", "theme": "techDark" },
   "slides": [
     { "type": "title", "title": "封面标题", "subtitle": "一句副标题", "meta": "单位｜日期" },
     { "type": "content", "title": "核心要点", "bullets": ["要点 A", "要点 B", "要点 C"] }
@@ -47,12 +113,14 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 - `title`：封面
 - `section`：章节页
+- `transition`：过渡页（章节分隔，等同 `section`，可用 `label` 定义提示语）
 - `toc`：目录页（也会自动识别 `title=目录/大纲/议程` 且 `bullets` 为“`一、...`”格式的 `content`）
 - `content`：左要点 + 右侧卡片（可选 `aside`）
 - `chart`：左要点 + 右侧图表卡片（`chart: { type, data, options }`）
 - `table`：表格页（`table: { rows, options }`）
 - `image`：大图页（`image: { path|data|link, x,y,w,h, sizing }`）
 - `quote`：引用页（`quote` / `author`）
+- `thanks`：致谢页（大标题 + 联系方式）
 - `blank`：空白底页（便于你用 `elements` 自定义）
 
 任意 slide 可附加：
@@ -87,12 +155,14 @@ python skills/pptx/scripts/thumbnail.py output.pptx workspace/thumbnails --cols 
 
 - **目录/议程**：`type: "toc"`（或 `title=目录/大纲/议程` + `bullets` 形如 `一、...`）
 - **章节分隔**：`type: "section"`
+- **过渡页**：`type: "transition"`（可用 `label` 显示“TRANSITION/章节”等提示语）
 - **解释性要点**（3–6 条短句）：`type: "content"` + `layout: "tiles"`（会自动做卡片网格）
 - **解释性要点**（长句/信息密集）：`type: "content"` + `layout: "oneCol"`（增加宽度减少换行）
 - **需要一句话结论**：`type: "content"` + `aside.text: "核心结论：..."`（短则自动变成右上角徽章；长则转为侧栏）
 - **需要图表**：`type: "chart"`（左解释右图；脚本会自动修正“单类目+多系列导致窄图”的常见错误）
 - **需要表格**：`type: "table"`（表头高亮+斑马纹；对“保底/冲刺/不建议”等标签自动上色）
   - 如果首行不是表头：设置 `table.headerRows: 0`（或 `table.options.headerRows: 0`）避免误染色
+ - **致谢收尾**：`type: "thanks"`（标题 + 联系方式）
 
 ### 防溢出（最重要）
 
@@ -112,7 +182,7 @@ function toSlides(outline) {
   slides.push({ type: 'toc', title: '目录', items: outline.sections.map(s => s.title) });
 
   for (const sec of outline.sections) {
-    slides.push({ type: 'section', title: sec.title });
+    slides.push({ type: 'transition', title: sec.title, subtitle: sec.subtitle });
     for (const block of sec.blocks) {
       if (block.kind === 'chart') slides.push({ type: 'chart', title: block.title, bullets: block.takeaways, chart: block.chart });
       else if (block.kind === 'table') slides.push({ type: 'table', title: block.title, table: block.table });
@@ -128,6 +198,7 @@ function toSlides(outline) {
       }
     }
   }
+  slides.push({ type: 'thanks', title: '感谢聆听', subtitle: outline.contact });
   return slides;
 }
 ```
