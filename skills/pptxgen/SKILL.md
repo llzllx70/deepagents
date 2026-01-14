@@ -3,6 +3,8 @@ name: pptxgen
 description: 当用户给出一段文本/大纲/结构化要点，比如markdown文件,自动排版成现代风格的 .pptx
 ---
 
+
+
 # PptxGenJS 精美 PPT 生成（pptxgen）
 
 本 Skill 目标：把“用户给定文本（需求/大纲/要点）”转成 **结构化 deck spec（JSON）**，然后用 PptxGenJS 生成 **可直接交付的精美 .pptx**（含图表/图片/形状/表格/媒体/富文本）。
