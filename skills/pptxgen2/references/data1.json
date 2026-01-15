@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "title": "Template One Overview",
+    "subtitle": "Balanced layout with left content, right chart, and top-right icons."
+  },
+  "icons": [
+    { "path": "../demos/common/images/logo_square.png" }
+  ],
+  "leftItems": [
+    {
+      "image": "../demos/common/images/peace4.png",
+      "title": "Pilot Launch",
+      "body": "Release in two regions with initial onboarding and success metrics tracked weekly."
+    },
+    {
+      "image": "../demos/common/images/png-gradient-hex.png",
+      "title": "Market Expansion",
+      "body": "Scale to 12 markets with unified pricing, localized assets, and partner enablement."
+    },
+    {
+      "image": "../demos/common/images/fediverse_actpub.png",
+      "title": "Retention Ops",
+      "body": "Automate lifecycle messaging and dashboards to reduce churn and lift NPS."
+    }
+  ],
+  "chart": {
+    "title": "Quarterly Revenue (USD M)",
+    "data": [
+      { "name": "2024", "labels": ["Q1", "Q2", "Q3", "Q4"], "values": [12, 18, 15, 22] },
+      { "name": "2025", "labels": ["Q1", "Q2", "Q3", "Q4"], "values": [16, 21, 19, 26] }
+    ]
+  }
+}

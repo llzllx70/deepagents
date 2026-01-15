@@ -110,3 +110,9 @@ Output file: 2025-2026_A.pptx
 # GenSpark
 
 - 每页分别先生成html代码，可以看到每页的html内容
+
+# pptxgen (通过pptxgenjs生成的)
+
+# html2pptx ()
+
+# pptx (claude 原skill)
