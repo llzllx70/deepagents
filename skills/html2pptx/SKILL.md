@@ -67,8 +67,17 @@ description: 基于 HTML 逐页生成并合并 PPTX 的工作流技能，涵盖�
 - 内容页 prompt：生成内容页 HTML，围绕 1 个中心信息点，给 3–6 条要点；必要时添加图表/表格占位。
 - 致谢页 prompt：生成致谢页 HTML，只输出致谢标题 + 联系方式。
 
-## 步骤 5：生成 slide.html（编号递增）
-按 `slide-001.html`, `slide-002.html` ... 写入 `workspace/html2pptx/slides/`。
+## 步骤 5：生成 slide.html（自动或手动）
+优先使用可复用脚本从 `report.md + plan.md` 自动生成初版，再做局部微调：
+```bash
+python skills/html2pptx/scripts/generate_slides.py \
+  --report /Users/double/vsproject/deepagents/workspace/career_growth/case_中等生_前端工程师/output/report.md \
+  --plan workspace/html2pptx/plan.md \
+  --out-dir workspace/html2pptx/slides
+```
+生成完毕后，如需手工优化单页，可继续编辑 `workspace/html2pptx/slides/slide-XXX.html`。
+
+手动生成时：按 `slide-001.html`, `slide-002.html` ... 写入 `workspace/html2pptx/slides/`。
 
 HTML 基础模板（每页复用，保持全局一致）：
 ```html
@@ -128,6 +137,8 @@ HTML 约束（避免转换警告）：
 - 用 `<div>` 承载背景色/边框/阴影，不要给 `<p>/<h*>` 直接加背景。
 - 列表使用 `<ul>/<ol><li>`，不要手写 `•` 开头。
 - 不要给 `<div>` 设置背景图片，图片请用 `<img>`。
+- 避免在含有子块级元素的 `<div>` 里直接写行内文本；把文字放进单独的 `<p>/<div>`，否则可能被跳过。
+- 中文标题不建议使用 `letter-spacing`，PPTX 渲染可能出现过大字间距。
 
 ## 步骤 6：逐页转换 PPTX
 每页 HTML 转换为对应 PPTX（保持单页）：

@@ -22,6 +22,8 @@ Options:
   --split                     Split long pages into multiple slides (default)
   --no-split                  Keep a single slide and auto-scale to max height if needed
   --tmp-dir <dir>             Temp dir for background images (default $TMPDIR or /tmp)
+  --browser-channel <name>    Playwright browser channel (e.g. chrome, msedge)
+  --user-data-dir <dir>       Use persistent browser context in this directory
   --debug                     Keep temp background images
   -h, --help                  Show help
 `);
@@ -34,6 +36,8 @@ function parseArgs(argv) {
     scale: null,
     maxSlideHeightIn: DEFAULT_MAX_SLIDE_HEIGHT_IN,
     tmpDir: process.env.TMPDIR || '/tmp',
+    browserChannel: null,
+    userDataDir: null,
     debug: false,
     split: true
   };
@@ -82,6 +86,18 @@ function parseArgs(argv) {
 
     if (arg === '--tmp-dir') {
       args.tmpDir = argv[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--browser-channel') {
+      args.browserChannel = argv[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--user-data-dir') {
+      args.userDataDir = argv[i + 1];
       i += 1;
       continue;
     }
@@ -166,53 +182,51 @@ async function captureGradientBackgrounds(page, tmpDir) {
 
   const ids = targets.map((target) => target.id);
 
-  await page.evaluate((bgIds) => {
-    bgIds.forEach((id) => {
-      const el = document.querySelector(`[data-pptx-bg-id="${id}"]`);
-      if (!el) return;
-
-      el.querySelectorAll('*').forEach((child) => {
-        child.dataset.pptxPrevVisibility = child.style.visibility || '';
-        child.style.visibility = 'hidden';
-      });
-
-      el.dataset.pptxPrevColor = el.style.color || '';
-      el.style.color = 'transparent';
-    });
-  }, ids);
-
   const bgMap = {};
 
   for (const id of ids) {
     const handle = await page.$(`[data-pptx-bg-id="${id}"]`);
     if (!handle) continue;
     const fileName = path.join(tmpDir, `html2pptx-bg-${id}.png`);
-    await handle.screenshot({ path: fileName, type: 'png' });
-    bgMap[id] = fileName;
-  }
-
-  await page.evaluate((bgIds) => {
-    bgIds.forEach((id) => {
-      const el = document.querySelector(`[data-pptx-bg-id="${id}"]`);
+    await page.evaluate((bgId) => {
+      const el = document.querySelector(`[data-pptx-bg-id="${bgId}"]`);
       if (!el) return;
 
       el.querySelectorAll('*').forEach((child) => {
-        if (child.dataset.pptxPrevVisibility !== undefined) {
-          child.style.visibility = child.dataset.pptxPrevVisibility;
-          delete child.dataset.pptxPrevVisibility;
+        if (child.__pptxPrevVisibility === undefined) {
+          child.__pptxPrevVisibility = child.style.visibility || '';
+        }
+        child.style.visibility = 'hidden';
+      });
+
+      if (el.__pptxPrevColor === undefined) {
+        el.__pptxPrevColor = el.style.color || '';
+      }
+      el.style.color = 'transparent';
+    }, id);
+    await handle.screenshot({ path: fileName, type: 'png' });
+    bgMap[id] = fileName;
+    await page.evaluate((bgId) => {
+      const el = document.querySelector(`[data-pptx-bg-id="${bgId}"]`);
+      if (!el) return;
+
+      el.querySelectorAll('*').forEach((child) => {
+        if (child.__pptxPrevVisibility !== undefined) {
+          child.style.visibility = child.__pptxPrevVisibility;
+          delete child.__pptxPrevVisibility;
         } else {
           child.style.visibility = '';
         }
       });
 
-      if (el.dataset.pptxPrevColor !== undefined) {
-        el.style.color = el.dataset.pptxPrevColor;
-        delete el.dataset.pptxPrevColor;
+      if (el.__pptxPrevColor !== undefined) {
+        el.style.color = el.__pptxPrevColor;
+        delete el.__pptxPrevColor;
       } else {
         el.style.color = '';
       }
-    });
-  }, ids);
+    }, id);
+  }
 
   return { bgMap, bgIds: ids };
 }
@@ -426,6 +440,12 @@ async function extractSlideData(page, options) {
       };
     };
 
+    const DEFAULT_LANG = 'zh-CN';
+    const ensureLang = (options) => {
+      if (!options.lang) options.lang = DEFAULT_LANG;
+      return options;
+    };
+
     const parseInlineFormatting = (element, baseOptions = {}, runs = [], baseTextTransform = (x) => x, skipNode = () => false) => {
       let prevNodeIsText = false;
 
@@ -445,7 +465,7 @@ async function extractSlideData(page, options) {
           if (prevNodeIsText && prevRun) {
             prevRun.text += text;
           } else {
-            runs.push({ text, options: { ...baseOptions } });
+            runs.push({ text, options: ensureLang({ ...baseOptions }) });
           }
         } else if (node.nodeType === Node.ELEMENT_NODE && node.textContent.trim()) {
           if (skipNode(node)) {
@@ -453,7 +473,7 @@ async function extractSlideData(page, options) {
             return;
           }
 
-          const options = { ...baseOptions };
+          const options = ensureLang({ ...baseOptions });
           const computed = window.getComputedStyle(node);
 
           if (
@@ -1352,6 +1372,7 @@ async function extractSlideData(page, options) {
               fontSize: pxToPoints(computed.fontSize),
               fontFace: fontStyle.fontFace,
               color: rgbToHex(computed.color),
+              lang: DEFAULT_LANG,
               align: computed.textAlign === 'start' ? 'left' : computed.textAlign,
               lineSpacing: computed.lineHeight && computed.lineHeight !== 'normal'
                 ? pxToPoints(computed.lineHeight)
@@ -1430,6 +1451,7 @@ async function extractSlideData(page, options) {
         fontSize: pxToPoints(computed.fontSize),
         fontFace: fontStyle.fontFace,
         color: rgbToHex(computed.color),
+        lang: DEFAULT_LANG,
         align: computed.textAlign === 'start' ? 'left' : computed.textAlign,
         lineSpacing: pxToPoints(computed.lineHeight),
         paraSpaceBefore: pxToPoints(computed.marginTop),
@@ -1606,23 +1628,24 @@ function addElements(slideData, targetSlide, pres) {
       }
     }
 
-    const textOptions = {
-      x: adjustedX,
-      y: el.position.y,
-      w: adjustedW,
-      h: el.position.h,
-      fontSize: el.style.fontSize,
-      fontFace: el.style.fontFace,
+  const textOptions = {
+    x: adjustedX,
+    y: el.position.y,
+    w: adjustedW,
+    h: el.position.h,
+    fontSize: el.style.fontSize,
+    fontFace: el.style.fontFace,
       color: el.style.color,
       bold: el.style.bold,
       italic: el.style.italic,
       underline: el.style.underline,
-      valign: el.style.valign || 'top',
-      lineSpacing: el.style.lineSpacing,
-      paraSpaceBefore: el.style.paraSpaceBefore,
-      paraSpaceAfter: el.style.paraSpaceAfter,
-      inset: 0
-    };
+    valign: el.style.valign || 'top',
+    lineSpacing: el.style.lineSpacing,
+    paraSpaceBefore: el.style.paraSpaceBefore,
+    paraSpaceAfter: el.style.paraSpaceAfter,
+    inset: 0
+  };
+
 
     if (el.style.align) textOptions.align = el.style.align;
     if (el.style.margin) textOptions.margin = el.style.margin;
@@ -1865,14 +1888,24 @@ async function buildPptx(inputPath, outputPath, options) {
   }
 
   const launchOptions = { env: { TMPDIR: options.tmpDir } };
-  if (process.platform === 'darwin') {
-    launchOptions.channel = 'chrome';
+  if (options.browserChannel) {
+    launchOptions.channel = options.browserChannel;
   }
 
-  const browser = await chromium.launch(launchOptions);
+  let browser = null;
+  let context = null;
+  let page = null;
+  if (options.userDataDir) {
+    const userDataDir = path.resolve(options.userDataDir);
+    fs.mkdirSync(userDataDir, { recursive: true });
+    context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    page = await context.newPage();
+  } else {
+    browser = await chromium.launch(launchOptions);
+    page = await browser.newPage();
+  }
 
   try {
-    const page = await browser.newPage();
     await page.goto(pathToFileURL(absInput).href, { waitUntil: 'load' });
     await page.waitForLoadState('networkidle');
     try {
@@ -1975,7 +2008,12 @@ async function buildPptx(inputPath, outputPath, options) {
       });
     }
   } finally {
-    await browser.close();
+    if (context) {
+      await context.close();
+    }
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 

@@ -33,6 +33,21 @@ def _parse_args() -> argparse.Namespace:
         help="Path to html2pptx.js script.",
     )
     parser.add_argument(
+        "--tmp-dir",
+        default="workspace/html2pptx/tmp",
+        help="Temp directory for html2pptx background images.",
+    )
+    parser.add_argument(
+        "--user-data-dir",
+        default="workspace/html2pptx/.playwright",
+        help="Playwright user data directory.",
+    )
+    parser.add_argument(
+        "--browser-channel",
+        default=None,
+        help="Playwright browser channel (e.g. chrome).",
+    )
+    parser.add_argument(
         "--merge-script",
         default="skills/html2pptx/scripts/merge_pptx.py",
         help="Path to merge_pptx.py script.",
@@ -103,7 +118,13 @@ def build_deck(args: argparse.Namespace) -> None:
             str(pptx_path),
             "--max-slide-height-in",
             str(args.max_slide_height_in),
+            "--tmp-dir",
+            str(args.tmp_dir),
+            "--user-data-dir",
+            str(args.user_data_dir),
         ]
+        if args.browser_channel:
+            cmd.extend(["--browser-channel", str(args.browser_channel)])
         if args.scale is not None:
             cmd.extend(["--scale", str(args.scale)])
         cmd.append("--split" if args.split else "--no-split")
