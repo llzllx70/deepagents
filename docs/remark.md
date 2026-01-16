@@ -113,6 +113,12 @@ Output file: 2025-2026_A.pptx
 
 # pptxgen (通过pptxgenjs生成的)
 
+- 当前使用这个方案
+- 效果图 -> codex -> 生成模板 (包括template.js 和 data.json，最复杂的让gpt5.2做)
+- inputs.md -> 选择模板 -> 拆分为 slide.json -> 转pptx -> 合并
+- 优点是可控，可以不停的加模板
+- 可以进一上的工程化
+
 # html2pptx ()
 
 # pptx (claude 原skill)
