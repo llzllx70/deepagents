@@ -122,3 +122,15 @@ Output file: 2025-2026_A.pptx
 # html2pptx ()
 
 # pptx (claude 原skill)
+
+# sandbox (daytona)
+
+- 远程执行通过 `--sandbox daytona` 启用，底层走 `DaytonaBackend` 调用 `sandbox.process.exec(command)` 执行命令字符串（非交互式 shell）。
+- 系统类型在 CLI 提示中统一描述为 Linux sandbox，默认工作目录为 `/home/daytona`。
+- 依赖保障不是自动的：代码里假设沙盒内有 `bash`、`python3`、`grep` 等基础命令（`BaseSandbox` 的文件操作依赖它们）。
+- 需要的命令用 `--sandbox-setup` 在沙盒创建后一次性安装，避免执行中途因缺命令失败。
+
+## 结论
+
+- 暂定用docker, 可控，免费，可提前装包，要留意速度和资源消耗
+- daytona，好集成，系统有此选项，但要付费，提前装包等这些定制需求不了解
