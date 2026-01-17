@@ -217,7 +217,9 @@ __marimo__/
 .idea
 **/.DS_Store
 .vscode/
-docs/
+docs/*
+!docs/remark.md
+!docs/docker-sandbox.md
 workspace/
 run.sh
 node_modules/**

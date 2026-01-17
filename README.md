@@ -310,3 +310,15 @@ The middleware automatically adds instructions about the standard tools. Your cu
 - When to use sub-agents vs when NOT to use them
 - Guidance on parallel execution
 - Subagent lifecycle (spawn → run → return → reconcile)
+
+## Project Scripts
+
+macOS helper for Docker Desktop (Homebrew):
+
+```bash
+# Full reinstall, wipes all Docker data
+bash scripts/install_docker_desktop.sh --purge
+
+# Reinstall without wiping data
+bash scripts/install_docker_desktop.sh
+```
