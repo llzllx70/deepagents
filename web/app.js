@@ -249,6 +249,21 @@ class DeepAgentsClient {
         }
     }
 
+    async deleteSession(sessionId) {
+        if (!sessionId) return;
+        try {
+            const response = await fetch(`${this.serverUrl}/sessions/${sessionId}`, {
+                method: 'DELETE'
+            });
+            if (!response.ok && response.status !== 404) {
+                throw new Error(`删除会话失败：${response.statusText}`);
+            }
+        } catch (error) {
+            console.error('删除会话失败：', error);
+            this.addLogMessage('warning', `删除会话失败：${error.message}`);
+        }
+    }
+
     setSessionId(sessionId) {
         this.sessionId = sessionId;
         const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
@@ -2014,11 +2029,39 @@ class DeepAgentsClient {
         this.renderHistory();
     }
 
-    deleteChat(chatId) {
+    async deleteChat(chatId) {
+        const chat = this.chatHistory.find(c => c.id === chatId);
+        const sessionId = chat?.sessionId || null;
+        const deletingActiveSession = Boolean(sessionId && sessionId === this.sessionId);
+
+        if (deletingActiveSession) {
+            this.disconnectWebSocket({ allowReconnect: false });
+            this.sessionId = null;
+            this.wsUrl = null;
+            this.currentRunId = null;
+            this.currentRunStatus = null;
+            this.isRunning = false;
+            this.updateCancelButton(false);
+            this.pendingSessionSwitch = null;
+            this.cancelRequested = false;
+            this.pendingCancelLogElement = null;
+        }
+
+        if (sessionId) {
+            if (deletingActiveSession) {
+                await this.deleteSession(sessionId);
+            } else {
+                this.deleteSession(sessionId);
+            }
+        }
+
         // Remove from history array
         this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
         if (this.activeChatId === chatId) {
             this.activeChatId = null;
+        }
+        if (this.pendingSessionSwitch?.chatId === chatId) {
+            this.pendingSessionSwitch = null;
         }
         for (const [runId, mappedChatId] of this.runIdToChatId.entries()) {
             if (mappedChatId === chatId) {
@@ -2035,6 +2078,13 @@ class DeepAgentsClient {
         // Save and re-render
         this.saveHistory();
         this.renderHistory();
+
+        if (deletingActiveSession) {
+            this.resetChatView();
+            this.elements.chatTitle.textContent = '对话';
+            this.elements.welcomeMessage.style.display = 'flex';
+            await this.createSession();
+        }
     }
 
     saveConfig() {

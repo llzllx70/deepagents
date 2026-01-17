@@ -1,0 +1,183 @@
+"""Docker sandbox pool management."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+import logging
+
+from deepagents_cli.integrations.docker import DockerSandboxBackend, ensure_docker_available
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DockerPoolConfig:
+    image: str
+    pool_size: int
+    min_idle: int
+    workdir: str = "/workspace"
+    cpus: str | None = None
+    memory: str | None = None
+    pids_limit: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "DockerPoolConfig":
+        def _int_from_env(name: str, default: int) -> int:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        image = os.environ.get(
+            "DEEPAGENTS_DOCKER_IMAGE", "deepagents-sandbox:22.04"
+        )
+        pool_size = _int_from_env("DEEPAGENTS_DOCKER_POOL_SIZE", 10)
+        min_idle = _int_from_env("DEEPAGENTS_DOCKER_MIN_IDLE", 2)
+        workdir = os.environ.get("DEEPAGENTS_DOCKER_WORKDIR", "/workspace")
+        cpus = os.environ.get("DEEPAGENTS_DOCKER_CPUS")
+        memory = os.environ.get("DEEPAGENTS_DOCKER_MEMORY")
+        pids_limit = os.environ.get("DEEPAGENTS_DOCKER_PIDS_LIMIT")
+
+        if pool_size < 1:
+            pool_size = 1
+        if min_idle < 0:
+            min_idle = 0
+        if min_idle > pool_size:
+            min_idle = pool_size
+
+        return cls(
+            image=image,
+            pool_size=pool_size,
+            min_idle=min_idle,
+            workdir=workdir,
+            cpus=cpus,
+            memory=memory,
+            pids_limit=pids_limit,
+        )
+
+
+class DockerSandboxPool:
+    """Maintain a warm pool of running Docker sandboxes."""
+
+    def __init__(self, config: DockerPoolConfig) -> None:
+        self._config = config
+        self._pool_id = uuid.uuid4().hex[:8]
+        self._idle: set[str] = set()
+        self._in_use: set[str] = set()
+        self._lock = asyncio.Lock()
+
+    @property
+    def config(self) -> DockerPoolConfig:
+        return self._config
+
+    async def start(self) -> None:
+        await asyncio.to_thread(ensure_docker_available)
+        await self._ensure_idle(self._config.pool_size)
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            all_ids = list(self._idle | self._in_use)
+            self._idle.clear()
+            self._in_use.clear()
+        for container_id in all_ids:
+            await asyncio.to_thread(self._remove_container, container_id)
+
+    async def acquire(self) -> DockerSandboxBackend:
+        async with self._lock:
+            has_idle = bool(self._idle)
+
+        if not has_idle:
+            await self._ensure_idle(self._config.pool_size)
+
+        async with self._lock:
+            if not self._idle:
+                msg = "No Docker sandboxes available."
+                raise RuntimeError(msg)
+            container_id = self._idle.pop()
+            self._in_use.add(container_id)
+            should_expand = len(self._idle) < self._config.min_idle
+
+        if should_expand:
+            await self._ensure_idle(self._config.pool_size)
+
+        return DockerSandboxBackend(container_id, workdir=self._config.workdir)
+
+    async def release(self, backend: DockerSandboxBackend) -> None:
+        container_id = backend.id
+        extra_ids: list[str] = []
+        async with self._lock:
+            if container_id in self._in_use:
+                self._in_use.remove(container_id)
+                self._idle.add(container_id)
+            if len(self._idle) > self._config.pool_size:
+                extra_count = len(self._idle) - self._config.pool_size
+                extra_ids = list(self._idle)[:extra_count]
+                for extra_id in extra_ids:
+                    self._idle.remove(extra_id)
+        for extra_id in extra_ids:
+            await asyncio.to_thread(self._remove_container, extra_id)
+
+    async def sync_workspace(self, backend: DockerSandboxBackend, target_dir: Path) -> None:
+        await asyncio.to_thread(backend.copy_workspace_to_host, target_dir)
+
+    async def _ensure_idle(self, target: int) -> None:
+        async with self._lock:
+            missing = max(0, target - len(self._idle))
+        if missing <= 0:
+            return
+        created: list[str] = []
+        for _ in range(missing):
+            container_id = await asyncio.to_thread(self._create_container)
+            created.append(container_id)
+        async with self._lock:
+            self._idle.update(created)
+
+    def _create_container(self) -> str:
+        name = f"deepagents-sbx-{self._pool_id}-{uuid.uuid4().hex[:6]}"
+        args = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--label",
+            f"deepagents.pool_id={self._pool_id}",
+            "--label",
+            "deepagents.managed=1",
+        ]
+        if self._config.cpus:
+            args += ["--cpus", self._config.cpus]
+        if self._config.memory:
+            args += ["--memory", self._config.memory]
+        if self._config.pids_limit:
+            args += ["--pids-limit", self._config.pids_limit]
+        args.append(self._config.image)
+
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "Failed to start Docker sandbox."
+            raise RuntimeError(msg)
+        container_id = result.stdout.strip()
+        logger.info("Started Docker sandbox %s", container_id)
+        return container_id
+
+    def _remove_container(self, container_id: str) -> None:
+        result = subprocess.run(
+            ["docker", "rm", "-f", container_id],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "Failed to remove Docker sandbox."
+            logger.warning("Docker sandbox cleanup failed for %s: %s", container_id, msg)
+        else:
+            logger.info("Removed Docker sandbox %s", container_id)

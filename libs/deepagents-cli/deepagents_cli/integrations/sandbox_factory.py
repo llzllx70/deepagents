@@ -270,6 +270,7 @@ _PROVIDER_TO_WORKING_DIR = {
     "modal": "/workspace",
     "runloop": "/home/user",
     "daytona": "/home/daytona",
+    "docker": "/workspace",
 }
 
 
@@ -327,7 +328,7 @@ def get_default_working_dir(provider: str) -> str:
     """Get the default working directory for a given sandbox provider.
 
     Args:
-        provider: Sandbox provider name ("modal", "runloop", "daytona")
+        provider: Sandbox provider name ("modal", "runloop", "daytona", "docker")
 
     Returns:
         Default working directory path as string

@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT / "libs" / "deepagents-cli"))
 sys.path.insert(0, str(ROOT / "libs" / "deepagents"))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLResponse
@@ -29,6 +30,8 @@ import logging
 from deepagents_cli.agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
 from deepagents_cli.file_ops import FileOpTracker
+from deepagents_cli.integrations.docker import DockerSandboxBackend
+from deepagents_cli.integrations.docker_pool import DockerPoolConfig, DockerSandboxPool
 from deepagents_cli.tools import fetch_url, http_request, web_search
 
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +47,15 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: str
+    sandbox_id: str | None = None
+    workspace_dir: str | None = None
+
+
+class DeleteSessionResponse(BaseModel):
+    session_id: str
+    sandbox_id: str | None = None
+    synced: bool
+    workspace_dir: str | None = None
 
 
 def _is_root_namespace(namespace: object) -> bool:
@@ -96,12 +108,30 @@ class Session:
     session_state: SessionState
     agent: Any
     backend: Any
+    sandbox_backend: DockerSandboxBackend
+    workspace_dir: Path
     run_queue: asyncio.Queue[RunRequest] = field(default_factory=asyncio.Queue)
     run_status: dict[str, str] = field(default_factory=dict)
     connections: set[WebSocket] = field(default_factory=set)
     current_run: RunExecution | None = None
     current_task: asyncio.Task | None = None
     worker_task: asyncio.Task | None = None
+
+    async def shutdown(self) -> None:
+        if self.current_run is not None:
+            await self.cancel_current_run()
+        if self.worker_task is not None:
+            self.worker_task.cancel()
+            try:
+                await self.worker_task
+            except asyncio.CancelledError:
+                pass
+        for ws in list(self.connections):
+            try:
+                await ws.close(code=1000)
+            except Exception:
+                pass
+        self.connections.clear()
 
     async def start(self) -> None:
         if self.worker_task is None:
@@ -490,12 +520,15 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self) -> None:
+    def __init__(self, pool: DockerSandboxPool) -> None:
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
+        self._pool = pool
 
     async def create_session(self, assistant_id: str | None, auto_approve: bool) -> Session:
         session_id = uuid.uuid4().hex
+        workspace_dir = WORKSPACE_DIR / session_id
+        workspace_dir.mkdir(parents=True, exist_ok=True)
         model = create_model()
         tools = [http_request, fetch_url]
         logger.info(f"settings.has_tavily = {settings.has_tavily}, tavily_api_key = {settings.tavily_api_key[:10] if settings.tavily_api_key else None}...")
@@ -506,10 +539,13 @@ class SessionManager:
             logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
+        sandbox_backend = await self._pool.acquire()
         agent, backend = create_cli_agent(
             model=model,
             assistant_id=assistant_id or "agent",
             tools=tools,
+            sandbox=sandbox_backend,
+            sandbox_type="docker",
             auto_approve=False,
         )
         session = Session(
@@ -518,6 +554,8 @@ class SessionManager:
             session_state=session_state,
             agent=agent,
             backend=backend,
+            sandbox_backend=sandbox_backend,
+            workspace_dir=workspace_dir,
         )
         await session.start()
         async with self._lock:
@@ -528,8 +566,56 @@ class SessionManager:
         async with self._lock:
             return self._sessions.get(session_id)
 
+    async def delete_session(self, session_id: str) -> tuple[Session | None, bool]:
+        session: Session | None = None
+        async with self._lock:
+            session = self._sessions.pop(session_id, None)
+        if session is None:
+            return None, False
 
-app = FastAPI()
+        synced = False
+        try:
+            await session.shutdown()
+            if isinstance(session.sandbox_backend, DockerSandboxBackend):
+                await self._pool.sync_workspace(
+                    session.sandbox_backend, session.workspace_dir
+                )
+                synced = True
+        except Exception as exc:
+            logger.warning("Failed to sync workspace for %s: %s", session_id, exc)
+        finally:
+            if isinstance(session.sandbox_backend, DockerSandboxBackend):
+                await self._pool.release(session.sandbox_backend)
+        return session, synced
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            session_ids = list(self._sessions.keys())
+        for session_id in session_ids:
+            await self.delete_session(session_id)
+
+
+docker_pool: DockerSandboxPool | None = None
+manager: SessionManager | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global docker_pool, manager
+    pool_config = DockerPoolConfig.from_env()
+    docker_pool = DockerSandboxPool(pool_config)
+    await docker_pool.start()
+    manager = SessionManager(docker_pool)
+    try:
+        yield
+    finally:
+        if manager is not None:
+            await manager.shutdown()
+        if docker_pool is not None:
+            await docker_pool.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/files", StaticFiles(directory=WORKSPACE_DIR), name="files")
 
 # Add CORS middleware
@@ -541,17 +627,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-manager = SessionManager()
 
 
 @app.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Session manager unavailable")
     session = await manager.create_session(req.assistant_id, req.auto_approve)
-    return CreateSessionResponse(session_id=session.session_id)
+    try:
+        workspace_dir = str(session.workspace_dir.relative_to(ROOT))
+    except ValueError:
+        workspace_dir = str(session.workspace_dir)
+    return CreateSessionResponse(
+        session_id=session.session_id,
+        sandbox_id=session.sandbox_backend.id,
+        workspace_dir=workspace_dir,
+    )
+
+
+@app.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
+async def delete_session(session_id: str) -> DeleteSessionResponse:
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Session manager unavailable")
+    session, synced = await manager.delete_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        workspace_dir = str(session.workspace_dir.relative_to(ROOT))
+    except ValueError:
+        workspace_dir = str(session.workspace_dir)
+    return DeleteSessionResponse(
+        session_id=session.session_id,
+        sandbox_id=session.sandbox_backend.id,
+        synced=synced,
+        workspace_dir=workspace_dir,
+    )
 
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
+    if manager is None:
+        await websocket.close(code=1011)
+        return
     session = await manager.get_session(session_id)
     if session is None:
         await websocket.close(code=1008)

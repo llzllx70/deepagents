@@ -130,6 +130,13 @@ Output file: 2025-2026_A.pptx
 - 依赖保障不是自动的：代码里假设沙盒内有 `bash`、`python3`、`grep` 等基础命令（`BaseSandbox` 的文件操作依赖它们）。
 - 需要的命令用 `--sandbox-setup` 在沙盒创建后一次性安装，避免执行中途因缺命令失败。
 
+# sandbox (docker)
+
+- 服务端以 docker 容器作为 sandbox 后端，镜像基于 ubuntu22.04，预装 python3/pip/uv/apt/vim/node。
+- 每个 session 对应 `workspace/<session_id>/` 子目录；删除 session 时从容器 `/workspace` 同步回写到该目录。
+- docker 实例采用预热池机制：默认保持 10 个空闲容器，空闲少于 2 自动补齐。
+- 释放策略：仅在用户点击 Web 删除按钮时释放容器并回传数据，不在断开 ws 时自动释放。
+
 ## 结论
 
 - 暂定用docker, 可控，免费，可提前装包，要留意速度和资源消耗
