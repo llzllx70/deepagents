@@ -41,6 +41,8 @@ class DeepAgentsClient {
         this.isCreatingSession = false;
         this.cancelRequested = false;
         this.pendingCancelLogElement = null;
+        this.sessionHasMessages = false;
+        this.resumeAttempt = false;
 
         this.chatHistory.forEach(chat => {
             if (chat && chat.runId) {
@@ -78,10 +80,15 @@ class DeepAgentsClient {
         // Load chat history
         this.renderHistory();
 
-        this.logClient('page_load', { url: window.location.href });
+        const navEntry = performance.getEntriesByType('navigation')[0];
+        const navType = navEntry?.type || 'navigate';
+        const action = navType === 'reload' ? 'refresh' : 'load';
+        this.logClient('page_load', { url: window.location.href, navType, action });
 
         // Connect to server
-        await this.createSession();
+        if (!this.resumeSessionIfPossible()) {
+            await this.createSession();
+        }
     }
 
     cacheElements() {
@@ -225,7 +232,7 @@ class DeepAgentsClient {
         this.isCreatingSession = true;
         try {
             this.updateConnectionStatus('connecting');
-            this.logClient('session_create_start');
+            this.logClient('session_create_start', { mode: 'new' });
 
             const response = await fetch(`${this.serverUrl}/sessions`, {
                 method: 'POST',
@@ -242,7 +249,8 @@ class DeepAgentsClient {
 
             const data = await response.json();
             this.setSessionId(data.session_id);
-            this.logClient('session_created', { sessionId: data.session_id, sandboxId: data.sandbox_id || null });
+            this.setSessionState({ sessionId: data.session_id, hasMessages: false });
+            this.logClient('session_created', { sessionId: data.session_id, sandboxId: data.sandbox_id || null, mode: 'new' });
             this.connectWebSocket();
 
         } catch (error) {
@@ -348,6 +356,10 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
+            if (this.resumeAttempt) {
+                this.logClient('session_reuse_connected', { sessionId: this.sessionId, mode: 'reuse' });
+            }
+            this.resumeAttempt = false;
             this.logClient('ws_connected', { sessionId: this.sessionId });
             this.reconnectAttempts = 0;
             this.hideReconnectNotice();
@@ -370,11 +382,17 @@ class DeepAgentsClient {
             }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
             if (this.ws !== ws) return;
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
             this.logClient('ws_disconnected', { sessionId: this.sessionId });
+            if (this.resumeAttempt && (event.code === 1008 || event.code === 1011)) {
+                this.resumeAttempt = false;
+                this.logClient('session_reuse_failed_fallback', { sessionId: this.sessionId, mode: 'reuse', closeCode: event.code });
+                this.createSession();
+                return;
+            }
             if (this.shouldReconnect && this.hasReconnectWork()) {
                 this.attemptReconnect();
             } else {
@@ -1586,6 +1604,7 @@ class DeepAgentsClient {
             run_id: runId
         });
         this.logClient('run_sent', { runId, inputLen: input.length });
+        this.setSessionState({ sessionId: this.sessionId, hasMessages: true });
 
         this.scrollToBottom();
     }
@@ -1603,6 +1622,22 @@ class DeepAgentsClient {
     }
 
     newChat() {
+        if (!this.hasCurrentMessages()) {
+            this.resetChatView();
+            this.activeChatId = this.generateTaskId();
+            this.currentRunId = null;
+            this.currentRunStatus = null;
+            this.isRunning = false;
+            this.cancelRequested = false;
+            this.pendingCancelLogElement = null;
+            this.pendingSessionSwitch = null;
+            this.updateCancelButton(false);
+            this.updateSendButton();
+            this.elements.chatTitle.textContent = '新对话';
+            this.elements.welcomeMessage.style.display = 'flex';
+            this.logClient('new_chat_reuse_session', { chatId: this.activeChatId, sessionId: this.sessionId, mode: 'reuse' });
+            return;
+        }
         this.backgroundCurrentChat('new_chat');
         this.resetChatView();
         this.activeChatId = this.generateTaskId();
@@ -1616,7 +1651,7 @@ class DeepAgentsClient {
         this.updateSendButton();
         this.elements.chatTitle.textContent = '新对话';
         this.elements.welcomeMessage.style.display = 'flex';
-        this.logClient('new_chat', { chatId: this.activeChatId });
+        this.logClient('new_chat', { chatId: this.activeChatId, mode: 'new' });
 
         this.disconnectWebSocket({ allowReconnect: false });
         this.createSession();
@@ -1656,6 +1691,51 @@ class DeepAgentsClient {
             console.warn('WebSocket 未连接，消息未发送：', data);
         }
         return false;
+    }
+
+    hasCurrentMessages() {
+        return this.collectCurrentMessages().length > 0;
+    }
+
+    setSessionState({ sessionId, hasMessages }) {
+        this.sessionHasMessages = Boolean(hasMessages);
+        if (sessionId) {
+            localStorage.setItem('deepagents_session_state', JSON.stringify({
+                sessionId,
+                hasMessages: this.sessionHasMessages,
+                timestamp: Date.now()
+            }));
+        }
+    }
+
+    loadSessionState() {
+        const stored = localStorage.getItem('deepagents_session_state');
+        if (!stored) return null;
+        try {
+            const parsed = JSON.parse(stored);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return parsed;
+        } catch {
+            return null;
+        }
+    }
+
+    resumeSessionIfPossible() {
+        const state = this.loadSessionState();
+        if (!state || !state.sessionId || state.hasMessages) return false;
+        const hasStoredMessages = this.chatHistory.some(chat => {
+            if (!chat || chat.sessionId !== state.sessionId) return false;
+            return Array.isArray(chat.messages) && chat.messages.length > 0;
+        });
+        if (hasStoredMessages) {
+            this.setSessionState({ sessionId: state.sessionId, hasMessages: true });
+            return false;
+        }
+        this.setSessionId(state.sessionId);
+        this.resumeAttempt = true;
+        this.logClient('session_resume_attempt', { sessionId: state.sessionId, mode: 'reuse' });
+        this.connectWebSocket();
+        return true;
     }
 
     logClient(event, detail = {}, level = 'info', { useBeacon = false } = {}) {
@@ -2052,6 +2132,9 @@ class DeepAgentsClient {
         });
 
         this.attachRunMessagesForChat(chat.id);
+        if (chat.sessionId && chat.sessionId === this.sessionId && chat.messages.length) {
+            this.setSessionState({ sessionId: chat.sessionId, hasMessages: true });
+        }
 
         const hasMessages = this.elements.messages.children.length > 0;
         this.elements.welcomeMessage.style.display = hasMessages ? 'none' : 'flex';

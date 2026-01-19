@@ -38,7 +38,7 @@ from deepagents_cli.tools import fetch_url, http_request, web_search
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d - %(message)s",
     handlers=[
         logging.FileHandler(LOG_DIR / "server.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
@@ -51,7 +51,7 @@ client_logger.propagate = False
 if not any(isinstance(handler, logging.FileHandler) for handler in client_logger.handlers):
     _client_handler = logging.FileHandler(LOG_DIR / "web.log", encoding="utf-8")
     _client_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d - %(message)s")
     )
     client_logger.addHandler(_client_handler)
 
