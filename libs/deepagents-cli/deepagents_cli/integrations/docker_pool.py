@@ -81,6 +81,12 @@ class DockerSandboxPool:
 
     async def start(self) -> None:
         await asyncio.to_thread(ensure_docker_available)
+        logger.info(
+            "Docker pool startup: image=%s pool_size=%s min_idle=%s",
+            self._config.image,
+            self._config.pool_size,
+            self._config.min_idle,
+        )
         await self._ensure_idle(self._config.pool_size)
 
     async def shutdown(self) -> None:
@@ -88,6 +94,7 @@ class DockerSandboxPool:
             all_ids = list(self._idle | self._in_use)
             self._idle.clear()
             self._in_use.clear()
+        logger.info("Docker pool shutdown: containers=%s", len(all_ids))
         for container_id in all_ids:
             await asyncio.to_thread(self._remove_container, container_id)
 
@@ -105,10 +112,18 @@ class DockerSandboxPool:
             container_id = self._idle.pop()
             self._in_use.add(container_id)
             should_expand = len(self._idle) < self._config.min_idle
+            idle_count = len(self._idle)
+            in_use_count = len(self._in_use)
 
         if should_expand:
             await self._ensure_idle(self._config.pool_size)
 
+        logger.info(
+            "Docker pool acquire: container_id=%s idle=%s in_use=%s",
+            container_id,
+            idle_count,
+            in_use_count,
+        )
         return DockerSandboxBackend(container_id, workdir=self._config.workdir)
 
     async def release(self, backend: DockerSandboxBackend) -> None:
@@ -123,6 +138,15 @@ class DockerSandboxPool:
                 extra_ids = list(self._idle)[:extra_count]
                 for extra_id in extra_ids:
                     self._idle.remove(extra_id)
+            idle_count = len(self._idle)
+            in_use_count = len(self._in_use)
+        logger.info(
+            "Docker pool release: container_id=%s idle=%s in_use=%s extra=%s",
+            container_id,
+            idle_count,
+            in_use_count,
+            len(extra_ids),
+        )
         for extra_id in extra_ids:
             await asyncio.to_thread(self._remove_container, extra_id)
 
@@ -134,6 +158,7 @@ class DockerSandboxPool:
             missing = max(0, target - len(self._idle))
         if missing <= 0:
             return
+        logger.info("Docker pool ensure idle: missing=%s target=%s", missing, target)
         created: list[str] = []
         for _ in range(missing):
             container_id = await asyncio.to_thread(self._create_container)

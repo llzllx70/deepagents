@@ -78,6 +78,8 @@ class DeepAgentsClient {
         // Load chat history
         this.renderHistory();
 
+        this.logClient('page_load', { url: window.location.href });
+
         // Connect to server
         await this.createSession();
     }
@@ -212,6 +214,7 @@ class DeepAgentsClient {
         });
 
         window.addEventListener('pagehide', () => {
+            this.logClient('page_hide', { reason: 'pagehide' }, 'info', { useBeacon: true });
             this.backgroundCurrentChat('pagehide');
             this.disconnectWebSocket({ allowReconnect: false });
         });
@@ -222,6 +225,7 @@ class DeepAgentsClient {
         this.isCreatingSession = true;
         try {
             this.updateConnectionStatus('connecting');
+            this.logClient('session_create_start');
 
             const response = await fetch(`${this.serverUrl}/sessions`, {
                 method: 'POST',
@@ -238,11 +242,13 @@ class DeepAgentsClient {
 
             const data = await response.json();
             this.setSessionId(data.session_id);
+            this.logClient('session_created', { sessionId: data.session_id, sandboxId: data.sandbox_id || null });
             this.connectWebSocket();
 
         } catch (error) {
             console.error('创建会话失败：', error);
             this.addLogMessage('error', `连接服务器失败：${error.message}`);
+            this.logClient('session_create_failed', { error: String(error.message || error) }, 'error');
             this.updateConnectionStatus('disconnected');
         } finally {
             this.isCreatingSession = false;
@@ -342,6 +348,7 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
+            this.logClient('ws_connected', { sessionId: this.sessionId });
             this.reconnectAttempts = 0;
             this.hideReconnectNotice();
             this.send({ type: 'auto_approve', enabled: this.autoApprove });
@@ -367,6 +374,7 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
+            this.logClient('ws_disconnected', { sessionId: this.sessionId });
             if (this.shouldReconnect && this.hasReconnectWork()) {
                 this.attemptReconnect();
             } else {
@@ -378,6 +386,7 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.error('WebSocket 错误：', error);
             this.updateConnectionStatus('disconnected');
+            this.logClient('ws_error', { sessionId: this.sessionId, error: String(error.message || error) }, 'error');
         };
     }
 
@@ -459,6 +468,7 @@ class DeepAgentsClient {
 
     handleRunQueued(data) {
         console.log('任务已排队：', data.run_id);
+        this.logClient('run_queued', { runId: data.run_id });
         if (!this.currentRunId) {
             this.currentRunId = data.run_id;
         }
@@ -474,6 +484,7 @@ class DeepAgentsClient {
 
     handleRunStarted(data) {
         console.log('任务开始：', data.run_id);
+        this.logClient('run_started', { runId: data.run_id });
         this.currentRunId = data.run_id;
         this.currentRunStatus = 'running';
         this.cancelRequested = false;
@@ -503,6 +514,7 @@ class DeepAgentsClient {
     handleRunEnded(data) {
         const status = data.type.split('.')[1];
         console.log('任务结束：', status, data);
+        this.logClient('run_ended', { runId: data.run_id || this.currentRunId, status });
 
         const runId = data.run_id || this.currentRunId;
         if (runId) {
@@ -1573,6 +1585,7 @@ class DeepAgentsClient {
             input: input,
             run_id: runId
         });
+        this.logClient('run_sent', { runId, inputLen: input.length });
 
         this.scrollToBottom();
     }
@@ -1603,6 +1616,7 @@ class DeepAgentsClient {
         this.updateSendButton();
         this.elements.chatTitle.textContent = '新对话';
         this.elements.welcomeMessage.style.display = 'flex';
+        this.logClient('new_chat', { chatId: this.activeChatId });
 
         this.disconnectWebSocket({ allowReconnect: false });
         this.createSession();
@@ -1642,6 +1656,35 @@ class DeepAgentsClient {
             console.warn('WebSocket 未连接，消息未发送：', data);
         }
         return false;
+    }
+
+    logClient(event, detail = {}, level = 'info', { useBeacon = false } = {}) {
+        if (!this.serverUrl) return;
+        const payload = {
+            event,
+            detail,
+            level,
+            session_id: this.sessionId || null,
+            ts: Date.now() / 1000
+        };
+        const url = `${this.serverUrl}/client_logs`;
+        const body = JSON.stringify(payload);
+        if (useBeacon && navigator.sendBeacon) {
+            try {
+                navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+                return;
+            } catch (error) {
+                console.warn('client log beacon failed:', error);
+            }
+        }
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            keepalive: true
+        }).catch(error => {
+            console.warn('client log failed:', error);
+        });
     }
 
     // Text helpers (zh-CN)

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+LOG_DIR = ROOT / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 WORKSPACE_DIR = ROOT / "workspace"
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT / "libs" / "deepagents-cli"))
@@ -34,8 +36,24 @@ from deepagents_cli.integrations.docker import DockerSandboxBackend
 from deepagents_cli.integrations.docker_pool import DockerPoolConfig, DockerSandboxPool
 from deepagents_cli.tools import fetch_url, http_request, web_search
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "server.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
 logger = logging.getLogger(__name__)
+client_logger = logging.getLogger("deepagents.web")
+client_logger.setLevel(logging.INFO)
+client_logger.propagate = False
+if not any(isinstance(handler, logging.FileHandler) for handler in client_logger.handlers):
+    _client_handler = logging.FileHandler(LOG_DIR / "web.log", encoding="utf-8")
+    _client_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    )
+    client_logger.addHandler(_client_handler)
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
@@ -58,6 +76,14 @@ class DeleteSessionResponse(BaseModel):
     workspace_dir: str | None = None
 
 
+class ClientLogRequest(BaseModel):
+    event: str
+    detail: dict[str, Any] | None = None
+    level: str | None = None
+    session_id: str | None = None
+    ts: float | None = None
+
+
 def _is_root_namespace(namespace: object) -> bool:
     if namespace is None:
         return True
@@ -66,6 +92,12 @@ def _is_root_namespace(namespace: object) -> bool:
     if isinstance(namespace, str):
         return namespace == ""
     return False
+
+
+def _truncate_for_log(text: str, limit: int = 2000) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(truncated)"
 
 
 @dataclass
@@ -149,6 +181,12 @@ class Session:
                 if worker_task is not None and worker_task.cancelling():
                     raise
             except Exception as exc:
+                logger.exception(
+                    "Run failed: session_id=%s run_id=%s error=%s",
+                    self.session_id,
+                    run_request.run_id,
+                    exc,
+                )
                 self.run_status[run_request.run_id] = "failed"
                 await self.broadcast(
                     {
@@ -164,6 +202,12 @@ class Session:
     async def enqueue_run(self, run_request: RunRequest) -> None:
         await self.run_queue.put(run_request)
         self.run_status[run_request.run_id] = "queued"
+        logger.info(
+            "Run queued: session_id=%s run_id=%s input_len=%s",
+            self.session_id,
+            run_request.run_id,
+            len(run_request.user_input or ""),
+        )
         await self.broadcast(
             {"type": "run.queued", "run_id": run_request.run_id, "session_id": self.session_id}
         )
@@ -200,6 +244,7 @@ class Session:
         run_ctx = RunExecution(run_id=run_request.run_id)
         self.current_run = run_ctx
         self.run_status[run_request.run_id] = "running"
+        logger.info("Run started: session_id=%s run_id=%s", self.session_id, run_request.run_id)
         await self.broadcast(
             {"type": "run.started", "run_id": run_request.run_id, "session_id": self.session_id}
         )
@@ -302,6 +347,12 @@ class Session:
                     if isinstance(message, AIMessage):
                         text = _normalize_text_content(message.content)
                         if text:
+                            logger.info(
+                                "LLM message: session_id=%s run_id=%s text=%s",
+                                self.session_id,
+                                run_request.run_id,
+                                _truncate_for_log(text),
+                            )
                             await self.broadcast(
                                 {
                                     "type": "assistant.message",
@@ -377,6 +428,13 @@ class Session:
                             )
 
                         preview_limit = 400
+                        logger.info(
+                            "Tool call ended: session_id=%s run_id=%s tool=%s status=%s",
+                            self.session_id,
+                            run_request.run_id,
+                            tool_name,
+                            tool_status,
+                        )
                         await self.broadcast(
                             {
                                 "type": "tool.call.ended",
@@ -407,6 +465,12 @@ class Session:
                     if not hasattr(message, "content_blocks"):
                         text_content = getattr(message, "content", None)
                         if isinstance(text_content, str) and text_content:
+                            logger.info(
+                                "LLM delta: session_id=%s run_id=%s delta_len=%s",
+                                self.session_id,
+                                run_request.run_id,
+                                len(text_content),
+                            )
                             await self.broadcast(
                                 {
                                     "type": "assistant.delta",
@@ -421,6 +485,12 @@ class Session:
                         if block_type == "text":
                             text = block.get("text", "")
                             if text:
+                                logger.info(
+                                    "LLM delta: session_id=%s run_id=%s delta_len=%s",
+                                    self.session_id,
+                                    run_request.run_id,
+                                    len(text),
+                                )
                                 await self.broadcast(
                                     {
                                         "type": "assistant.delta",
@@ -488,11 +558,13 @@ class Session:
                 break
 
             self.run_status[run_request.run_id] = "completed"
+            logger.info("Run completed: session_id=%s run_id=%s", self.session_id, run_request.run_id)
             await self.broadcast(
                 {"type": "run.completed", "run_id": run_request.run_id, "session_id": self.session_id}
             )
         except asyncio.CancelledError:
             self.run_status[run_request.run_id] = "cancelled"
+            logger.info("Run cancelled: session_id=%s run_id=%s", self.session_id, run_request.run_id)
             await self._update_cancelled_state(config)
             raise
         finally:
@@ -526,6 +598,7 @@ class SessionManager:
         self._pool = pool
 
     async def create_session(self, assistant_id: str | None, auto_approve: bool) -> Session:
+        logger.info("Creating session: assistant_id=%s auto_approve=%s", assistant_id, auto_approve)
         session_id = uuid.uuid4().hex
         workspace_dir = WORKSPACE_DIR / session_id
         workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -540,6 +613,11 @@ class SessionManager:
 
         session_state = SessionState(auto_approve=auto_approve)
         sandbox_backend = await self._pool.acquire()
+        logger.info(
+            "Session sandbox acquired: session_id=%s sandbox_id=%s",
+            session_id,
+            sandbox_backend.id,
+        )
         agent, backend = create_cli_agent(
             model=model,
             assistant_id=assistant_id or "agent",
@@ -560,6 +638,7 @@ class SessionManager:
         await session.start()
         async with self._lock:
             self._sessions[session_id] = session
+        logger.info("Session created: session_id=%s", session_id)
         return session
 
     async def get_session(self, session_id: str) -> Session | None:
@@ -568,6 +647,7 @@ class SessionManager:
 
     async def delete_session(self, session_id: str) -> tuple[Session | None, bool]:
         session: Session | None = None
+        logger.info("Deleting session: session_id=%s", session_id)
         async with self._lock:
             session = self._sessions.pop(session_id, None)
         if session is None:
@@ -586,6 +666,7 @@ class SessionManager:
         finally:
             if isinstance(session.sandbox_backend, DockerSandboxBackend):
                 await self._pool.release(session.sandbox_backend)
+        logger.info("Session deleted: session_id=%s synced=%s", session_id, synced)
         return session, synced
 
     async def shutdown(self) -> None:
@@ -603,6 +684,7 @@ manager: SessionManager | None = None
 async def lifespan(app: FastAPI):
     global docker_pool, manager
     pool_config = DockerPoolConfig.from_env()
+    logger.info("Lifespan startup: docker pool config=%s", pool_config)
     docker_pool = DockerSandboxPool(pool_config)
     await docker_pool.start()
     manager = SessionManager(docker_pool)
@@ -613,6 +695,7 @@ async def lifespan(app: FastAPI):
             await manager.shutdown()
         if docker_pool is not None:
             await docker_pool.shutdown()
+        logger.info("Lifespan shutdown complete")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -633,6 +716,7 @@ app.add_middleware(
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
+    logger.info("Create session request: assistant_id=%s auto_approve=%s", req.assistant_id, req.auto_approve)
     session = await manager.create_session(req.assistant_id, req.auto_approve)
     try:
         workspace_dir = str(session.workspace_dir.relative_to(ROOT))
@@ -664,6 +748,19 @@ async def delete_session(session_id: str) -> DeleteSessionResponse:
     )
 
 
+@app.post("/client_logs")
+async def client_logs(req: ClientLogRequest) -> dict[str, str]:
+    payload = {
+        "event": req.event,
+        "level": req.level or "info",
+        "session_id": req.session_id,
+        "ts": req.ts or time.time(),
+        "detail": req.detail or {},
+    }
+    client_logger.info(json.dumps(payload, ensure_ascii=False))
+    return {"status": "ok"}
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     if manager is None:
@@ -674,6 +771,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
+    logger.info("WebSocket connected: session_id=%s", session_id)
     session.connections.add(websocket)
     try:
         while True:
@@ -682,8 +780,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             await _handle_client_message(session, data)
     except WebSocketDisconnect:
         session.connections.discard(websocket)
+        logger.info("WebSocket disconnected: session_id=%s", session_id)
     except Exception:
         session.connections.discard(websocket)
+        logger.exception("WebSocket error: session_id=%s", session_id)
         await websocket.close(code=1011)
 
 
@@ -710,6 +810,8 @@ async def _handle_client_message(session: Session, data: dict[str, Any]) -> None
             await session.broadcast(
                 {"type": "log", "level": "warning", "message": "No active run to cancel."}
             )
+        else:
+            logger.info("Run cancel requested: session_id=%s", session.session_id)
         return
 
     if msg_type == "run.status":
@@ -908,6 +1010,13 @@ async def _emit_tool_call_started(
         else:
             file_op_tracker.update_args(tool_call_id, args)
 
+    logger.info(
+        "Tool call started: session_id=%s run_id=%s tool=%s tool_call_id=%s",
+        session.session_id,
+        run_id,
+        tool_name,
+        tool_call_id,
+    )
     await session.broadcast(
         {
             "type": "tool.call.started",

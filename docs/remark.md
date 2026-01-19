@@ -137,6 +137,11 @@ Output file: 2025-2026_A.pptx
 - docker 实例采用预热池机制：默认保持 10 个空闲容器，空闲少于 2 自动补齐。
 - 释放策略：仅在用户点击 Web 删除按钮时释放容器并回传数据，不在断开 ws 时自动释放。
 
+# docker 启动时机
+
+- deepagents_server.py启动的时候会通过lifespan注入DockerSandboxPool，用于生成10个容器
+- 
+
 ## 结论
 
 - 暂定用docker, 可控，免费，可提前装包，要留意速度和资源消耗
