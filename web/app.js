@@ -43,6 +43,11 @@ class DeepAgentsClient {
         this.pendingCancelLogElement = null;
         this.sessionHasMessages = false;
         this.resumeAttempt = false;
+        this.viewOnlySessionId = null;
+        this.viewOnlyChatId = null;
+        this.pendingSessionRelinkChatId = null;
+        this.forceReconnect = false;
+        this.defaultInputPlaceholder = '';
 
         // UI elements
         this.elements = {};
@@ -116,6 +121,7 @@ class DeepAgentsClient {
             interruptModalFooter: document.getElementById('interruptModalFooter'),
             closeModalBtn: document.getElementById('closeModalBtn'),
         };
+        this.defaultInputPlaceholder = this.elements.userInput?.getAttribute('placeholder') || '';
     }
 
     setupEventListeners() {
@@ -245,6 +251,11 @@ class DeepAgentsClient {
             const data = await response.json();
             this.setSessionId(data.session_id);
             this.setSessionState({ sessionId: data.session_id, hasMessages: false });
+            if (this.pendingSessionRelinkChatId) {
+                const chatId = this.pendingSessionRelinkChatId;
+                this.pendingSessionRelinkChatId = null;
+                this.upsertChatRecord({ id: chatId, sessionId: data.session_id });
+            }
             this.logClient('session_created', { sessionId: data.session_id, sandboxId: data.sandbox_id || null, mode: 'new' });
             this.connectWebSocket();
 
@@ -253,6 +264,9 @@ class DeepAgentsClient {
             this.addLogMessage('error', `连接服务器失败：${error.message}`);
             this.logClient('session_create_failed', { error: String(error.message || error) }, 'error');
             this.updateConnectionStatus('disconnected');
+            if (this.forceReconnect) {
+                this.attemptReconnect();
+            }
         } finally {
             this.isCreatingSession = false;
         }
@@ -278,12 +292,14 @@ class DeepAgentsClient {
         const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
         const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
         this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
+        this.clearViewOnlySession();
         this.elements.chatTitle.textContent = sessionId;
     }
 
     connectToSession(sessionId, { requestRunStatusId = null } = {}) {
         if (!sessionId) return;
         this.updateConnectionStatus('connecting');
+        this.forceReconnect = true;
         this.setSessionId(sessionId);
         this.pendingRunStatusId = requestRunStatusId;
         this.connectWebSocket();
@@ -312,6 +328,7 @@ class DeepAgentsClient {
     }
 
     hasReconnectWork() {
+        if (this.forceReconnect) return true;
         if (this.pendingMessages.length > 0) return true;
         if (this.pendingRunStatusId) return true;
         return this.isRunning || this.isActiveRunStatus(this.currentRunStatus);
@@ -321,6 +338,7 @@ class DeepAgentsClient {
         if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
+        this.forceReconnect = true;
         if (this.wsUrl) {
             this.updateConnectionStatus('connecting');
             this.connectWebSocket();
@@ -352,11 +370,22 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
+            const wasForceReconnect = this.forceReconnect;
             if (this.resumeAttempt) {
                 this.logClient('session_reuse_connected', { sessionId: this.sessionId, mode: 'reuse' });
             }
             this.resumeAttempt = false;
-            this.logClient('ws_connected', { sessionId: this.sessionId });
+            this.logClient('ws_connected', {
+                sessionId: this.sessionId,
+                url: this.wsUrl,
+                readyState: ws.readyState,
+                reconnectAttempts: this.reconnectAttempts,
+                forceReconnect: wasForceReconnect,
+                pendingMessages: this.pendingMessages.length,
+                pendingRunStatusId: this.pendingRunStatusId,
+                online: navigator.onLine
+            });
+            this.forceReconnect = false;
             this.reconnectAttempts = 0;
             this.hideReconnectNotice();
             this.send({ type: 'auto_approve', enabled: this.autoApprove });
@@ -382,7 +411,26 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.log('WebSocket 已断开');
             this.updateConnectionStatus('disconnected');
-            this.logClient('ws_disconnected', { sessionId: this.sessionId });
+            this.logClient('ws_disconnected', {
+                sessionId: this.sessionId,
+                url: this.wsUrl,
+                code: event.code,
+                reason: event.reason || '',
+                wasClean: event.wasClean,
+                readyState: ws.readyState,
+                reconnectAttempts: this.reconnectAttempts,
+                forceReconnect: this.forceReconnect,
+                hasReconnectWork: this.hasReconnectWork(),
+                online: navigator.onLine
+            });
+            if (event.code === 1008) {
+                this.resumeAttempt = false;
+                this.logClient('session_missing', { sessionId: this.sessionId, chatId: this.activeChatId });
+                this.pendingSessionRelinkChatId = this.activeChatId;
+                this.forceReconnect = true;
+                this.createSession();
+                return;
+            }
             if (this.resumeAttempt && (event.code === 1008 || event.code === 1011)) {
                 this.resumeAttempt = false;
                 this.logClient('session_reuse_failed_fallback', { sessionId: this.sessionId, mode: 'reuse', closeCode: event.code });
@@ -400,7 +448,18 @@ class DeepAgentsClient {
             if (this.ws !== ws) return;
             console.error('WebSocket 错误：', error);
             this.updateConnectionStatus('disconnected');
-            this.logClient('ws_error', { sessionId: this.sessionId, error: String(error.message || error) }, 'error');
+            this.logClient('ws_error', {
+                sessionId: this.sessionId,
+                url: this.wsUrl,
+                eventType: error?.type || 'error',
+                errorMessage: error?.message || '',
+                errorString: String(error),
+                readyState: ws.readyState,
+                targetReadyState: error?.target?.readyState,
+                forceReconnect: this.forceReconnect,
+                hasReconnectWork: this.hasReconnectWork(),
+                online: navigator.onLine
+            }, 'error');
         };
     }
 
@@ -409,21 +468,26 @@ class DeepAgentsClient {
             this.reconnectAttempts = 0;
             return;
         }
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            console.log(`正在尝试重连…（${this.reconnectAttempts}/${this.maxReconnectAttempts}）`);
-            this.showReconnectNotice(this.reconnectAttempts, this.maxReconnectAttempts);
-
-            setTimeout(() => {
-                if (!this.hasReconnectWork()) {
-                    this.reconnectAttempts = 0;
-                    return;
-                }
-                this.connectWebSocket();
-            }, this.reconnectDelay);
-        } else {
+        const allowInfinite = this.forceReconnect;
+        const reachedLimit = this.reconnectAttempts >= this.maxReconnectAttempts;
+        if (reachedLimit && !allowInfinite) {
             this.addLogMessage('error', '重连失败，请刷新页面。');
+            return;
         }
+        if (!reachedLimit) {
+            this.reconnectAttempts++;
+        }
+        const attemptCount = Math.min(this.reconnectAttempts, this.maxReconnectAttempts);
+        console.log(`正在尝试重连…（${attemptCount}/${this.maxReconnectAttempts}）`);
+        this.showReconnectNotice(attemptCount, this.maxReconnectAttempts);
+
+        setTimeout(() => {
+            if (!this.hasReconnectWork()) {
+                this.reconnectAttempts = 0;
+                return;
+            }
+            this.ensureConnection();
+        }, this.reconnectDelay);
     }
 
     handleMessage(data) {
@@ -1565,7 +1629,7 @@ class DeepAgentsClient {
     // Message Sending
     sendMessage() {
         const input = this.elements.userInput.value.trim();
-        if (!input || this.isRunning) return;
+        if (!input || this.isRunning || this.isViewOnlyMode()) return;
 
         // Add user message to UI
         const userMessage = this.createMessageElement('user');
@@ -1691,6 +1755,35 @@ class DeepAgentsClient {
 
     hasCurrentMessages() {
         return this.collectCurrentMessages().length > 0;
+    }
+
+    isViewOnlyMode() {
+        if (!this.viewOnlyChatId || !this.viewOnlySessionId) return false;
+        if (!this.activeChatId || this.viewOnlyChatId !== this.activeChatId) return false;
+        return this.viewOnlySessionId !== this.sessionId;
+    }
+
+    setViewOnlySession({ chatId = null, sessionId = null } = {}) {
+        this.viewOnlyChatId = chatId;
+        this.viewOnlySessionId = sessionId;
+        this.updateInputState();
+    }
+
+    clearViewOnlySession() {
+        this.setViewOnlySession();
+    }
+
+    updateInputState() {
+        if (!this.elements.userInput || !this.elements.sendBtn) return;
+        const isViewOnly = this.isViewOnlyMode();
+        this.elements.userInput.disabled = isViewOnly;
+        if (isViewOnly) {
+            this.elements.userInput.placeholder = '当前会话正在运行，无法在此发送消息';
+            this.elements.userInput.blur();
+        } else {
+            this.elements.userInput.placeholder = this.defaultInputPlaceholder || '';
+        }
+        this.updateSendButton();
     }
 
     setSessionState({ sessionId, hasMessages }) {
@@ -1833,6 +1926,7 @@ class DeepAgentsClient {
     updateSendButton() {
         const btn = this.elements.sendBtn;
         const hasText = this.elements.userInput.value.trim().length > 0;
+        const isViewOnly = this.isViewOnlyMode();
 
         if (this.isRunning) {
             btn.disabled = false;
@@ -1841,6 +1935,19 @@ class DeepAgentsClient {
             btn.innerHTML = `
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect>
+                </svg>
+            `;
+            return;
+        }
+
+        if (isViewOnly) {
+            btn.disabled = true;
+            btn.classList.remove('stop');
+            btn.title = '当前会话为只读，无法发送';
+            btn.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
             `;
             return;
@@ -2141,11 +2248,12 @@ class DeepAgentsClient {
         const hasActiveRun = Boolean(activeRunId && this.isActiveRunStatus(this.currentRunStatus));
         const sameSession = Boolean(chat.sessionId && chat.sessionId === this.sessionId);
         const viewingBackgroundRun = sameSession && hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
+        const deferSessionSwitch = Boolean(this.isRunning && chat.sessionId && chat.sessionId !== this.sessionId);
 
         this.resetChatView();
         this.elements.chatTitle.textContent = chat.sessionId || chat.title || '对话';
         this.activeChatId = chat.id;
-        if (!viewingBackgroundRun) {
+        if (!viewingBackgroundRun && !deferSessionSwitch) {
             this.currentRunId = chat.runId || null;
             this.currentRunStatus = chat.status || null;
             this.isRunning = this.isActiveRunStatus(chat.status);
@@ -2180,10 +2288,17 @@ class DeepAgentsClient {
         const shouldRequestRunStatus = Boolean(chat.runId && this.isActiveRunStatus(chat.status));
         const requestRunStatusId = shouldRequestRunStatus ? chat.runId : null;
         if (chat.sessionId) {
-            this.pendingSessionSwitch = null;
-            this.switchSession(chat.sessionId, { requestRunStatusId });
+            if (this.isRunning && chat.sessionId !== this.sessionId) {
+                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: requestRunStatusId, chatId: chat.id };
+                this.setViewOnlySession({ chatId: chat.id, sessionId: chat.sessionId });
+            } else {
+                this.pendingSessionSwitch = null;
+                this.setViewOnlySession();
+                this.switchSession(chat.sessionId, { requestRunStatusId });
+            }
         } else {
             this.pendingSessionSwitch = null;
+            this.setViewOnlySession();
         }
 
         this.renderHistory();
@@ -2219,6 +2334,9 @@ class DeepAgentsClient {
         this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
         if (this.activeChatId === chatId) {
             this.activeChatId = null;
+        }
+        if (this.viewOnlyChatId === chatId) {
+            this.setViewOnlySession();
         }
         if (this.pendingSessionSwitch?.chatId === chatId) {
             this.pendingSessionSwitch = null;

@@ -901,10 +901,12 @@ async def client_logs(req: ClientLogRequest) -> dict[str, str]:
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     if manager is None:
+        await websocket.accept()
         await websocket.close(code=1011)
         return
     session = await manager.get_session(session_id)
     if session is None:
+        await websocket.accept()
         await websocket.close(code=1008)
         return
     await websocket.accept()
