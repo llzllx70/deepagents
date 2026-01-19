@@ -150,6 +150,27 @@ class DockerSandboxPool:
         for extra_id in extra_ids:
             await asyncio.to_thread(self._remove_container, extra_id)
 
+    async def remove(self, backend: DockerSandboxBackend) -> None:
+        container_id = backend.id
+        async with self._lock:
+            was_in_use = container_id in self._in_use
+            was_idle = container_id in self._idle
+            if was_in_use:
+                self._in_use.remove(container_id)
+            if was_idle:
+                self._idle.remove(container_id)
+            idle_count = len(self._idle)
+            in_use_count = len(self._in_use)
+        logger.info(
+            "Docker pool remove: container_id=%s idle=%s in_use=%s",
+            container_id,
+            idle_count,
+            in_use_count,
+        )
+        await asyncio.to_thread(self._remove_container, container_id)
+        if idle_count < self._config.min_idle:
+            await self._ensure_idle(self._config.pool_size)
+
     async def sync_workspace(self, backend: DockerSandboxBackend, target_dir: Path) -> None:
         await asyncio.to_thread(backend.copy_workspace_to_host, target_dir)
 

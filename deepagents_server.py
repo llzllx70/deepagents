@@ -665,7 +665,7 @@ class SessionManager:
             logger.warning("Failed to sync workspace for %s: %s", session_id, exc)
         finally:
             if isinstance(session.sandbox_backend, DockerSandboxBackend):
-                await self._pool.release(session.sandbox_backend)
+                await self._pool.remove(session.sandbox_backend)
         logger.info("Session deleted: session_id=%s synced=%s", session_id, synced)
         return session, synced
 
