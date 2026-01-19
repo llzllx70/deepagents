@@ -596,6 +596,72 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
         self._pool = pool
+        self._active_session_id: str | None = None
+        self._activation_lock = asyncio.Lock()
+
+    async def activate_session(self, session_id: str) -> None:
+        async with self._activation_lock:
+            async with self._lock:
+                target = self._sessions.get(session_id)
+                sessions = list(self._sessions.values())
+            if target is None:
+                return
+            to_pause = [session for session in sessions if session.session_id != session_id]
+            if to_pause:
+                await asyncio.gather(*(self._pause_session(session) for session in to_pause))
+            await self._resume_session(target)
+            async with self._lock:
+                self._active_session_id = session_id
+
+    async def deactivate_session(self, session_id: str) -> None:
+        async with self._activation_lock:
+            async with self._lock:
+                if self._active_session_id != session_id:
+                    return
+                session = self._sessions.get(session_id)
+            if session is None:
+                async with self._lock:
+                    if self._active_session_id == session_id:
+                        self._active_session_id = None
+                return
+            await self._pause_session(session)
+            async with self._lock:
+                if self._active_session_id == session_id:
+                    self._active_session_id = None
+
+    async def _pause_session(self, session: Session) -> None:
+        if not isinstance(session.sandbox_backend, DockerSandboxBackend):
+            return
+        try:
+            await asyncio.to_thread(session.sandbox_backend.pause)
+            logger.info(
+                "Session sandbox paused: session_id=%s sandbox_id=%s",
+                session.session_id,
+                session.sandbox_backend.id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to pause sandbox for %s: %s",
+                session.session_id,
+                exc,
+            )
+
+    async def _resume_session(self, session: Session) -> None:
+        if not isinstance(session.sandbox_backend, DockerSandboxBackend):
+            return
+        try:
+            await asyncio.to_thread(session.sandbox_backend.unpause)
+            logger.info(
+                "Session sandbox unpaused: session_id=%s sandbox_id=%s",
+                session.session_id,
+                session.sandbox_backend.id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to unpause sandbox for %s: %s",
+                session.session_id,
+                exc,
+            )
 
     async def create_session(self, assistant_id: str | None, auto_approve: bool) -> Session:
         logger.info("Creating session: assistant_id=%s auto_approve=%s", assistant_id, auto_approve)
@@ -612,7 +678,7 @@ class SessionManager:
             logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
-        sandbox_backend = await self._pool.acquire()
+        sandbox_backend = await self._pool.acquire_for_session(session_id)
         logger.info(
             "Session sandbox acquired: session_id=%s sandbox_id=%s",
             session_id,
@@ -650,6 +716,8 @@ class SessionManager:
         logger.info("Deleting session: session_id=%s", session_id)
         async with self._lock:
             session = self._sessions.pop(session_id, None)
+            if self._active_session_id == session_id:
+                self._active_session_id = None
         if session is None:
             return None, False
 
@@ -773,6 +841,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     logger.info("WebSocket connected: session_id=%s", session_id)
     session.connections.add(websocket)
+    if manager is not None:
+        await manager.activate_session(session_id)
     try:
         while True:
             message = await websocket.receive_text()
@@ -781,15 +851,21 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         session.connections.discard(websocket)
         logger.info("WebSocket disconnected: session_id=%s", session_id)
+        if not session.connections and manager is not None:
+            await manager.deactivate_session(session_id)
     except Exception:
         session.connections.discard(websocket)
         logger.exception("WebSocket error: session_id=%s", session_id)
+        if not session.connections and manager is not None:
+            await manager.deactivate_session(session_id)
         await websocket.close(code=1011)
 
 
 async def _handle_client_message(session: Session, data: dict[str, Any]) -> None:
     msg_type = data.get("type")
     if msg_type == "run":
+        if manager is not None:
+            await manager.activate_session(session.session_id)
         user_input = str(data.get("input", "")).strip()
         if not user_input:
             await session.broadcast(

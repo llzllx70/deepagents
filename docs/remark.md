@@ -43,8 +43,8 @@ Output file: 2025-2026_A.pptx
 # session
 
 - 创建新页面时会生成session, 生成新对话时也会生成session
-- 加了优化，如果当前会话是空白会话，则复用
 - 如果init 后并不发送消息，多次点击newChat，会产生多个孤立的session
+  + 加了优化，如果当前会话是空白会话，则复用
 - 一个sessionid对应一个wsUrl = ws/session.id
 - 先简单的理解: 一个chat对应一个session
 

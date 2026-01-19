@@ -89,6 +89,36 @@ class DockerSandboxPool:
         )
         await self._ensure_idle(self._config.pool_size)
 
+    async def acquire_for_session(self, session_id: str) -> DockerSandboxBackend:
+        container_id: str | None = None
+        async with self._lock:
+            if self._idle:
+                container_id = self._idle.pop()
+                should_expand = len(self._idle) < self._config.min_idle
+            else:
+                should_expand = self._config.pool_size > 0
+            idle_count = len(self._idle)
+
+        if container_id is not None:
+            await asyncio.to_thread(self._rename_container, container_id, session_id)
+        else:
+            await asyncio.to_thread(self._create_container, name=session_id)
+
+        async with self._lock:
+            self._in_use.add(session_id)
+            in_use_count = len(self._in_use)
+
+        if should_expand:
+            await self._ensure_idle(self._config.pool_size)
+
+        logger.info(
+            "Docker pool acquire session: session_id=%s idle=%s in_use=%s",
+            session_id,
+            idle_count,
+            in_use_count,
+        )
+        return DockerSandboxBackend(session_id, workdir=self._config.workdir)
+
     async def shutdown(self) -> None:
         async with self._lock:
             all_ids = list(self._idle | self._in_use)
@@ -187,8 +217,9 @@ class DockerSandboxPool:
         async with self._lock:
             self._idle.update(created)
 
-    def _create_container(self) -> str:
-        name = f"deepagents-sbx-{self._pool_id}-{uuid.uuid4().hex[:6]}"
+    def _create_container(self, *, name: str | None = None) -> str:
+        if name is None:
+            name = f"deepagents-sbx-{self._pool_id}-{uuid.uuid4().hex[:6]}"
         args = [
             "docker",
             "run",
@@ -213,8 +244,19 @@ class DockerSandboxPool:
             msg = result.stderr.strip() or "Failed to start Docker sandbox."
             raise RuntimeError(msg)
         container_id = result.stdout.strip()
+        self._pause_container(container_id)
         logger.info("Started Docker sandbox %s", container_id)
         return container_id
+
+    def _rename_container(self, container_id: str, new_name: str) -> None:
+        result = subprocess.run(
+            ["docker", "rename", container_id, new_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "Failed to rename Docker sandbox."
+            raise RuntimeError(msg)
 
     def _remove_container(self, container_id: str) -> None:
         result = subprocess.run(
@@ -227,3 +269,16 @@ class DockerSandboxPool:
             logger.warning("Docker sandbox cleanup failed for %s: %s", container_id, msg)
         else:
             logger.info("Removed Docker sandbox %s", container_id)
+
+    def _pause_container(self, container_id: str) -> None:
+        result = subprocess.run(
+            ["docker", "pause", container_id],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "already paused" in stderr.lower():
+                return
+            msg = stderr or "Failed to pause Docker sandbox."
+            raise RuntimeError(msg)

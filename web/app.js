@@ -2102,7 +2102,8 @@ class DeepAgentsClient {
         const activeRunId = this.currentRunId;
         const activeRunChatId = activeRunId ? this.resolveChatIdForRun(activeRunId) : null;
         const hasActiveRun = Boolean(activeRunId && this.isActiveRunStatus(this.currentRunStatus));
-        const viewingBackgroundRun = hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
+        const sameSession = Boolean(chat.sessionId && chat.sessionId === this.sessionId);
+        const viewingBackgroundRun = sameSession && hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
 
         this.resetChatView();
         this.elements.chatTitle.textContent = chat.title || '对话';
@@ -2142,12 +2143,8 @@ class DeepAgentsClient {
         const shouldRequestRunStatus = Boolean(chat.runId && this.isActiveRunStatus(chat.status));
         const requestRunStatusId = shouldRequestRunStatus ? chat.runId : null;
         if (chat.sessionId) {
-            if (viewingBackgroundRun && chat.sessionId !== this.sessionId) {
-                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: requestRunStatusId, chatId: chat.id };
-            } else {
-                this.pendingSessionSwitch = null;
-                this.switchSession(chat.sessionId, { requestRunStatusId });
-            }
+            this.pendingSessionSwitch = null;
+            this.switchSession(chat.sessionId, { requestRunStatusId });
         } else {
             this.pendingSessionSwitch = null;
         }

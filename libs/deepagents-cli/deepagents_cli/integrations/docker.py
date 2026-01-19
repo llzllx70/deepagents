@@ -80,6 +80,37 @@ class DockerSandboxBackend(BaseSandbox):
         output = _combine_output(result.stdout, result.stderr)
         return ExecuteResponse(output=output, exit_code=result.returncode)
 
+    def pause(self) -> None:
+        self._set_pause_state(paused=True)
+
+    def unpause(self) -> None:
+        self._set_pause_state(paused=False)
+
+    def _set_pause_state(self, *, paused: bool) -> None:
+        action = "pause" if paused else "unpause"
+        args = ["docker", action, self._container_id]
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = _combine_output(exc.stdout, exc.stderr)
+            msg = output or f"Timed out trying to {action} Docker sandbox."
+            raise RuntimeError(msg) from exc
+        if result.returncode == 0:
+            return
+        stderr = result.stderr.strip()
+        lowered = stderr.lower()
+        if paused and "already paused" in lowered:
+            return
+        if not paused and "not paused" in lowered:
+            return
+        msg = stderr or f"Failed to {action} Docker sandbox."
+        raise RuntimeError(msg)
+
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         responses: list[FileUploadResponse] = []
         for path, content in files:
