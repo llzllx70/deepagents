@@ -16,6 +16,12 @@ LOG_DIR = ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 WORKSPACE_DIR = ROOT / "workspace"
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR = ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+HISTORY_PATH = DATA_DIR / "chat_history.json"
+SESSION_STATE_PATH = DATA_DIR / "session_state.json"
+_HISTORY_LOCK = asyncio.Lock()
+_SESSION_STATE_LOCK = asyncio.Lock()
 sys.path.insert(0, str(ROOT / "libs" / "deepagents-cli"))
 sys.path.insert(0, str(ROOT / "libs" / "deepagents"))
 
@@ -84,6 +90,16 @@ class ClientLogRequest(BaseModel):
     ts: float | None = None
 
 
+class HistoryPayload(BaseModel):
+    history: list[dict[str, Any]]
+
+
+class SessionStatePayload(BaseModel):
+    session_id: str | None = None
+    has_messages: bool = False
+    timestamp: float | None = None
+
+
 def _is_root_namespace(namespace: object) -> bool:
     if namespace is None:
         return True
@@ -98,6 +114,24 @@ def _truncate_for_log(text: str, limit: int = 2000) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}...(truncated)"
+
+
+async def _read_json_file(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+async def _write_json_file(path: Path, payload: Any) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    await asyncio.to_thread(path.write_text, serialized, encoding="utf-8")
 
 
 @dataclass
@@ -814,6 +848,41 @@ async def delete_session(session_id: str) -> DeleteSessionResponse:
         synced=synced,
         workspace_dir=workspace_dir,
     )
+
+
+@app.get("/history")
+async def get_history() -> dict[str, Any]:
+    async with _HISTORY_LOCK:
+        payload = await _read_json_file(HISTORY_PATH)
+    if not isinstance(payload, list):
+        payload = []
+    return {"history": payload}
+
+
+@app.put("/history")
+async def save_history(payload: HistoryPayload) -> dict[str, str]:
+    async with _HISTORY_LOCK:
+        await _write_json_file(HISTORY_PATH, payload.history)
+    return {"status": "ok"}
+
+
+@app.get("/session_state")
+async def get_session_state() -> dict[str, Any]:
+    async with _SESSION_STATE_LOCK:
+        payload = await _read_json_file(SESSION_STATE_PATH)
+    if not isinstance(payload, dict):
+        payload = {}
+    return payload
+
+
+@app.put("/session_state")
+async def save_session_state(payload: SessionStatePayload) -> dict[str, str]:
+    data = payload.model_dump()
+    if data.get("timestamp") is None:
+        data["timestamp"] = time.time()
+    async with _SESSION_STATE_LOCK:
+        await _write_json_file(SESSION_STATE_PATH, data)
+    return {"status": "ok"}
 
 
 @app.post("/client_logs")

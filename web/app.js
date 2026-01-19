@@ -27,7 +27,7 @@ class DeepAgentsClient {
         this.runStatusElements = new Map(); // Track run status elements by run ID
         this.currentRunStatusElement = null;
         this.sessions = [];
-        this.chatHistory = this.loadHistory();
+        this.chatHistory = [];
         this.todoState = null; // Track last todos to compute progress diffs
         this.activeChatId = null;
         this.runIdToChatId = new Map();
@@ -43,12 +43,6 @@ class DeepAgentsClient {
         this.pendingCancelLogElement = null;
         this.sessionHasMessages = false;
         this.resumeAttempt = false;
-
-        this.chatHistory.forEach(chat => {
-            if (chat && chat.runId) {
-                this.runIdToChatId.set(chat.runId, chat.id);
-            }
-        });
 
         // UI elements
         this.elements = {};
@@ -77,7 +71,8 @@ class DeepAgentsClient {
         // Setup event listeners
         this.setupEventListeners();
 
-        // Load chat history
+        // Load chat history from server
+        await this.loadHistory();
         this.renderHistory();
 
         const navEntry = performance.getEntriesByType('navigation')[0];
@@ -86,7 +81,7 @@ class DeepAgentsClient {
         this.logClient('page_load', { url: window.location.href, navType, action });
 
         // Connect to server
-        if (!this.resumeSessionIfPossible()) {
+        if (!(await this.resumeSessionIfPossible())) {
             await this.createSession();
         }
     }
@@ -1700,19 +1695,20 @@ class DeepAgentsClient {
     setSessionState({ sessionId, hasMessages }) {
         this.sessionHasMessages = Boolean(hasMessages);
         if (sessionId) {
-            localStorage.setItem('deepagents_session_state', JSON.stringify({
-                sessionId,
-                hasMessages: this.sessionHasMessages,
-                timestamp: Date.now()
-            }));
+            this.persistSessionState({
+                session_id: sessionId,
+                has_messages: this.sessionHasMessages,
+                timestamp: Date.now() / 1000
+            });
         }
     }
 
-    loadSessionState() {
-        const stored = localStorage.getItem('deepagents_session_state');
-        if (!stored) return null;
+    async loadSessionState() {
+        if (!this.serverUrl) return null;
         try {
-            const parsed = JSON.parse(stored);
+            const response = await fetch(`${this.serverUrl}/session_state`);
+            if (!response.ok) return null;
+            const parsed = await response.json();
             if (!parsed || typeof parsed !== 'object') return null;
             return parsed;
         } catch {
@@ -1720,20 +1716,22 @@ class DeepAgentsClient {
         }
     }
 
-    resumeSessionIfPossible() {
-        const state = this.loadSessionState();
-        if (!state || !state.sessionId || state.hasMessages) return false;
+    async resumeSessionIfPossible() {
+        const state = await this.loadSessionState();
+        const sessionId = state?.session_id || state?.sessionId || null;
+        const hasMessages = Boolean(state?.has_messages ?? state?.hasMessages);
+        if (!sessionId || hasMessages) return false;
         const hasStoredMessages = this.chatHistory.some(chat => {
-            if (!chat || chat.sessionId !== state.sessionId) return false;
+            if (!chat || chat.sessionId !== sessionId) return false;
             return Array.isArray(chat.messages) && chat.messages.length > 0;
         });
         if (hasStoredMessages) {
-            this.setSessionState({ sessionId: state.sessionId, hasMessages: true });
+            this.setSessionState({ sessionId, hasMessages: true });
             return false;
         }
-        this.setSessionId(state.sessionId);
+        this.setSessionId(sessionId);
         this.resumeAttempt = true;
-        this.logClient('session_resume_attempt', { sessionId: state.sessionId, mode: 'reuse' });
+        this.logClient('session_resume_attempt', { sessionId: sessionId, mode: 'reuse' });
         this.connectWebSocket();
         return true;
     }
@@ -1907,20 +1905,58 @@ class DeepAgentsClient {
     }
 
     // History Management
-    loadHistory() {
-        const stored = localStorage.getItem('deepagents_chat_history');
-        if (!stored) return [];
-        try {
-            const parsed = JSON.parse(stored);
-            if (!Array.isArray(parsed)) return [];
-            return parsed.map(item => this.normalizeHistoryEntry(item)).filter(Boolean);
-        } catch {
-            return [];
+    async loadHistory() {
+        if (!this.serverUrl) {
+            this.chatHistory = [];
+            return this.chatHistory;
         }
+        try {
+            const response = await fetch(`${this.serverUrl}/history`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const payload = await response.json();
+            const raw = Array.isArray(payload?.history) ? payload.history : [];
+            this.chatHistory = raw.map(item => this.normalizeHistoryEntry(item)).filter(Boolean);
+        } catch (error) {
+            console.warn('加载历史失败：', error);
+            this.chatHistory = [];
+        }
+        this.runIdToChatId.clear();
+        this.chatHistory.forEach(chat => {
+            if (chat && chat.runId) {
+                this.runIdToChatId.set(chat.runId, chat.id);
+            }
+        });
+        return this.chatHistory;
     }
 
     saveHistory() {
-        localStorage.setItem('deepagents_chat_history', JSON.stringify(this.chatHistory));
+        this.persistHistory();
+    }
+
+    async persistHistory() {
+        if (!this.serverUrl) return;
+        try {
+            await fetch(`${this.serverUrl}/history`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ history: this.chatHistory })
+            });
+        } catch (error) {
+            console.warn('保存历史失败：', error);
+        }
+    }
+
+    async persistSessionState(payload) {
+        if (!this.serverUrl) return;
+        try {
+            await fetch(`${this.serverUrl}/session_state`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } catch (error) {
+            console.warn('保存会话状态失败：', error);
+        }
     }
 
     collectCurrentMessages() {
