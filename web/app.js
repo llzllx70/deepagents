@@ -278,6 +278,7 @@ class DeepAgentsClient {
         const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
         const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
         this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
+        this.elements.chatTitle.textContent = sessionId;
     }
 
     connectToSession(sessionId, { requestRunStatusId = null } = {}) {
@@ -1628,7 +1629,7 @@ class DeepAgentsClient {
             this.pendingSessionSwitch = null;
             this.updateCancelButton(false);
             this.updateSendButton();
-            this.elements.chatTitle.textContent = '新对话';
+            this.elements.chatTitle.textContent = this.sessionId || '新对话';
             this.elements.welcomeMessage.style.display = 'flex';
             this.logClient('new_chat_reuse_session', { chatId: this.activeChatId, sessionId: this.sessionId, mode: 'reuse' });
             return;
@@ -2142,7 +2143,7 @@ class DeepAgentsClient {
         const viewingBackgroundRun = sameSession && hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
 
         this.resetChatView();
-        this.elements.chatTitle.textContent = chat.title || '对话';
+        this.elements.chatTitle.textContent = chat.sessionId || chat.title || '对话';
         this.activeChatId = chat.id;
         if (!viewingBackgroundRun) {
             this.currentRunId = chat.runId || null;

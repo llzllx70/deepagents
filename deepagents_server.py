@@ -686,13 +686,13 @@ class SessionManager:
         try:
             await asyncio.to_thread(session.sandbox_backend.unpause)
             logger.info(
-                "Session sandbox unpaused: session_id=%s sandbox_id=%s",
+                "Session sandbox run: session_id=%s sandbox_id=%s",
                 session.session_id,
                 session.sandbox_backend.id,
             )
         except Exception as exc:
             logger.warning(
-                "Failed to unpause sandbox for %s: %s",
+                "Failed to run sandbox for %s: %s",
                 session.session_id,
                 exc,
             )
