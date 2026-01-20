@@ -1,0 +1,18 @@
+# Python deps for tools under skills/.
+anthropic==0.75.0
+arxiv==2.3.1
+defusedxml==0.7.1
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+lxml==6.0.2
+matplotlib==3.10.8
+mcp>=1.1.0
+numpy==2.2.6
+openpyxl==3.1.5
+pdf2image
+pillow==12.0.0
+playwright==1.57.0
+pypdf
+pyyaml==6.0.3
+requests==2.32.3
+weasyprint==67.0
