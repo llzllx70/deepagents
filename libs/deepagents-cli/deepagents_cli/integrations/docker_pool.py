@@ -220,6 +220,17 @@ class DockerSandboxPool:
     def _create_container(self, *, name: str | None = None) -> str:
         if name is None:
             name = f"deepagents-sbx-{self._pool_id}-{uuid.uuid4().hex[:6]}"
+        user_skills_root = os.environ.get(
+            "DEEPAGENTS_USER_SKILLS_ROOT", str(Path.home() / ".deepagents")
+        )
+        project_skills_dir = os.environ.get(
+            "DEEPAGENTS_PROJECT_SKILLS_DIR",
+            str(Path.cwd() / ".deepagents" / "skills"),
+        )
+        user_skills_path = Path(user_skills_root).expanduser()
+        project_skills_path = Path(project_skills_dir).expanduser()
+        user_skills_path.mkdir(parents=True, exist_ok=True)
+        project_skills_path.mkdir(parents=True, exist_ok=True)
         args = [
             "docker",
             "run",
@@ -230,6 +241,10 @@ class DockerSandboxPool:
             f"deepagents.pool_id={self._pool_id}",
             "--label",
             "deepagents.managed=1",
+            "-v",
+            f"{user_skills_path}:/user-skills:ro",
+            "-v",
+            f"{project_skills_path}:/skills:ro",
         ]
         if self._config.cpus:
             args += ["--cpus", self._config.cpus]

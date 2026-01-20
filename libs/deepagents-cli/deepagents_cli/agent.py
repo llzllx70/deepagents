@@ -151,14 +151,25 @@ Current datetime: {current_datetime}
 
 """
 
+    if sandbox_type:
+        skills_dir_path = f"/user-skills/{assistant_id}/skills"
+        project_skills_path = "/skills"
+    else:
+        skills_dir_path = f"{agent_dir_path}/skills"
+        project_skills_path = None
+
+    project_skills_line = ""
+    if project_skills_path:
+        project_skills_line = f"Project skills are at: `{project_skills_path}/`\n"
+
     return (
         working_dir_section
         + current_time_section
         + f"""### Skills Directory
 
-Your skills are stored at: `{agent_dir_path}/skills/`
-Skills may contain scripts or supporting files. When executing skill scripts with bash, use the real filesystem path:
-Example: `bash python {agent_dir_path}/skills/web-research/script.py`
+Your skills are stored at: `{skills_dir_path}/`
+{project_skills_line}Skills may contain scripts or supporting files. When executing skill scripts with bash, use the real filesystem path:
+Example: `bash python {skills_dir_path}/web-research/script.py`
 
 ### Human-in-the-Loop Tool Approval
 
@@ -394,6 +405,14 @@ def create_cli_agent(
 
     # Build middleware stack based on enabled features
     agent_middleware = []
+    skills_display_root: str | None = None
+    project_skills_display_root: str | None = None
+
+    if sandbox is not None and enable_skills:
+        if project_skills_dir is not None:
+            project_skills_display_root = "/skills"
+        if skills_dir is not None:
+            skills_display_root = f"/user-skills/{assistant_id}/skills"
 
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
@@ -416,6 +435,8 @@ def create_cli_agent(
                     skills_dir=skills_dir,
                     assistant_id=assistant_id,
                     project_skills_dir=project_skills_dir,
+                    skills_display_root=skills_display_root,
+                    project_skills_display_root=project_skills_display_root,
                 )
             )
 
@@ -447,6 +468,8 @@ def create_cli_agent(
                     skills_dir=skills_dir,
                     assistant_id=assistant_id,
                     project_skills_dir=project_skills_dir,
+                    skills_display_root=skills_display_root,
+                    project_skills_display_root=project_skills_display_root,
                 )
             )
 

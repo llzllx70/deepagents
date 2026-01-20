@@ -116,6 +116,8 @@ class SkillsMiddleware(AgentMiddleware):
         skills_dir: Path to the user-level skills directory (per-agent).
         assistant_id: The agent identifier for path references in prompts.
         project_skills_dir: Optional path to project-level skills directory.
+        skills_display_root: Optional virtual root to display for user skills.
+        project_skills_display_root: Optional virtual root to display for project skills.
     """
 
     state_schema = SkillsState
@@ -126,6 +128,8 @@ class SkillsMiddleware(AgentMiddleware):
         skills_dir: str | Path,
         assistant_id: str,
         project_skills_dir: str | Path | None = None,
+        skills_display_root: str | None = None,
+        project_skills_display_root: str | None = None,
     ) -> None:
         """Initialize the skills middleware.
 
@@ -133,6 +137,8 @@ class SkillsMiddleware(AgentMiddleware):
             skills_dir: Path to the user-level skills directory.
             assistant_id: The agent identifier.
             project_skills_dir: Optional path to the project-level skills directory.
+            skills_display_root: Optional virtual root for user skills paths.
+            project_skills_display_root: Optional virtual root for project skills paths.
         """
         self.skills_dir = Path(skills_dir).expanduser()
         self.assistant_id = assistant_id
@@ -140,24 +146,61 @@ class SkillsMiddleware(AgentMiddleware):
             Path(project_skills_dir).expanduser() if project_skills_dir else None
         )
         # Store display paths for prompts
-        self.user_skills_display = f"~/.deepagents/{assistant_id}/skills"
+        self.skills_dir_display = (
+            skills_display_root or f"~/.deepagents/{assistant_id}/skills"
+        )
+        self.project_skills_display = (
+            project_skills_display_root
+            if project_skills_display_root
+            else str(self.project_skills_dir) if self.project_skills_dir else None
+        )
+        self.skills_dir_absolute = str(self.skills_dir)
+        self._skills_display_root = skills_display_root
+        self._project_skills_display_root = project_skills_display_root
         self.system_prompt_template = SKILLS_SYSTEM_PROMPT
 
     def _format_skills_locations(self) -> str:
         """Format skills locations for display in system prompt."""
-        locations = [f"**User Skills**: `{self.user_skills_display}`"]
+        locations = [f"**User Skills**: `{self.skills_dir_display}`"]
         if self.project_skills_dir:
+            project_display = (
+                self.project_skills_display or str(self.project_skills_dir)
+            )
             locations.append(
-                f"**Project Skills**: `{self.project_skills_dir}` (overrides user skills)"
+                f"**Project Skills**: `{project_display}` (overrides user skills)"
             )
         return "\n".join(locations)
+
+    def _format_skill_path(self, skill: SkillMetadata) -> str:
+        """Map host skill paths to virtual display paths when configured."""
+        if skill["source"] == "user":
+            base_dir = self.skills_dir
+            display_root = self._skills_display_root
+        else:
+            base_dir = self.project_skills_dir
+            display_root = self._project_skills_display_root
+
+        if not display_root or base_dir is None:
+            return skill["path"]
+
+        try:
+            rel_path = Path(skill["path"]).resolve().relative_to(base_dir.resolve())
+        except (ValueError, OSError):
+            return skill["path"]
+
+        rel_str = rel_path.as_posix()
+        root = display_root.rstrip("/")
+        return f"{root}/{rel_str}" if rel_str else root
 
     def _format_skills_list(self, skills: list[SkillMetadata]) -> str:
         """Format skills metadata for display in system prompt."""
         if not skills:
-            locations = [f"{self.user_skills_display}/"]
+            locations = [f"{self.skills_dir_display}/"]
             if self.project_skills_dir:
-                locations.append(f"{self.project_skills_dir}/")
+                project_display = (
+                    self.project_skills_display or str(self.project_skills_dir)
+                )
+                locations.append(f"{project_display}/")
             return f"(No skills available yet. You can create skills in {' or '.join(locations)})"
 
         # Group skills by source
@@ -171,7 +214,8 @@ class SkillsMiddleware(AgentMiddleware):
             lines.append("**User Skills:**")
             for skill in user_skills:
                 lines.append(f"- **{skill['name']}**: {skill['description']}")
-                lines.append(f"  → Read `{skill['path']}` for full instructions")
+                skill_path = self._format_skill_path(skill)
+                lines.append(f"  → Read `{skill_path}` for full instructions")
             lines.append("")
 
         # Show project skills
@@ -179,7 +223,8 @@ class SkillsMiddleware(AgentMiddleware):
             lines.append("**Project Skills:**")
             for skill in project_skills:
                 lines.append(f"- **{skill['name']}**: {skill['description']}")
-                lines.append(f"  → Read `{skill['path']}` for full instructions")
+                skill_path = self._format_skill_path(skill)
+                lines.append(f"  → Read `{skill_path}` for full instructions")
 
         return "\n".join(lines)
 

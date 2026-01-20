@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -60,6 +61,13 @@ if not any(isinstance(handler, logging.FileHandler) for handler in client_logger
         logging.Formatter("%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d - %(message)s")
     )
     client_logger.addHandler(_client_handler)
+
+os.environ.setdefault(
+    "DEEPAGENTS_PROJECT_SKILLS_DIR", str(ROOT / ".deepagents" / "skills")
+)
+os.environ.setdefault(
+    "DEEPAGENTS_USER_SKILLS_ROOT", str(settings.user_deepagents_dir)
+)
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
