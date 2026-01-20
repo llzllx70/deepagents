@@ -169,7 +169,7 @@ Current datetime: {current_datetime}
 
 Your skills are stored at: `{skills_dir_path}/`
 {project_skills_line}Skills may contain scripts or supporting files. When executing skill scripts with bash, use the real filesystem path:
-Example: `bash python {skills_dir_path}/web-research/script.py`
+Example: `bash -lc "python3 {skills_dir_path}/web-research/script.py"`
 
 ### Human-in-the-Loop Tool Approval
 

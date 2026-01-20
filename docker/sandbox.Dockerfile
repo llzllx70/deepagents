@@ -20,6 +20,15 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire
     git \
     vim \
     fonts-noto-cjk \
+    libcairo2 \
+    libffi8 \
+    libgdk-pixbuf-2.0-0 \
+    libglib2.0-0 \
+    libharfbuzz0b \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libxml2 \
+    libxslt1.1 \
     ca-certificates \
     gnupg \
     lsb-release \

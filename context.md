@@ -137,7 +137,7 @@ The filesystem backend is currently operating in: `/Users/double/vsproject/deepa
 
 Your skills are stored at: `~/.deepagents/agent/skills/`
 Skills may contain scripts or supporting files. When executing skill scripts with bash, use the real filesystem path:
-Example: `bash python ~/.deepagents/agent/skills/web-research/script.py`
+Example: `bash -lc "python3 ~/.deepagents/agent/skills/web-research/script.py"`
 
 ### Human-in-the-Loop Tool Approval
 
