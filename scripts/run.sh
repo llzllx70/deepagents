@@ -110,7 +110,7 @@ print_header() {
 
 interactive_interrupt() {
   INTERRUPTED=1
-  echo
+  echo >&2
 }
 
 enable_interactive_trap() {
@@ -247,125 +247,157 @@ do_action() {
   echo "Done: action=$ACTION target=$TARGET model=$MODEL"
 }
 
-prompt_action() {
+prompt_primary_action() {
+  local result_var="$1"
+  local choice=""
   while true; do
-    echo "Select action: [1] start [2] stop [3] restart [4] show process [5] show log (default: start)"
-    read -r choice || true
+    echo "Select action: [1] show [2] restart [3] start [4] stop [0] exit (default: show)" >&2
+    if ! read_with_interrupt choice; then
+      return 1
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
     case "${choice:-1}" in
-      1|start) echo "start"; return ;;
-      2|stop) echo "stop"; return ;;
-      3|restart) echo "restart"; return ;;
-      4|process) echo "process"; return ;;
-      5|log) echo "log"; return ;;
-      *) echo "Invalid action, try again." ;;
+      1|show) printf -v "$result_var" "%s" "show"; return 0 ;;
+      2|restart) printf -v "$result_var" "%s" "restart"; return 0 ;;
+      3|start) printf -v "$result_var" "%s" "start"; return 0 ;;
+      4|stop) printf -v "$result_var" "%s" "stop"; return 0 ;;
+      0|exit|quit) printf -v "$result_var" "%s" "exit"; return 0 ;;
+      *) echo "Invalid action, try again." >&2 ;;
+    esac
+  done
+}
+
+prompt_show_kind() {
+  local result_var="$1"
+  local choice=""
+  while true; do
+    echo "Select show type: [1] process [2] log (default: process)" >&2
+    if ! read_with_interrupt choice; then
+      return 1
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
+    case "${choice:-1}" in
+      1|process) printf -v "$result_var" "%s" "process"; return 0 ;;
+      2|log) printf -v "$result_var" "%s" "log"; return 0 ;;
+      *) echo "Invalid show type, try again." >&2 ;;
     esac
   done
 }
 
 prompt_target() {
+  local result_var="$1"
+  local choice=""
   while true; do
-    echo "Select target: [1] all [2] server [3] web (default: all)"
-    read -r choice || true
+    echo "Select target: [1] server [2] web [3] all (default: server)" >&2
+    if ! read_with_interrupt choice; then
+      return 1
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
     case "${choice:-1}" in
-      1|all) echo "all"; return ;;
-      2|server) echo "server"; return ;;
-      3|web) echo "web"; return ;;
-      *) echo "Invalid target, try again." ;;
+      1|server) printf -v "$result_var" "%s" "server"; return 0 ;;
+      2|web) printf -v "$result_var" "%s" "web"; return 0 ;;
+      3|all) printf -v "$result_var" "%s" "all"; return 0 ;;
+      *) echo "Invalid target, try again." >&2 ;;
     esac
   done
 }
 
 prompt_model() {
+  local result_var="$1"
+  local choice=""
   while true; do
-    echo "Select model: [1] glm [2] qwen (default: glm)"
-    read -r choice || true
+    echo "Select model: [1] glm [2] qwen (default: glm)" >&2
+    if ! read_with_interrupt choice; then
+      return 1
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
     case "${choice:-1}" in
-      1|glm) echo "glm"; return ;;
-      2|qwen) echo "qwen"; return ;;
-      *) echo "Invalid model, try again." ;;
+      1|glm) printf -v "$result_var" "%s" "glm"; return 0 ;;
+      2|qwen) printf -v "$result_var" "%s" "qwen"; return 0 ;;
+      *) echo "Invalid model, try again." >&2 ;;
     esac
   done
-}
-
-print_menu() {
-  cat <<'EOF'
-Select a quick action:
-  1) start all (glm)
-  2) start all (qwen)
-  3) restart all (glm)
-  4) restart all (qwen)
-  5) stop all
-  6) start server (glm)
-  7) start server (qwen)
-  8) restart server (glm)
-  9) restart server (qwen)
- 10) stop server
- 11) start web
- 12) restart web
- 13) stop web
- 14) show process (all)
- 15) show process (server)
- 16) show process (web)
- 17) show log (all)
- 18) show log (server)
- 19) show log (web)
- 20) custom
-  0) exit
-EOF
 }
 
 interactive_menu() {
-  print_menu
-  while true; do
-    choice=""
-    if ! read -r -p "Choice: " choice; then
-      if [ "${INTERRUPTED:-0}" -eq 1 ]; then
-        INTERRUPTED=0
-        print_menu
+  local primary=""
+  if ! prompt_primary_action primary; then
+    return 1
+  fi
+  case "$primary" in
+    exit)
+      echo "Exit."
+      exit 0
+      ;;
+    show)
+      if ! prompt_show_kind ACTION; then
+        return 1
       fi
-      continue
-    fi
-    case "$choice" in
-      1) ACTION="start"; TARGET="all"; MODEL="glm"; break ;;
-      2) ACTION="start"; TARGET="all"; MODEL="qwen"; break ;;
-      3) ACTION="restart"; TARGET="all"; MODEL="glm"; break ;;
-      4) ACTION="restart"; TARGET="all"; MODEL="qwen"; break ;;
-      5) ACTION="stop"; TARGET="all"; MODEL="glm"; break ;;
-      6) ACTION="start"; TARGET="server"; MODEL="glm"; break ;;
-      7) ACTION="start"; TARGET="server"; MODEL="qwen"; break ;;
-      8) ACTION="restart"; TARGET="server"; MODEL="glm"; break ;;
-      9) ACTION="restart"; TARGET="server"; MODEL="qwen"; break ;;
-      10) ACTION="stop"; TARGET="server"; MODEL="glm"; break ;;
-      11) ACTION="start"; TARGET="web"; MODEL="glm"; break ;;
-      12) ACTION="restart"; TARGET="web"; MODEL="glm"; break ;;
-      13) ACTION="stop"; TARGET="web"; MODEL="glm"; break ;;
-      14) ACTION="process"; TARGET="all"; MODEL="glm"; break ;;
-      15) ACTION="process"; TARGET="server"; MODEL="glm"; break ;;
-      16) ACTION="process"; TARGET="web"; MODEL="glm"; break ;;
-      17) ACTION="log"; TARGET="all"; MODEL="glm"; break ;;
-      18) ACTION="log"; TARGET="server"; MODEL="glm"; break ;;
-      19) ACTION="log"; TARGET="web"; MODEL="glm"; break ;;
-      20)
-        ACTION="$(prompt_action)"
-        TARGET="$(prompt_target)"
-        MODEL="$(prompt_model)"
-        break
-        ;;
-      0|exit|quit)
-        echo "Exit."
-        exit 0
-        ;;
-      *)
-        echo "Invalid choice, try again."
-        ;;
-    esac
-  done
+      if ! prompt_target TARGET; then
+        return 1
+      fi
+      MODEL="glm"
+      ;;
+    restart|start)
+      ACTION="$primary"
+      if ! prompt_target TARGET; then
+        return 1
+      fi
+      if ! prompt_model MODEL; then
+        return 1
+      fi
+      ;;
+    stop)
+      ACTION="stop"
+      if ! prompt_target TARGET; then
+        return 1
+      fi
+      MODEL="glm"
+      ;;
+  esac
+  return 0
 }
 
 ACTION=""
 TARGET=""
 MODEL=""
 INTERRUPTED=0
+READ_TIMEOUT=1
+if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
+  READ_TIMEOUT="0.2"
+fi
+
+read_with_interrupt() {
+  local result_var="$1"
+  local input=""
+  while true; do
+    input=""
+    if read -r -t "$READ_TIMEOUT" input; then
+      printf -v "$result_var" "%s" "$input"
+      return 0
+    fi
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
+  done
+}
 
 if [ "$#" -gt 0 ]; then
   ACTION="$1"
@@ -377,6 +409,11 @@ fi
 
 enable_interactive_trap
 while true; do
-  interactive_menu
+  ACTION=""
+  TARGET=""
+  MODEL=""
+  if ! interactive_menu; then
+    continue
+  fi
   do_action
 done
