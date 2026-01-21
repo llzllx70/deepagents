@@ -2400,6 +2400,38 @@ class DeepAgentsClient {
         return pathValue.split('/').map(encodeURIComponent).join('/');
     }
 
+    getSessionIdForDownload() {
+        return this.viewOnlySessionId || this.sessionId || null;
+    }
+
+    normalizeDownloadRelativePath(relative) {
+        if (!relative) return null;
+        const cleaned = relative.replace(/^\/+/, '');
+        if (!cleaned || cleaned.split('/').some(part => part === '..')) return null;
+        const sessionId = this.getSessionIdForDownload();
+        if (!sessionId) return cleaned;
+        if (cleaned === sessionId || cleaned.startsWith(`${sessionId}/`)) return cleaned;
+        return `${sessionId}/${cleaned}`;
+    }
+
+    getFilesRelativePath(rawPath) {
+        if (rawPath == null) return null;
+        let cleaned = String(rawPath).trim();
+        cleaned = cleaned.replace(/^["'`]+|["'`]+$/g, '');
+        if (!cleaned) return null;
+
+        const normalized = cleaned.replace(/\\/g, '/');
+        const withoutQuery = normalized.split(/[?#]/)[0];
+        const lower = withoutQuery.toLowerCase();
+        const filesToken = '/files/';
+        const idx = lower.lastIndexOf(filesToken);
+        if (idx === -1) return null;
+        let relative = withoutQuery.slice(idx + filesToken.length);
+        relative = relative.replace(/^\/+/, '');
+        if (!relative || relative.split('/').some(part => part === '..')) return null;
+        return relative;
+    }
+
     getWorkspaceRelativePath(rawPath) {
         if (rawPath == null) return null;
         let cleaned = String(rawPath).trim();
@@ -2441,9 +2473,11 @@ class DeepAgentsClient {
     }
 
     getDownloadUrl(rawPath) {
-        const relative = this.getWorkspaceRelativePath(rawPath);
+        const relative = this.getFilesRelativePath(rawPath) || this.getWorkspaceRelativePath(rawPath);
         if (!relative) return null;
-        return `${this.serverUrl}/files/${this.encodePathSegments(relative)}`;
+        const normalized = this.normalizeDownloadRelativePath(relative);
+        if (!normalized) return null;
+        return `${this.serverUrl}/files/${this.encodePathSegments(normalized)}`;
     }
 
     linkifyWorkspacePaths(text) {
@@ -2467,13 +2501,12 @@ class DeepAgentsClient {
         const downloadPattern = /下载[:：]\s*\/files\/[^\s'"<>),]+/g;
         processed = processed.replace(downloadPattern, (match) => {
             const rawPath = match.replace(/^下载[:：]\s*/, '');
-            const normalized = rawPath.replace(/\\/g, '/');
-            const filesPrefix = '/files/';
-            if (!normalized.startsWith(filesPrefix)) return match;
-            const relative = normalized.slice(filesPrefix.length);
+            const relative = this.getFilesRelativePath(rawPath);
             if (!relative) return match;
-            const url = `${this.serverUrl}${filesPrefix}${this.encodePathSegments(relative)}`;
-            const label = `下载：${getFileLabel(normalized)}`;
+            const normalized = this.normalizeDownloadRelativePath(relative);
+            if (!normalized) return match;
+            const url = `${this.serverUrl}/files/${this.encodePathSegments(normalized)}`;
+            const label = `下载：${getFileLabel(rawPath)}`;
             const token = `${linkPlaceholderPrefix}${linkBlocks.length}__`;
             linkBlocks.push(`[${label}](${url})`);
             return token;

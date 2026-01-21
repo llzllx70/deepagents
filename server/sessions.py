@@ -618,7 +618,7 @@ class SessionManager:
             logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
-        sandbox_backend = await self._pool.acquire_for_session(session_id)
+        sandbox_backend = await self._pool.acquire_for_session(session_id, workspace_dir)
         logger.info(
             "Session sandbox acquired: session_id=%s sandbox_id=%s",
             session_id,
@@ -665,8 +665,13 @@ class SessionManager:
         try:
             await session.shutdown()
             if isinstance(session.sandbox_backend, DockerSandboxBackend):
-                await self._pool.sync_workspace(session.sandbox_backend, session.workspace_dir)
-                synced = True
+                if self._pool.config.bind_workspace:
+                    synced = True
+                else:
+                    await self._pool.sync_workspace(
+                        session.sandbox_backend, session.workspace_dir
+                    )
+                    synced = True
         except Exception as exc:
             logger.warning("Failed to sync workspace for %s: %s", session_id, exc)
         finally:

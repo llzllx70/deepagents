@@ -25,6 +25,7 @@ class DockerPoolConfig:
     cpus: str | None = None
     memory: str | None = None
     pids_limit: str | None = None
+    bind_workspace: bool = False
 
     @classmethod
     def from_env(cls) -> "DockerPoolConfig":
@@ -37,6 +38,12 @@ class DockerPoolConfig:
             except ValueError:
                 return default
 
+        def _bool_from_env(name: str, default: bool) -> bool:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+
         image = os.environ.get(
             "DEEPAGENTS_DOCKER_IMAGE", "deepagents-sandbox:22.04"
         )
@@ -46,6 +53,7 @@ class DockerPoolConfig:
         cpus = os.environ.get("DEEPAGENTS_DOCKER_CPUS")
         memory = os.environ.get("DEEPAGENTS_DOCKER_MEMORY")
         pids_limit = os.environ.get("DEEPAGENTS_DOCKER_PIDS_LIMIT")
+        bind_workspace = _bool_from_env("DEEPAGENTS_DOCKER_BIND_WORKSPACE", False)
 
         if pool_size < 1:
             pool_size = 1
@@ -62,6 +70,7 @@ class DockerPoolConfig:
             cpus=cpus,
             memory=memory,
             pids_limit=pids_limit,
+            bind_workspace=bind_workspace,
         )
 
 
@@ -82,14 +91,37 @@ class DockerSandboxPool:
     async def start(self) -> None:
         await asyncio.to_thread(ensure_docker_available)
         logger.info(
-            "Docker pool startup: image=%s pool_size=%s min_idle=%s",
+            "Docker pool startup: image=%s pool_size=%s min_idle=%s bind_workspace=%s",
             self._config.image,
             self._config.pool_size,
             self._config.min_idle,
+            self._config.bind_workspace,
         )
+        if self._config.bind_workspace:
+            logger.info("Docker pool bind_workspace enabled; skipping idle warmup")
+            return
         await self._ensure_idle(self._config.pool_size)
 
-    async def acquire_for_session(self, session_id: str) -> DockerSandboxBackend:
+    async def acquire_for_session(
+        self, session_id: str, workspace_dir: Path | None = None
+    ) -> DockerSandboxBackend:
+        if self._config.bind_workspace:
+            if workspace_dir is None:
+                msg = "workspace_dir required when bind_workspace is enabled."
+                raise RuntimeError(msg)
+            await asyncio.to_thread(
+                self._create_container, name=session_id, workspace_dir=workspace_dir
+            )
+            async with self._lock:
+                self._in_use.add(session_id)
+                in_use_count = len(self._in_use)
+            logger.info(
+                "Docker pool acquire session (bind workspace): session_id=%s in_use=%s",
+                session_id,
+                in_use_count,
+            )
+            return DockerSandboxBackend(session_id, workdir=self._config.workdir)
+
         container_id: str | None = None
         async with self._lock:
             if self._idle:
@@ -129,6 +161,10 @@ class DockerSandboxPool:
             await asyncio.to_thread(self._remove_container, container_id)
 
     async def acquire(self) -> DockerSandboxBackend:
+        if self._config.bind_workspace:
+            msg = "Docker pool bind_workspace enabled; use acquire_for_session instead."
+            raise RuntimeError(msg)
+
         async with self._lock:
             has_idle = bool(self._idle)
 
@@ -158,6 +194,21 @@ class DockerSandboxPool:
 
     async def release(self, backend: DockerSandboxBackend) -> None:
         container_id = backend.id
+        if self._config.bind_workspace:
+            async with self._lock:
+                if container_id in self._in_use:
+                    self._in_use.remove(container_id)
+                idle_count = len(self._idle)
+                in_use_count = len(self._in_use)
+            logger.info(
+                "Docker pool release (bind workspace): container_id=%s idle=%s in_use=%s",
+                container_id,
+                idle_count,
+                in_use_count,
+            )
+            await asyncio.to_thread(self._remove_container, container_id)
+            return
+
         extra_ids: list[str] = []
         async with self._lock:
             if container_id in self._in_use:
@@ -198,6 +249,8 @@ class DockerSandboxPool:
             in_use_count,
         )
         await asyncio.to_thread(self._remove_container, container_id)
+        if self._config.bind_workspace:
+            return
         if idle_count < self._config.min_idle:
             await self._ensure_idle(self._config.pool_size)
 
@@ -205,6 +258,8 @@ class DockerSandboxPool:
         await asyncio.to_thread(backend.copy_workspace_to_host, target_dir)
 
     async def _ensure_idle(self, target: int) -> None:
+        if self._config.bind_workspace:
+            return
         async with self._lock:
             missing = max(0, target - len(self._idle))
         if missing <= 0:
@@ -217,7 +272,9 @@ class DockerSandboxPool:
         async with self._lock:
             self._idle.update(created)
 
-    def _create_container(self, *, name: str | None = None) -> str:
+    def _create_container(
+        self, *, name: str | None = None, workspace_dir: Path | None = None
+    ) -> str:
         if name is None:
             name = f"deepagents-sbx-{self._pool_id}-{uuid.uuid4().hex[:6]}"
         user_skills_root = os.environ.get(
@@ -246,6 +303,9 @@ class DockerSandboxPool:
             "-v",
             f"{project_skills_path}:/skills:ro",
         ]
+        if workspace_dir is not None:
+            workspace_path = workspace_dir.resolve()
+            args += ["-v", f"{workspace_path}:{self._config.workdir}"]
         if self._config.cpus:
             args += ["--cpus", self._config.cpus]
         if self._config.memory:
