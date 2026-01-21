@@ -69,6 +69,18 @@ ensure_logs() {
   mkdir -p logs
 }
 
+start_detached() {
+  local label="$1"
+  local log_file="$2"
+  shift 2
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "$@" > "$log_file" 2>&1 < /dev/null &
+  else
+    nohup bash -c 'trap "" INT HUP; exec "$@"' bash "$@" > "$log_file" 2>&1 < /dev/null &
+  fi
+  echo "$label started: pid=$!"
+}
+
 stop_server() {
   echo "Stopping server..."
   pkill -f "server.deepagents_server" >/dev/null 2>&1 || true
@@ -83,38 +95,22 @@ start_server() {
   ensure_logs
   set_model_env
   echo "Starting server (model=$MODEL, openai_model=$OPENAI_MODEL)..."
-  nohup python -m server.deepagents_server > logs/server.log 2>&1 &
-  echo "Server started: pid=$!"
+  start_detached "Server" "logs/server.log" python -m server.deepagents_server
 }
 
 start_web() {
   ensure_logs
   echo "Starting web..."
-  (
-    cd web
-    nohup python -m http.server 8080 > ../logs/web.log 2>&1 &
-    echo "Web started: pid=$!"
-  )
+  start_detached "Web" "logs/web.log" bash -c 'cd web && exec python -m http.server 8080'
 }
 
 print_header() {
   echo "【$1】"
 }
 
-print_model_config() {
-  print_header "Model Config"
-  echo "  glm: OPENAI_MODEL=$GLM_OPENAI_MODEL"
-  echo "       OPENAI_BASE_URL=$GLM_OPENAI_BASE_URL"
-  echo "       LANGCHAIN_PROJECT=$GLM_LANGCHAIN_PROJECT"
-  echo "  qwen: OPENAI_MODEL=$QWEN_OPENAI_MODEL"
-  echo "        OPENAI_BASE_URL=$QWEN_OPENAI_BASE_URL"
-  echo "        LANGCHAIN_PROJECT=$QWEN_LANGCHAIN_PROJECT"
-}
-
 interactive_interrupt() {
+  INTERRUPTED=1
   echo
-  print_header "提示"
-  echo "已返回主菜单"
 }
 
 enable_interactive_trap() {
@@ -131,7 +127,6 @@ show_server_process() {
   else
     echo "  not running"
   fi
-  print_model_config
 }
 
 show_web_process() {
@@ -292,7 +287,7 @@ prompt_model() {
   done
 }
 
-interactive_menu() {
+print_menu() {
   cat <<'EOF'
 Select a quick action:
   1) start all (glm)
@@ -317,9 +312,19 @@ Select a quick action:
  20) custom
   0) exit
 EOF
+}
 
+interactive_menu() {
+  print_menu
   while true; do
-    read -r -p "Choice: " choice || true
+    choice=""
+    if ! read -r -p "Choice: " choice; then
+      if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+        INTERRUPTED=0
+        print_menu
+      fi
+      continue
+    fi
     case "$choice" in
       1) ACTION="start"; TARGET="all"; MODEL="glm"; break ;;
       2) ACTION="start"; TARGET="all"; MODEL="qwen"; break ;;
@@ -360,6 +365,7 @@ EOF
 ACTION=""
 TARGET=""
 MODEL=""
+INTERRUPTED=0
 
 if [ "$#" -gt 0 ]; then
   ACTION="$1"
