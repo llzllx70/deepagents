@@ -152,3 +152,25 @@ Output file: 2025-2026_A.pptx
 
 - 暂不完善历史记录方面的切换逻辑，先验证docker sandbox 在文件处理方面的一致性
 
+
+
+```
+handleToolCallStarted(data) {
+    const { tool_name, args, tool_call_id } = data;
+
+    this.logClient('tool_call_started', { data: data });
+
+app.js 中添加日志后打印：
+
+下面是qwen:
+1825 2026-01-21 09:48:01,514 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960081.96,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "write_file", "tool_call_id": "call_095f85a60ee747d7bf4dc971", "args": {}}}}
+1826 2026-01-21 09:48:18,669 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960099.116,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "execute", "tool_call_id": "call_1a53b64dfb8346599663ba89", "args": {}}}}
+1827 2026-01-21 09:48:25,077 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960105.529,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "execute", "tool_call_id": "call_0474983375d241d1ac3cb0d5", "args": {}}}}
+
+说明web端收到的全是 args: {}
+
+如下是glm
+2026-01-21 09:56:44,120 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960604.581, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "read_file", "tool_call_id": "call_f2fdca99e0484e75ad1d3345", "args": {"file_path": "/skills/html2pdf/SKILL.md"}}}}
+2026-01-21 09:56:59,905 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960620.36, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "write_file", "tool_call_id": "call_8ae3da62efcd4030847d803f", "args": {"file_path": "/workspace/random_page.html", "content": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>示例页面</title>\n    <style>\n        body {\n            font-family: \"PingFang SC\", \"Microsoft YaHei\", sans-serif;\n            line-height: 1.6;\n            max-width: 800px;\n            margin: 0 auto;\n            padding: 40px 20px;\n            color: #333;\n        }\n        h1 {\n            color: #2c3e50;\n            border-bottom: 3px solid #3498db;\n            padding-bottom: 10px;\n        }\n        .box {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 30px;\n            border-radius: 10px;\n            margin: 20px 0;\n            box-shadow: 0 4px 6px rgba(0,0,0,0.1);\n        }\n        ul {\n            background: #f8f9fa;\n            padding: 20px 40px;\n            border-radius: 8px;\n        }\n        li {\n            margin: 10px 0;\n        }\n        .footer {\n            text-align: center;\n            margin-top: 50px;\n            color: #7f8c8d;\n            font-size: 14px;\n        }\n    </style>\n</head>\n<body>\n    <h1>欢迎来到示例页面</h1>\n    \n    <div class=\"box\">\n        <h2>这是一个随机生成的页面</h2>\n        <p>创建时间：2026年1月21日</p>\n    </div>\n    \n    <h3>页面特点：</h3>\n    <ul>\n        <li>✨ 简洁美观的设计风格</li>\n        <li>🎨 渐变色彩的装饰元素</li>\n        <li>📝 中文字体支持</li>\n        <li>🚀 快速转换为 PDF</li>\n    </ul>\n    \n    <p>这是一个使用 HTML 和 CSS 创建的示例页面，包含了标题、列表、渐变背景和响应式设计。现在它将被转换为 PDF 文件，方便下载和分享。</p>\n    \n    <div class=\"footer\">\n        <p>由 AI 生成 • HTML 转 PDF 示例</p>\n    </div>\n</body>\n</html>\n"}}}}
+2026-01-21 09:57:02,702 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960623.158, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "execute", "tool_call_id": "call_6312bd5a90264c74b93de1a3", "args": {"command": "python3 /skills/html2pdf/scripts/html2pdf.py /workspace/random_page.html /workspace/random_page.pdf"}}}}
+```

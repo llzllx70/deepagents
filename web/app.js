@@ -491,6 +491,9 @@ class DeepAgentsClient {
     }
 
     handleMessage(data) {
+
+        this.logClient('ws_message_received', { data });
+
         const eventType = data.type;
 
         switch (eventType) {
@@ -686,6 +689,9 @@ class DeepAgentsClient {
 
     handleToolCallStarted(data) {
         const { tool_name, args, tool_call_id } = data;
+
+        this.logClient('tool_call_started', { data: data });
+
         const runId = data.run_id || this.currentRunId || 'default';
         const state = this.getRunState(runId);
         this.closeAssistantSegment(state);
