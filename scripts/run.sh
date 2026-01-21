@@ -249,9 +249,10 @@ do_action() {
 
 prompt_primary_action() {
   local result_var="$1"
+  local indent="$2"
   local choice=""
   while true; do
-    echo "Select action: [1] show [2] restart [3] start [4] stop [0] exit (default: show)" >&2
+    echo "${indent}Select action: [1] show [2] restart [3] start [4] stop [0] exit (default: show)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -266,16 +267,17 @@ prompt_primary_action() {
       3|start) printf -v "$result_var" "%s" "start"; return 0 ;;
       4|stop) printf -v "$result_var" "%s" "stop"; return 0 ;;
       0|exit|quit) printf -v "$result_var" "%s" "exit"; return 0 ;;
-      *) echo "Invalid action, try again." >&2 ;;
+      *) echo "${indent}Invalid action, try again." >&2 ;;
     esac
   done
 }
 
 prompt_show_kind() {
   local result_var="$1"
+  local indent="$2"
   local choice=""
   while true; do
-    echo "Select show type: [1] process [2] log (default: process)" >&2
+    echo "${indent}Select show type: [1] process [2] log (default: process)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -287,16 +289,17 @@ prompt_show_kind() {
     case "${choice:-1}" in
       1|process) printf -v "$result_var" "%s" "process"; return 0 ;;
       2|log) printf -v "$result_var" "%s" "log"; return 0 ;;
-      *) echo "Invalid show type, try again." >&2 ;;
+      *) echo "${indent}Invalid show type, try again." >&2 ;;
     esac
   done
 }
 
 prompt_target() {
   local result_var="$1"
+  local indent="$2"
   local choice=""
   while true; do
-    echo "Select target: [1] server [2] web [3] all (default: server)" >&2
+    echo "${indent}Select target: [1] server [2] web [3] all (default: server)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -309,16 +312,17 @@ prompt_target() {
       1|server) printf -v "$result_var" "%s" "server"; return 0 ;;
       2|web) printf -v "$result_var" "%s" "web"; return 0 ;;
       3|all) printf -v "$result_var" "%s" "all"; return 0 ;;
-      *) echo "Invalid target, try again." >&2 ;;
+      *) echo "${indent}Invalid target, try again." >&2 ;;
     esac
   done
 }
 
 prompt_model() {
   local result_var="$1"
+  local indent="$2"
   local choice=""
   while true; do
-    echo "Select model: [1] glm [2] qwen (default: glm)" >&2
+    echo "${indent}Select model: [1] glm [2] qwen (default: glm)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -330,14 +334,14 @@ prompt_model() {
     case "${choice:-1}" in
       1|glm) printf -v "$result_var" "%s" "glm"; return 0 ;;
       2|qwen) printf -v "$result_var" "%s" "qwen"; return 0 ;;
-      *) echo "Invalid model, try again." >&2 ;;
+      *) echo "${indent}Invalid model, try again." >&2 ;;
     esac
   done
 }
 
 interactive_menu() {
   local primary=""
-  if ! prompt_primary_action primary; then
+  if ! prompt_primary_action primary "$INDENT_L1"; then
     return 1
   fi
   case "$primary" in
@@ -346,26 +350,26 @@ interactive_menu() {
       exit 0
       ;;
     show)
-      if ! prompt_show_kind ACTION; then
+      if ! prompt_show_kind ACTION "$INDENT_L2"; then
         return 1
       fi
-      if ! prompt_target TARGET; then
+      if ! prompt_target TARGET "$INDENT_L3"; then
         return 1
       fi
       MODEL="glm"
       ;;
     restart|start)
       ACTION="$primary"
-      if ! prompt_target TARGET; then
+      if ! prompt_target TARGET "$INDENT_L2"; then
         return 1
       fi
-      if ! prompt_model MODEL; then
+      if ! prompt_model MODEL "$INDENT_L3"; then
         return 1
       fi
       ;;
     stop)
       ACTION="stop"
-      if ! prompt_target TARGET; then
+      if ! prompt_target TARGET "$INDENT_L2"; then
         return 1
       fi
       MODEL="glm"
@@ -378,9 +382,13 @@ ACTION=""
 TARGET=""
 MODEL=""
 INTERRUPTED=0
+INDENT_TOKEN="» "
+INDENT_L1="${INDENT_TOKEN}"
+INDENT_L2="${INDENT_L1}${INDENT_TOKEN}"
+INDENT_L3="${INDENT_L2}${INDENT_TOKEN}"
 READ_TIMEOUT=1
 if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
-  READ_TIMEOUT="0.2"
+  READ_TIMEOUT="0.1"
 fi
 
 read_with_interrupt() {
