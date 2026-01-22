@@ -174,3 +174,28 @@ app.js 中添加日志后打印：
 2026-01-21 09:56:59,905 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960620.36, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "write_file", "tool_call_id": "call_8ae3da62efcd4030847d803f", "args": {"file_path": "/workspace/random_page.html", "content": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>示例页面</title>\n    <style>\n        body {\n            font-family: \"PingFang SC\", \"Microsoft YaHei\", sans-serif;\n            line-height: 1.6;\n            max-width: 800px;\n            margin: 0 auto;\n            padding: 40px 20px;\n            color: #333;\n        }\n        h1 {\n            color: #2c3e50;\n            border-bottom: 3px solid #3498db;\n            padding-bottom: 10px;\n        }\n        .box {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 30px;\n            border-radius: 10px;\n            margin: 20px 0;\n            box-shadow: 0 4px 6px rgba(0,0,0,0.1);\n        }\n        ul {\n            background: #f8f9fa;\n            padding: 20px 40px;\n            border-radius: 8px;\n        }\n        li {\n            margin: 10px 0;\n        }\n        .footer {\n            text-align: center;\n            margin-top: 50px;\n            color: #7f8c8d;\n            font-size: 14px;\n        }\n    </style>\n</head>\n<body>\n    <h1>欢迎来到示例页面</h1>\n    \n    <div class=\"box\">\n        <h2>这是一个随机生成的页面</h2>\n        <p>创建时间：2026年1月21日</p>\n    </div>\n    \n    <h3>页面特点：</h3>\n    <ul>\n        <li>✨ 简洁美观的设计风格</li>\n        <li>🎨 渐变色彩的装饰元素</li>\n        <li>📝 中文字体支持</li>\n        <li>🚀 快速转换为 PDF</li>\n    </ul>\n    \n    <p>这是一个使用 HTML 和 CSS 创建的示例页面，包含了标题、列表、渐变背景和响应式设计。现在它将被转换为 PDF 文件，方便下载和分享。</p>\n    \n    <div class=\"footer\">\n        <p>由 AI 生成 • HTML 转 PDF 示例</p>\n    </div>\n</body>\n</html>\n"}}}}
 2026-01-21 09:57:02,702 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960623.158, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "execute", "tool_call_id": "call_6312bd5a90264c74b93de1a3", "args": {"command": "python3 /skills/html2pdf/scripts/html2pdf.py /workspace/random_page.html /workspace/random_page.pdf"}}}}
 ```
+
+
+
+# 20260122 讨论
+
+## pptx的写作难题
+
+1. 套模板, 内容受限于模板，没有深度
+2. html转pptx，格式信息丢失严重，目前没有很好的转换工具
+3. nano bonano 采用图片，信息省略，文本表达能力不够
+4. 模块化生成，先打造基本单元(可能是页面)，保证这些基本单元是完美的。生成时逐步确认(需求确认--大纲确认--再生成) (dokie)
+
+
+## sandbox
+
+1. manus用的是firecracker, 付费，和别人合作E2B，有一半的团队人员在做这个
+2. 默认用的是daytona, 有免费额度，不够自由
+3. 暂选型为docker，免费，自由，容易上手，比较主流
+
+## 多模型 + 工具
+
+1. 主线tool_call 目前用 glm-4.7，限速，建议尝试用claude
+2. 工具类用其他模型，比如文生图或者图片理解用qwen-image
+3. 代码生成用glm4.7
+4. 共识，agent场景下，主要的还是用claude，要尝试
