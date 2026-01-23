@@ -690,7 +690,9 @@ class DeepAgentsClient {
     handleToolCallStarted(data) {
         const { tool_name, args, tool_call_id } = data;
 
-        this.logClient('tool_call_started', { data: data });
+        if (tool_name == 'write_file') {
+            this.logClient('tool_call_started', { data: data });
+        }
 
         const runId = data.run_id || this.currentRunId || 'default';
         const state = this.getRunState(runId);

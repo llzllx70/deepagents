@@ -29,11 +29,12 @@ async def emit_tool_call_started(
             file_op_tracker.update_args(tool_call_id, args)
 
     logger.info(
-        "Tool call started: session_id=%s run_id=%s tool=%s tool_call_id=%s",
+        "Tool call started: session_id=%s run_id=%s tool=%s tool_call_id=%s args=%s",
         session.session_id,
         run_id,
         tool_name,
         tool_call_id,
+        args,
     )
     await session.broadcast(
         {
