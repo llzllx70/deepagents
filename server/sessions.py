@@ -34,6 +34,8 @@ from .message_utils import (
     truncate_text,
 )
 from .tool_stream import emit_tool_call_started, handle_tool_call_block
+from .qwen_tools import build_qwen_tools
+from .sandbox_tools import build_sandbox_tools
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
@@ -619,6 +621,18 @@ class SessionManager:
 
         session_state = SessionState(auto_approve=auto_approve)
         sandbox_backend = await self._pool.acquire_for_session(session_id, workspace_dir)
+        tools.extend(
+            build_qwen_tools(
+                sandbox_backend=sandbox_backend,
+                workspace_dir=workspace_dir,
+            )
+        )
+        tools.extend(
+            build_sandbox_tools(
+                sandbox_backend=sandbox_backend,
+                workspace_dir=workspace_dir,
+            )
+        )
         logger.info(
             "Session sandbox acquired: session_id=%s sandbox_id=%s",
             session_id,

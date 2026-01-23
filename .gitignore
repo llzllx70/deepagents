@@ -227,3 +227,4 @@ node_modules/**
 logs
 data
 run_config.sh
+config

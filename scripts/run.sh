@@ -5,17 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-CONFIG_FILE="${SCRIPT_DIR}/run_config.sh"
-if [ -f "$CONFIG_FILE" ]; then
-  # shellcheck source=/dev/null
-  . "$CONFIG_FILE"
-else
+CONFIG_FILE="${ROOT_DIR}/config/deepagents.yml"
+if [ ! -f "$CONFIG_FILE" ]; then
   echo "Missing config file: $CONFIG_FILE" >&2
   exit 1
 fi
 
+MODEL_CONFIG_FILE="${ROOT_DIR}/config/model.yml"
+if [ ! -f "$MODEL_CONFIG_FILE" ]; then
+  echo "Missing model config file: $MODEL_CONFIG_FILE" >&2
+  exit 1
+fi
+
 usage() {
-  echo "Usage: $0 [start|stop|restart|process|log] [all|server|web] [glm|qwen]" >&2
+  echo "Usage: $0 [start|stop|restart|process|log] [all|server|web] [glm|qwen|claude]" >&2
 }
 
 validate_action() {
@@ -40,7 +43,7 @@ validate_target() {
 
 validate_model() {
   case "$MODEL" in
-    glm|qwen) ;;
+    glm|qwen|claude) ;;
     *)
       usage
       exit 1
@@ -48,21 +51,110 @@ validate_model() {
   esac
 }
 
+load_env_config() {
+  python - "$CONFIG_FILE" <<'PY'
+import sys
+
+path = sys.argv[1]
+current_section = None
+env = {}
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            continue
+        if current_section != "env":
+            continue
+        if indent == 2 and ":" in stripped:
+            raw_key, raw_value = stripped.split(":", 1)
+            value = raw_value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            env[raw_key.strip()] = value
+
+for key, value in env.items():
+    sys.stdout.write(f"{key}\t{value}\n")
+PY
+}
+
+export_env_config() {
+  local key=""
+  local value=""
+  while IFS=$'\t' read -r key value; do
+    if [ -n "$key" ]; then
+      export "$key=$value"
+    fi
+  done < <(load_env_config)
+}
+
+model_config_value() {
+  local model="$1"
+  local key="$2"
+  python - "$MODEL_CONFIG_FILE" "$model" "$key" <<'PY'
+import sys
+
+path = sys.argv[1]
+model = sys.argv[2]
+key = sys.argv[3]
+
+models = {}
+current_section = None
+current_model = None
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            current_model = None
+            continue
+        if current_section != "models":
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            current_model = stripped[:-1].strip()
+            models.setdefault(current_model, {})
+            continue
+        if indent == 4 and ":" in stripped and current_model:
+            raw_key, raw_value = stripped.split(":", 1)
+            value = raw_value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            models[current_model][raw_key.strip()] = value
+
+sys.stdout.write(models.get(model, {}).get(key, ""))
+PY
+}
+
 set_model_env() {
-  case "$MODEL" in
-    glm)
-      export OPENAI_API_KEY="$GLM_OPENAI_API_KEY"
-      export OPENAI_BASE_URL="$GLM_OPENAI_BASE_URL"
-      export OPENAI_MODEL="$GLM_OPENAI_MODEL"
-      export LANGCHAIN_PROJECT="$GLM_LANGCHAIN_PROJECT"
-      ;;
-    qwen)
-      export OPENAI_API_KEY="$QWEN_OPENAI_API_KEY"
-      export OPENAI_BASE_URL="$QWEN_OPENAI_BASE_URL"
-      export OPENAI_MODEL="$QWEN_OPENAI_MODEL"
-      export LANGCHAIN_PROJECT="$QWEN_LANGCHAIN_PROJECT"
-      ;;
-  esac
+  local api_key=""
+  local base_url=""
+  local model_name=""
+  local langchain_project=""
+
+  api_key="$(model_config_value "$MODEL" "api_key")"
+  base_url="$(model_config_value "$MODEL" "base_url")"
+  model_name="$(model_config_value "$MODEL" "model")"
+  langchain_project="$(model_config_value "$MODEL" "langchain_project")"
+
+  if [ -z "$api_key" ] || [ -z "$base_url" ] || [ -z "$model_name" ]; then
+    echo "Missing model config for $MODEL in $MODEL_CONFIG_FILE" >&2
+    exit 1
+  fi
+
+  export OPENAI_API_KEY="$api_key"
+  export OPENAI_BASE_URL="$base_url"
+  export OPENAI_MODEL="$model_name"
+  export LANGCHAIN_PROJECT="$langchain_project"
 }
 
 ensure_logs() {
@@ -93,6 +185,7 @@ stop_web() {
 
 start_server() {
   ensure_logs
+  export_env_config
   set_model_env
   echo "Starting server (model=$MODEL, openai_model=$OPENAI_MODEL)..."
   start_detached "Server" "logs/server.log" python -m server.deepagents_server
@@ -322,7 +415,7 @@ prompt_model() {
   local indent="$2"
   local choice=""
   while true; do
-    echo "${indent}Select model: [1] glm [2] qwen (default: glm)" >&2
+    echo "${indent}Select model: [1] glm [2] qwen [3] claude (default: glm)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -334,6 +427,7 @@ prompt_model() {
     case "${choice:-1}" in
       1|glm) printf -v "$result_var" "%s" "glm"; return 0 ;;
       2|qwen) printf -v "$result_var" "%s" "qwen"; return 0 ;;
+      3|claude) printf -v "$result_var" "%s" "claude"; return 0 ;;
       *) echo "${indent}Invalid model, try again." >&2 ;;
     esac
   done
