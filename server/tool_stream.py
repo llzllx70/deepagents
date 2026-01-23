@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, TYPE_CHECKING
 
 from .config import logger
@@ -9,6 +10,21 @@ if TYPE_CHECKING:
     from deepagents_cli.file_ops import FileOpTracker
 
     from .sessions import Session
+
+DEBUG_TOOL_CALLS = os.getenv("DEEPAGENTS_DEBUG_TOOL_CALLS") == "1"
+
+
+def _preview_args(value: Any, limit: int = 200) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value)
+    else:
+        text = str(value)
+    text = text.replace("\n", "\\n")
+    if len(text) > limit:
+        return text[:limit] + "...(truncated)"
+    return text
 
 
 async def emit_tool_call_started(
@@ -27,6 +43,9 @@ async def emit_tool_call_started(
             file_op_tracker.start_operation(tool_name, args, tool_call_id)
         else:
             file_op_tracker.update_args(tool_call_id, args)
+
+    if tool_name == "write_file":
+        print('get')
 
     logger.info(
         "Tool call started: session_id=%s run_id=%s tool=%s tool_call_id=%s args=%s",
@@ -59,6 +78,16 @@ async def handle_tool_call_block(
     chunk_args = block.get("args")
     chunk_id = block.get("id")
     chunk_index = block.get("index")
+
+    if DEBUG_TOOL_CALLS:
+        logger.info(
+            "Tool call chunk: run_id=%s name=%s id=%s index=%s args_preview=%s",
+            run_id,
+            chunk_name,
+            chunk_id,
+            chunk_index,
+            _preview_args(chunk_args),
+        )
 
     if chunk_index is not None:
         buffer_key: str | int = chunk_index
@@ -116,6 +145,15 @@ async def handle_tool_call_block(
             file_op_tracker.update_args(buffer_id, parsed_args)
 
     tool_call_buffers.pop(buffer_key, None)
+
+    if DEBUG_TOOL_CALLS:
+        logger.info(
+            "Tool call assembled: run_id=%s name=%s id=%s args_preview=%s",
+            run_id,
+            buffer_name,
+            buffer_id,
+            _preview_args(parsed_args),
+        )
 
     await session.broadcast(
         {

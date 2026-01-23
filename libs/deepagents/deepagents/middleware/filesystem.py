@@ -1,6 +1,7 @@
 """Middleware for providing filesystem tools to an agent."""
 # ruff: noqa: E501
 
+import logging
 import os
 import re
 from collections.abc import Awaitable, Callable, Sequence
@@ -35,6 +36,9 @@ from deepagents.backends.utils import (
     sanitize_tool_call_id,
     truncate_if_too_long,
 )
+
+logger = logging.getLogger("deepagents.middleware.filesystem")
+DEBUG_TOOL_CALLS = os.getenv("DEEPAGENTS_DEBUG_TOOL_CALLS") == "1"
 
 EMPTY_CONTENT_WARNING = "System reminder: File exists but has empty contents"
 MAX_LINE_LENGTH = 2000
@@ -1061,6 +1065,22 @@ class FilesystemMiddleware(AgentMiddleware):
         Returns:
             The raw ToolMessage, or a pseudo tool message with the ToolResult in state.
         """
+        if DEBUG_TOOL_CALLS:
+            tool_call = request.tool_call
+            tool_name = tool_call.get("name")
+            if tool_name == "write_file":
+                args = tool_call.get("args")
+                args_dict = args if isinstance(args, dict) else {}
+                content = args_dict.get("content")
+                content_len = len(content) if isinstance(content, str) else 0
+                logger.info(
+                    "write_file invoke: tool_call_id=%s file_path=%s content_len=%s args_type=%s",
+                    tool_call.get("id"),
+                    args_dict.get("file_path"),
+                    content_len,
+                    type(args).__name__,
+                )
+
         if self.tool_token_limit_before_evict is None or request.tool_call["name"] in TOOL_GENERATORS:
             return handler(request)
 
@@ -1081,6 +1101,22 @@ class FilesystemMiddleware(AgentMiddleware):
         Returns:
             The raw ToolMessage, or a pseudo tool message with the ToolResult in state.
         """
+        if DEBUG_TOOL_CALLS:
+            tool_call = request.tool_call
+            tool_name = tool_call.get("name")
+            if tool_name == "write_file":
+                args = tool_call.get("args")
+                args_dict = args if isinstance(args, dict) else {}
+                content = args_dict.get("content")
+                content_len = len(content) if isinstance(content, str) else 0
+                logger.info(
+                    "write_file invoke: tool_call_id=%s file_path=%s content_len=%s args_type=%s",
+                    tool_call.get("id"),
+                    args_dict.get("file_path"),
+                    content_len,
+                    type(args).__name__,
+                )
+
         if self.tool_token_limit_before_evict is None or request.tool_call["name"] in TOOL_GENERATORS:
             return await handler(request)
 

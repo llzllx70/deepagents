@@ -168,7 +168,13 @@ start_detached() {
   if command -v setsid >/dev/null 2>&1; then
     nohup setsid "$@" > "$log_file" 2>&1 < /dev/null &
   else
-    nohup bash -c 'trap "" INT HUP; exec "$@"' bash "$@" > "$log_file" 2>&1 < /dev/null &
+    nohup python - "$@" > "$log_file" 2>&1 < /dev/null <<'PY' &
+import os
+import sys
+
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+PY
   fi
   echo "$label started: pid=$!"
 }

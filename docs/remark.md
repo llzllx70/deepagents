@@ -202,3 +202,13 @@ app.js 中添加日志后打印：
 
 
 ## 如何稳定使用海外模型api
+
+
+# 路由
+
+
+create_agent:
+  graph.add_conditional_edges("tools", _make_tools_to_model_edge)
+  graph.add_conditional_edges(loop_exit_node, _make_model_to_tools_edge)
+
+_make_model_to_tools_edge -> Send('tools')

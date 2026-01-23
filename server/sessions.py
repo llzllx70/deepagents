@@ -311,6 +311,15 @@ class Session:
                                     continue
                                 parsed_args = parse_tool_args(raw_args)
                                 if parsed_args is None:
+                                    if isinstance(raw_args, str) and tool_call_id:
+                                        await handle_tool_call_block(
+                                            {"name": tool_name, "args": raw_args, "id": tool_call_id},
+                                            tool_call_buffers,
+                                            displayed_tool_ids,
+                                            file_op_tracker,
+                                            run_request.run_id,
+                                            self,
+                                        )
                                     continue
                                 await emit_tool_call_started(
                                     session=self,
@@ -321,6 +330,32 @@ class Session:
                                     file_op_tracker=file_op_tracker,
                                     displayed_tool_ids=displayed_tool_ids,
                                 )
+                        tool_call_chunks = getattr(message, "tool_call_chunks", None)
+                        if isinstance(tool_call_chunks, list) and tool_call_chunks:
+                            for chunk in tool_call_chunks:
+                                if isinstance(chunk, dict):
+                                    await handle_tool_call_block(
+                                        chunk,
+                                        tool_call_buffers,
+                                        displayed_tool_ids,
+                                        file_op_tracker,
+                                        run_request.run_id,
+                                        self,
+                                    )
+
+                        content_blocks = getattr(message, "content_blocks", None)
+                        if isinstance(content_blocks, list) and content_blocks:
+                            for block in content_blocks:
+                                block_type = block.get("type")
+                                if block_type in ("tool_call_chunk", "tool_call"):
+                                    await handle_tool_call_block(
+                                        block,
+                                        tool_call_buffers,
+                                        displayed_tool_ids,
+                                        file_op_tracker,
+                                        run_request.run_id,
+                                        self,
+                                    )
                         continue
 
                     if isinstance(message, ToolMessage):
