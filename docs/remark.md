@@ -33,12 +33,52 @@ Export format: PPTX
 Output file: 2025-2026_A.pptx
 ```
 
+## 打开浏览器
+
+- 输入: 打开google首页，提示:
+  + 首次，则提示
+    ![1769394090273](image/remark/1769394090273.png)
+  + 启动My Browser连接器是manus内部逻辑，并不需要在用户手工启动
+  + 点击安装，则安装Manus AI Browser Operator插件
+  + 可不安装，使用manus虚拟机中的浏览器
+  + 如果已安装，则提示授权，也可不授权，则使用默认虚拟机中的浏览器
+    ![1769391433191](image/remark/1769391433191.png)
+
+- 如果授权，则在当前浏览器中打开一个标签页
+- 不授权，则在manus虚拟机机中打开chrome
+  + 若需要输入账户，则提示需要接管
+    ![1769391694409](image/remark/1769391694409.png)
+  + 若需要输入密码，则提示强烈建议接管
+  + 接管后，显示接管页面，下面可点击退出接管，并提示
+    ![1769392015209](image/remark/1769392015209.png)
+  + 告知manus接管期间做了什么，如没有输入，则默认为继续
+  + 当然也可不接管，则存在信息泄漏的不安全因素
+
+
+- 搜索boss上最新的AI岗位信息
+  + manus 打开了boss，但一直卡住
+  + 滑动校验时一起显示加载中
+
+# genspark
+
+## 打开浏览器
+
+- 输入: 打开sina.com.cn，则使用Playwright在genspark client 打开了一个标签页面
+  +![1769395179477](image/remark/1769395179477.png)
+- 打开过程中，会不停的截图并分析
+- 打开后，等待一段时间就自动关闭了，实测，基本不可用
+  
+
+# 建议：
+
+- 教育场景目前Playwright操作，主要服务于搜索，而不是打开浏览器
+
 # DeepAgentsClient
 
 - 一个页面对应一个DeepAgentsClient实例
 - 总实例数 = 打开的页面数
 - 成员变量sessionId, wsUrl只记录当前chat
-- 历史chat会记录在成员chatHistory中
+- 历史chat会记录在成员chatHistory
 
 # session
 
@@ -153,30 +193,6 @@ Output file: 2025-2026_A.pptx
 - 暂不完善历史记录方面的切换逻辑，先验证docker sandbox 在文件处理方面的一致性
 
 
-
-```
-handleToolCallStarted(data) {
-    const { tool_name, args, tool_call_id } = data;
-
-    this.logClient('tool_call_started', { data: data });
-
-app.js 中添加日志后打印：
-
-下面是qwen:
-1825 2026-01-21 09:48:01,514 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960081.96,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "write_file", "tool_call_id": "call_095f85a60ee747d7bf4dc971", "args": {}}}}
-1826 2026-01-21 09:48:18,669 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960099.116,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "execute", "tool_call_id": "call_1a53b64dfb8346599663ba89", "args": {}}}}
-1827 2026-01-21 09:48:25,077 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "eb59c56883a14c588cbd5fd6d2ddc3e1", "ts": 1768960105.529,      "detail": {"data": {"type": "tool.call.started", "run_id": "mknd5ocqthsdhc925n", "tool_name": "execute", "tool_call_id": "call_0474983375d241d1ac3cb0d5", "args": {}}}}
-
-说明web端收到的全是 args: {}
-
-如下是glm
-2026-01-21 09:56:44,120 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960604.581, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "read_file", "tool_call_id": "call_f2fdca99e0484e75ad1d3345", "args": {"file_path": "/skills/html2pdf/SKILL.md"}}}}
-2026-01-21 09:56:59,905 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960620.36, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "write_file", "tool_call_id": "call_8ae3da62efcd4030847d803f", "args": {"file_path": "/workspace/random_page.html", "content": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>示例页面</title>\n    <style>\n        body {\n            font-family: \"PingFang SC\", \"Microsoft YaHei\", sans-serif;\n            line-height: 1.6;\n            max-width: 800px;\n            margin: 0 auto;\n            padding: 40px 20px;\n            color: #333;\n        }\n        h1 {\n            color: #2c3e50;\n            border-bottom: 3px solid #3498db;\n            padding-bottom: 10px;\n        }\n        .box {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 30px;\n            border-radius: 10px;\n            margin: 20px 0;\n            box-shadow: 0 4px 6px rgba(0,0,0,0.1);\n        }\n        ul {\n            background: #f8f9fa;\n            padding: 20px 40px;\n            border-radius: 8px;\n        }\n        li {\n            margin: 10px 0;\n        }\n        .footer {\n            text-align: center;\n            margin-top: 50px;\n            color: #7f8c8d;\n            font-size: 14px;\n        }\n    </style>\n</head>\n<body>\n    <h1>欢迎来到示例页面</h1>\n    \n    <div class=\"box\">\n        <h2>这是一个随机生成的页面</h2>\n        <p>创建时间：2026年1月21日</p>\n    </div>\n    \n    <h3>页面特点：</h3>\n    <ul>\n        <li>✨ 简洁美观的设计风格</li>\n        <li>🎨 渐变色彩的装饰元素</li>\n        <li>📝 中文字体支持</li>\n        <li>🚀 快速转换为 PDF</li>\n    </ul>\n    \n    <p>这是一个使用 HTML 和 CSS 创建的示例页面，包含了标题、列表、渐变背景和响应式设计。现在它将被转换为 PDF 文件，方便下载和分享。</p>\n    \n    <div class=\"footer\">\n        <p>由 AI 生成 • HTML 转 PDF 示例</p>\n    </div>\n</body>\n</html>\n"}}}}
-2026-01-21 09:57:02,702 INFO deepagents.web deepagents_server.py:905 - {"event": "tool_call_started", "level": "info", "session_id": "b57313bb7b714ec7b33da33f56818c7c", "ts": 1768960623.158, "detail": {"data": {"type": "tool.call.started", "run_id": "mkndgl6b7p50xm0sujk", "tool_name": "execute", "tool_call_id": "call_6312bd5a90264c74b93de1a3", "args": {"command": "python3 /skills/html2pdf/scripts/html2pdf.py /workspace/random_page.html /workspace/random_page.pdf"}}}}
-```
-
-
-
 # 20260122 讨论
 
 ## pptx的写作难题
@@ -205,7 +221,6 @@ app.js 中添加日志后打印：
 
 
 # 路由
-
 
 create_agent:
   graph.add_conditional_edges("tools", _make_tools_to_model_edge)
