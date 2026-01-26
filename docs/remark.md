@@ -75,7 +75,7 @@ Output file: 2025-2026_A.pptx
 
 # DeepAgentsClient
 
-- 一个页面对应一个DeepAgentsClient实例
+- 一个页面对应一个DeepAgentsClient实例, 也对应一个websocket 连接
 - 总实例数 = 打开的页面数
 - 成员变量sessionId, wsUrl只记录当前chat
 - 历史chat会记录在成员chatHistory
