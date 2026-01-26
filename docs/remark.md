@@ -169,7 +169,7 @@ Output file: 2025-2026_A.pptx
 - 系统类型在 CLI 提示中统一描述为 Linux sandbox，默认工作目录为 `/home/daytona`。
 - 依赖保障不是自动的：代码里假设沙盒内有 `bash`、`python3`、`grep` 等基础命令（`BaseSandbox` 的文件操作依赖它们）。
 - 需要的命令用 `--sandbox-setup` 在沙盒创建后一次性安装，避免执行中途因缺命令失败。
-
+![1769407594469](image/remark/1769407594469.png)![1769407595635](image/remark/1769407595635.png)![1769407597837](image/remark/1769407597837.png)![1769407598039](image/remark/1769407598039.png)![1769407598221](image/remark/1769407598221.png)![1769407598419](image/remark/1769407598419.png)
 # sandbox (docker)
 
 - 服务端以 docker 容器作为 sandbox 后端，镜像基于 ubuntu22.04，预装 python3/pip/uv/apt/vim/node。
@@ -192,6 +192,14 @@ Output file: 2025-2026_A.pptx
 
 - 暂不完善历史记录方面的切换逻辑，先验证docker sandbox 在文件处理方面的一致性
 
+
+# 路由
+
+create_agent:
+  graph.add_conditional_edges("tools", _make_tools_to_model_edge)
+  graph.add_conditional_edges(loop_exit_node, _make_model_to_tools_edge)
+
+_make_model_to_tools_edge -> Send('tools')
 
 # 20260122 讨论
 
@@ -219,11 +227,11 @@ Output file: 2025-2026_A.pptx
 
 ## 如何稳定使用海外模型api
 
+1. 暂定使用wildcard
 
-# 路由
 
-create_agent:
-  graph.add_conditional_edges("tools", _make_tools_to_model_edge)
-  graph.add_conditional_edges(loop_exit_node, _make_model_to_tools_edge)
+# 20260126
 
-_make_model_to_tools_edge -> Send('tools')
+1. 修改ui，颜色，字体，logo
+2. 运行上传图片
+3. 添加图片理解，图片生成

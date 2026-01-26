@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>星火智能</title>
+    <link rel="icon" type="image/png" href="logo.png">
     <link rel="stylesheet" href="styles.css">
     <!-- Local libraries for faster loading -->
     <link rel="stylesheet" href="libs/highlight.css">
@@ -16,7 +17,12 @@
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h1>星火智能体DeepAgents</h1>
+                <div class="brand">
+                    <img class="brand-logo" src="logo.png" alt="星火智能体 Logo">
+                    <div class="brand-text">
+                        <span class="brand-title">星火之言</span>
+                    </div>
+                </div>
                 <button class="new-chat-btn" id="newChatBtn" title="新对话">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -60,6 +66,7 @@
                         <line x1="3" y1="18" x2="21" y2="18"></line>
                     </svg>
                 </button>
+                <img class="header-logo" src="logo.png" alt="星火智能体 Logo">
                 <h2 id="chatTitle">新对话</h2>
                 <div class="header-actions">
                     <button class="icon-btn" id="cancelBtn" title="取消当前任务" disabled>
