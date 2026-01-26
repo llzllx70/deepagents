@@ -1998,6 +1998,48 @@ class DeepAgentsClient {
         return '';
     }
 
+    getHistoryStatusType(status) {
+        if (this.isActiveRunStatus(status)) return 'running';
+        if (status === 'completed' || status === 'success') return 'success';
+        if (status === 'failed' || status === 'cancelled' || status === 'rejected' || status === 'error') {
+            return 'failed';
+        }
+        return 'default';
+    }
+
+    getHistoryStatusIcon(statusType) {
+        switch (statusType) {
+            case 'success':
+                return `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9"></circle>
+                        <path d="M8 12l2.5 2.5L16 9"></path>
+                    </svg>
+                `;
+            case 'failed':
+                return `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9"></circle>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                    </svg>
+                `;
+            case 'running':
+                return `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9"></circle>
+                        <path d="M12 7v5l3 2"></path>
+                    </svg>
+                `;
+            default:
+                return `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                `;
+        }
+    }
+
     normalizeTaskId(rawId) {
         const value = rawId == null ? '' : String(rawId).trim();
         if (!value) return this.generateTaskId();
@@ -2212,16 +2254,17 @@ class DeepAgentsClient {
 
     renderHistory() {
         this.elements.historyList.innerHTML = this.chatHistory.map(chat => {
+            const statusType = this.getHistoryStatusType(chat.status);
             const statusLabel = this.getHistoryStatusLabel(chat.status);
             const statusHtml = statusLabel
-                ? `<span class="history-item-status running">${this.escapeHtml(statusLabel)}</span>`
+                ? `<span class="history-item-status ${statusType}">${this.escapeHtml(statusLabel)}</span>`
                 : '';
             const activeClass = chat.id === this.activeChatId ? ' active' : '';
             return `
                 <div class="history-item${activeClass}" data-chat-id="${chat.id}">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                    </svg>
+                    <span class="history-item-icon status-${statusType}">
+                        ${this.getHistoryStatusIcon(statusType)}
+                    </span>
                     <span class="history-item-title">${this.escapeHtml(chat.title || '新对话')}</span>
                     ${statusHtml}
                     <button class="history-delete-btn" data-chat-id="${chat.id}" title="删除对话">
