@@ -131,7 +131,9 @@ class DeepAgentsClient {
         });
 
         // New chat
-        this.elements.newChatBtn.addEventListener('click', () => this.newChat());
+        if (this.elements.newChatBtn) {
+            this.elements.newChatBtn.addEventListener('click', () => this.newChat());
+        }
 
         // Auto approve toggle
         this.elements.autoApproveToggle.addEventListener('change', (e) => {
@@ -141,7 +143,9 @@ class DeepAgentsClient {
         });
 
         // Cancel button
-        this.elements.cancelBtn.addEventListener('click', () => this.cancelRun());
+        if (this.elements.cancelBtn) {
+            this.elements.cancelBtn.addEventListener('click', () => this.cancelRun());
+        }
 
         // User input
         this.elements.userInput.addEventListener('input', () => {
@@ -1928,6 +1932,9 @@ class DeepAgentsClient {
     }
 
     updateCancelButton(enabled) {
+        if (!this.elements.cancelBtn) {
+            return;
+        }
         this.elements.cancelBtn.disabled = !enabled;
     }
 
