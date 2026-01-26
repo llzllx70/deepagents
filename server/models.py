@@ -13,14 +13,12 @@ class CreateSessionRequest(BaseModel):
 class CreateSessionResponse(BaseModel):
     session_id: str
     sandbox_id: str | None = None
-    workspace_dir: str | None = None
 
 
 class DeleteSessionResponse(BaseModel):
     session_id: str
     sandbox_id: str | None = None
     synced: bool
-    workspace_dir: str | None = None
 
 
 class ClientLogRequest(BaseModel):
@@ -36,6 +34,8 @@ class HistoryPayload(BaseModel):
 
 
 class SessionStatePayload(BaseModel):
+    client_id: str | None = None
     session_id: str | None = None
+    chat_id: str | None = None
     has_messages: bool = False
     timestamp: float | None = None

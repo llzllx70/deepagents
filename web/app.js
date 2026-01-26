@@ -34,20 +34,15 @@ class DeepAgentsClient {
         this.currentRunStatus = null;
         this.shouldReconnect = true;
         this.pendingRunStatusId = null;
-        this.pendingSessionSwitch = null;
         this.reconnectLogElement = null;
         this.runStates = new Map();
         this.pendingMessages = [];
-        this.isCreatingSession = false;
         this.cancelRequested = false;
         this.pendingCancelLogElement = null;
-        this.sessionHasMessages = false;
-        this.resumeAttempt = false;
-        this.viewOnlySessionId = null;
-        this.viewOnlyChatId = null;
-        this.pendingSessionRelinkChatId = null;
         this.forceReconnect = false;
         this.defaultInputPlaceholder = '';
+        this.sessionCreatePromise = null;
+        this.clientId = this.getClientId();
 
         // UI elements
         this.elements = {};
@@ -86,8 +81,9 @@ class DeepAgentsClient {
         this.logClient('page_load', { url: window.location.href, navType, action });
 
         // Connect to server
-        if (!(await this.resumeSessionIfPossible())) {
-            await this.createSession();
+        const resumed = await this.resumeSessionIfPossible();
+        if (!resumed) {
+            this.updateConnectionStatus('disconnected');
         }
     }
 
@@ -138,7 +134,9 @@ class DeepAgentsClient {
         // Auto approve toggle
         this.elements.autoApproveToggle.addEventListener('change', (e) => {
             this.autoApprove = e.target.checked;
-            this.send({ type: 'auto_approve', enabled: this.autoApprove });
+            if (this.sessionId) {
+                this.send({ type: 'auto_approve', enabled: this.autoApprove });
+            }
             this.saveConfig();
         });
 
@@ -233,8 +231,6 @@ class DeepAgentsClient {
     }
 
     async createSession() {
-        if (this.isCreatingSession) return;
-        this.isCreatingSession = true;
         try {
             this.updateConnectionStatus('connecting');
             this.logClient('session_create_start', { mode: 'new' });
@@ -254,15 +250,9 @@ class DeepAgentsClient {
 
             const data = await response.json();
             this.setSessionId(data.session_id);
-            this.setSessionState({ sessionId: data.session_id, hasMessages: false });
-            if (this.pendingSessionRelinkChatId) {
-                const chatId = this.pendingSessionRelinkChatId;
-                this.pendingSessionRelinkChatId = null;
-                this.upsertChatRecord({ id: chatId, sessionId: data.session_id });
-            }
             this.logClient('session_created', { sessionId: data.session_id, sandboxId: data.sandbox_id || null, mode: 'new' });
             this.connectWebSocket();
-
+            return data.session_id;
         } catch (error) {
             console.error('创建会话失败：', error);
             this.addLogMessage('error', `连接服务器失败：${error.message}`);
@@ -271,8 +261,35 @@ class DeepAgentsClient {
             if (this.forceReconnect) {
                 this.attemptReconnect();
             }
+            throw error;
+        }
+    }
+
+    async ensureSession() {
+        if (this.sessionId) return this.sessionId;
+        if (this.sessionCreatePromise) return this.sessionCreatePromise;
+        this.sessionCreatePromise = this.createSession();
+        try {
+            return await this.sessionCreatePromise;
         } finally {
-            this.isCreatingSession = false;
+            this.sessionCreatePromise = null;
+        }
+    }
+
+    handleMissingSession() {
+        this.addLogMessage('warning', '当前会话已失效，请重新发送消息以创建新会话。');
+        this.sessionId = null;
+        this.wsUrl = null;
+        this.pendingRunStatusId = null;
+        this.pendingMessages = [];
+        this.forceReconnect = false;
+        this.isRunning = false;
+        this.currentRunId = null;
+        this.currentRunStatus = null;
+        this.updateCancelButton(false);
+        this.updateSendButton();
+        if (this.activeChatId) {
+            this.upsertChatRecord({ id: this.activeChatId, sessionId: null, status: 'failed' });
         }
     }
 
@@ -296,7 +313,6 @@ class DeepAgentsClient {
         const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
         const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
         this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
-        this.clearViewOnlySession();
         this.elements.chatTitle.textContent = sessionId;
     }
 
@@ -348,7 +364,10 @@ class DeepAgentsClient {
             this.connectWebSocket();
             return;
         }
-        this.createSession();
+        if (this.pendingMessages.length > 0) {
+            this.updateConnectionStatus('connecting');
+            void this.ensureSession();
+        }
     }
 
     flushPendingMessages() {
@@ -375,10 +394,6 @@ class DeepAgentsClient {
             console.log('WebSocket 已连接');
             this.updateConnectionStatus('connected');
             const wasForceReconnect = this.forceReconnect;
-            if (this.resumeAttempt) {
-                this.logClient('session_reuse_connected', { sessionId: this.sessionId, mode: 'reuse' });
-            }
-            this.resumeAttempt = false;
             this.logClient('ws_connected', {
                 sessionId: this.sessionId,
                 url: this.wsUrl,
@@ -428,17 +443,8 @@ class DeepAgentsClient {
                 online: navigator.onLine
             });
             if (event.code === 1008) {
-                this.resumeAttempt = false;
                 this.logClient('session_missing', { sessionId: this.sessionId, chatId: this.activeChatId });
-                this.pendingSessionRelinkChatId = this.activeChatId;
-                this.forceReconnect = true;
-                this.createSession();
-                return;
-            }
-            if (this.resumeAttempt && (event.code === 1008 || event.code === 1011)) {
-                this.resumeAttempt = false;
-                this.logClient('session_reuse_failed_fallback', { sessionId: this.sessionId, mode: 'reuse', closeCode: event.code });
-                this.createSession();
+                this.handleMissingSession();
                 return;
             }
             if (this.shouldReconnect && this.hasReconnectWork()) {
@@ -645,8 +651,6 @@ class DeepAgentsClient {
             this.typingIndicator.remove();
             this.typingIndicator = null;
         }
-
-        this.maybeApplyPendingSessionSwitch();
     }
 
     handleRunStatus(data) {
@@ -1029,20 +1033,6 @@ class DeepAgentsClient {
         this.messageBuffer.delete(runId);
     }
 
-    maybeApplyPendingSessionSwitch() {
-        if (this.isRunning || !this.pendingSessionSwitch) return;
-        const { sessionId, runId, chatId } = this.pendingSessionSwitch;
-        const targetSessionId = sessionId || null;
-        if (!targetSessionId || targetSessionId === this.sessionId) {
-            this.pendingSessionSwitch = null;
-            return;
-        }
-        if (chatId && chatId !== this.activeChatId) {
-            return;
-        }
-        this.pendingSessionSwitch = null;
-        this.switchSession(targetSessionId, { requestRunStatusId: runId || null });
-    }
 
     ingestAssistantText(runId, incomingText) {
         const text = incomingText == null ? '' : String(incomingText);
@@ -1639,9 +1629,17 @@ class DeepAgentsClient {
     }
 
     // Message Sending
-    sendMessage() {
+    async sendMessage() {
         const input = this.elements.userInput.value.trim();
         if (!input || this.isRunning || this.isViewOnlyMode()) return;
+
+        if (!this.sessionId) {
+            try {
+                await this.ensureSession();
+            } catch {
+                return;
+            }
+        }
 
         // Add user message to UI
         const userMessage = this.createMessageElement('user');
@@ -1676,7 +1674,7 @@ class DeepAgentsClient {
             run_id: runId
         });
         this.logClient('run_sent', { runId, inputLen: input.length });
-        this.setSessionState({ sessionId: this.sessionId, hasMessages: true });
+        this.setSessionState({ sessionId: this.sessionId, chatId: this.activeChatId, hasMessages: true });
 
         this.scrollToBottom();
     }
@@ -1694,31 +1692,16 @@ class DeepAgentsClient {
     }
 
     newChat() {
-        if (!this.hasCurrentMessages()) {
-            this.resetChatView();
-            this.activeChatId = this.generateTaskId();
-            this.currentRunId = null;
-            this.currentRunStatus = null;
-            this.isRunning = false;
-            this.cancelRequested = false;
-            this.pendingCancelLogElement = null;
-            this.pendingSessionSwitch = null;
-            this.updateCancelButton(false);
-            this.updateSendButton();
-            this.elements.chatTitle.textContent = this.sessionId || '新对话';
-            this.elements.welcomeMessage.style.display = 'flex';
-            this.logClient('new_chat_reuse_session', { chatId: this.activeChatId, sessionId: this.sessionId, mode: 'reuse' });
-            return;
+        if (this.hasCurrentMessages()) {
+            this.backgroundCurrentChat('new_chat');
         }
-        this.backgroundCurrentChat('new_chat');
         this.resetChatView();
-        this.activeChatId = this.generateTaskId();
+        this.activeChatId = null;
         this.currentRunId = null;
         this.currentRunStatus = null;
         this.isRunning = false;
         this.cancelRequested = false;
         this.pendingCancelLogElement = null;
-        this.pendingSessionSwitch = null;
         this.updateCancelButton(false);
         this.updateSendButton();
         this.elements.chatTitle.textContent = '新对话';
@@ -1726,7 +1709,9 @@ class DeepAgentsClient {
         this.logClient('new_chat', { chatId: this.activeChatId, mode: 'new' });
 
         this.disconnectWebSocket({ allowReconnect: false });
-        this.createSession();
+        this.sessionId = null;
+        this.wsUrl = null;
+        this.updateConnectionStatus('disconnected');
     }
 
     resetChatView() {
@@ -1770,19 +1755,15 @@ class DeepAgentsClient {
     }
 
     isViewOnlyMode() {
-        if (!this.viewOnlyChatId || !this.viewOnlySessionId) return false;
-        if (!this.activeChatId || this.viewOnlyChatId !== this.activeChatId) return false;
-        return this.viewOnlySessionId !== this.sessionId;
+        return false;
     }
 
     setViewOnlySession({ chatId = null, sessionId = null } = {}) {
-        this.viewOnlyChatId = chatId;
-        this.viewOnlySessionId = sessionId;
-        this.updateInputState();
+        return;
     }
 
     clearViewOnlySession() {
-        this.setViewOnlySession();
+        return;
     }
 
     updateInputState() {
@@ -1798,21 +1779,22 @@ class DeepAgentsClient {
         this.updateSendButton();
     }
 
-    setSessionState({ sessionId, hasMessages }) {
-        this.sessionHasMessages = Boolean(hasMessages);
-        if (sessionId) {
-            this.persistSessionState({
-                session_id: sessionId,
-                has_messages: this.sessionHasMessages,
-                timestamp: Date.now() / 1000
-            });
-        }
+    setSessionState({ sessionId, chatId = null, hasMessages = false }) {
+        if (!sessionId) return;
+        this.persistSessionState({
+            client_id: this.clientId,
+            session_id: sessionId,
+            chat_id: chatId,
+            has_messages: Boolean(hasMessages),
+            timestamp: Date.now() / 1000
+        });
     }
 
     async loadSessionState() {
         if (!this.serverUrl) return null;
         try {
-            const response = await fetch(`${this.serverUrl}/session_state`);
+            const query = this.clientId ? `?client_id=${encodeURIComponent(this.clientId)}` : '';
+            const response = await fetch(`${this.serverUrl}/session_state${query}`);
             if (!response.ok) return null;
             const parsed = await response.json();
             if (!parsed || typeof parsed !== 'object') return null;
@@ -1825,18 +1807,12 @@ class DeepAgentsClient {
     async resumeSessionIfPossible() {
         const state = await this.loadSessionState();
         const sessionId = state?.session_id || state?.sessionId || null;
-        const hasMessages = Boolean(state?.has_messages ?? state?.hasMessages);
-        if (!sessionId || hasMessages) return false;
-        const hasStoredMessages = this.chatHistory.some(chat => {
-            if (!chat || chat.sessionId !== sessionId) return false;
-            return Array.isArray(chat.messages) && chat.messages.length > 0;
-        });
-        if (hasStoredMessages) {
-            this.setSessionState({ sessionId, hasMessages: true });
-            return false;
+        const chatId = state?.chat_id || state?.chatId || null;
+        if (!sessionId) return false;
+        if (chatId) {
+            this.loadChat(chatId, { skipSessionSwitch: true });
         }
         this.setSessionId(sessionId);
-        this.resumeAttempt = true;
         this.logClient('session_resume_attempt', { sessionId: sessionId, mode: 'reuse' });
         this.connectWebSocket();
         return true;
@@ -2113,11 +2089,15 @@ class DeepAgentsClient {
 
     async persistSessionState(payload) {
         if (!this.serverUrl) return;
+        const data = { ...payload };
+        if (!data.client_id && this.clientId) {
+            data.client_id = this.clientId;
+        }
         try {
             await fetch(`${this.serverUrl}/session_state`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(data)
             });
         } catch (error) {
             console.warn('保存会话状态失败：', error);
@@ -2171,6 +2151,7 @@ class DeepAgentsClient {
         const normalizedId = this.normalizeTaskId(chat.id || chat.taskId || chat.runId || now);
         const index = this.findChatIndex({ id: normalizedId, runId: chat.runId });
         const existing = index >= 0 ? this.chatHistory[index] : null;
+        const hasSessionId = Object.prototype.hasOwnProperty.call(chat, 'sessionId');
         const nextMessages = Array.isArray(chat.messages) && chat.messages.length
             ? chat.messages
             : (existing?.messages || []);
@@ -2181,7 +2162,7 @@ class DeepAgentsClient {
             id: normalizedId,
             taskId: normalizedId,
             runId: chat.runId || existing?.runId || null,
-            sessionId: chat.sessionId || existing?.sessionId || null,
+            sessionId: hasSessionId ? chat.sessionId : (existing?.sessionId || null),
             status: chat.status || existing?.status || null,
             createdAt: existing?.createdAt || chat.createdAt || now,
             timestamp: now,
@@ -2294,28 +2275,19 @@ class DeepAgentsClient {
         });
     }
 
-    loadChat(chatId) {
+    loadChat(chatId, { skipSessionSwitch = false } = {}) {
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
         if (this.isRunning && this.currentRunId && this.currentRunId !== chat.runId) {
             this.backgroundCurrentChat('switch_chat');
         }
 
-        const activeRunId = this.currentRunId;
-        const activeRunChatId = activeRunId ? this.resolveChatIdForRun(activeRunId) : null;
-        const hasActiveRun = Boolean(activeRunId && this.isActiveRunStatus(this.currentRunStatus));
-        const sameSession = Boolean(chat.sessionId && chat.sessionId === this.sessionId);
-        const viewingBackgroundRun = sameSession && hasActiveRun && activeRunChatId && activeRunChatId !== chat.id;
-        const deferSessionSwitch = Boolean(this.isRunning && chat.sessionId && chat.sessionId !== this.sessionId);
-
         this.resetChatView();
         this.elements.chatTitle.textContent = chat.sessionId || chat.title || '对话';
         this.activeChatId = chat.id;
-        if (!viewingBackgroundRun && !deferSessionSwitch) {
-            this.currentRunId = chat.runId || null;
-            this.currentRunStatus = chat.status || null;
-            this.isRunning = this.isActiveRunStatus(chat.status);
-        }
+        this.currentRunId = chat.runId || null;
+        this.currentRunStatus = chat.status || null;
+        this.isRunning = this.isActiveRunStatus(chat.status);
         this.updateCancelButton(this.isRunning);
         this.updateSendButton();
         if (chat.runId) {
@@ -2336,8 +2308,8 @@ class DeepAgentsClient {
         });
 
         this.attachRunMessagesForChat(chat.id);
-        if (chat.sessionId && chat.sessionId === this.sessionId && chat.messages.length) {
-            this.setSessionState({ sessionId: chat.sessionId, hasMessages: true });
+        if (chat.sessionId) {
+            this.setSessionState({ sessionId: chat.sessionId, chatId: chat.id, hasMessages: chat.messages.length > 0 });
         }
 
         const hasMessages = this.elements.messages.children.length > 0;
@@ -2345,18 +2317,8 @@ class DeepAgentsClient {
 
         const shouldRequestRunStatus = Boolean(chat.runId && this.isActiveRunStatus(chat.status));
         const requestRunStatusId = shouldRequestRunStatus ? chat.runId : null;
-        if (chat.sessionId) {
-            if (this.isRunning && chat.sessionId !== this.sessionId) {
-                this.pendingSessionSwitch = { sessionId: chat.sessionId, runId: requestRunStatusId, chatId: chat.id };
-                this.setViewOnlySession({ chatId: chat.id, sessionId: chat.sessionId });
-            } else {
-                this.pendingSessionSwitch = null;
-                this.setViewOnlySession();
-                this.switchSession(chat.sessionId, { requestRunStatusId });
-            }
-        } else {
-            this.pendingSessionSwitch = null;
-            this.setViewOnlySession();
+        if (chat.sessionId && !skipSessionSwitch) {
+            this.switchSession(chat.sessionId, { requestRunStatusId });
         }
 
         this.renderHistory();
@@ -2375,7 +2337,6 @@ class DeepAgentsClient {
             this.currentRunStatus = null;
             this.isRunning = false;
             this.updateCancelButton(false);
-            this.pendingSessionSwitch = null;
             this.cancelRequested = false;
             this.pendingCancelLogElement = null;
         }
@@ -2392,12 +2353,6 @@ class DeepAgentsClient {
         this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
         if (this.activeChatId === chatId) {
             this.activeChatId = null;
-        }
-        if (this.viewOnlyChatId === chatId) {
-            this.setViewOnlySession();
-        }
-        if (this.pendingSessionSwitch?.chatId === chatId) {
-            this.pendingSessionSwitch = null;
         }
         for (const [runId, mappedChatId] of this.runIdToChatId.entries()) {
             if (mappedChatId === chatId) {
@@ -2419,7 +2374,9 @@ class DeepAgentsClient {
             this.resetChatView();
             this.elements.chatTitle.textContent = '对话';
             this.elements.welcomeMessage.style.display = 'flex';
-            await this.createSession();
+            this.sessionId = null;
+            this.wsUrl = null;
+            this.updateConnectionStatus('disconnected');
         }
     }
 
@@ -2428,6 +2385,20 @@ class DeepAgentsClient {
             autoApprove: this.autoApprove,
             serverUrl: this.serverUrl
         }));
+    }
+
+    getClientId() {
+        const storageKey = 'deepagents_client_id';
+        let clientId = localStorage.getItem(storageKey);
+        if (!clientId) {
+            if (window.crypto?.randomUUID) {
+                clientId = window.crypto.randomUUID();
+            } else {
+                clientId = `client_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+            }
+            localStorage.setItem(storageKey, clientId);
+        }
+        return clientId;
     }
 
     loadConfig() {
@@ -2453,7 +2424,7 @@ class DeepAgentsClient {
     }
 
     getSessionIdForDownload() {
-        return this.viewOnlySessionId || this.sessionId || null;
+        return this.sessionId || null;
     }
 
     normalizeDownloadRelativePath(relative) {

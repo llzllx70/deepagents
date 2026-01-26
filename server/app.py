@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import HISTORY_PATH, ROOT, SESSION_STATE_PATH, WORKSPACE_DIR, client_logger, logger
+from .config import HISTORY_PATH, SESSION_STATE_PATH, WORKSPACE_DIR, client_logger, logger
 from deepagents_cli.integrations.docker_pool import DockerPoolConfig, DockerSandboxPool
 from .models import (
     ClientLogRequest,
@@ -68,14 +68,9 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         req.auto_approve,
     )
     session = await manager.create_session(req.assistant_id, req.auto_approve)
-    try:
-        workspace_dir = str(session.workspace_dir.relative_to(ROOT))
-    except ValueError:
-        workspace_dir = str(session.workspace_dir)
     return CreateSessionResponse(
         session_id=session.session_id,
         sandbox_id=session.sandbox_backend.id,
-        workspace_dir=workspace_dir,
     )
 
 
@@ -86,15 +81,10 @@ async def delete_session(session_id: str) -> DeleteSessionResponse:
     session, synced = await manager.delete_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    try:
-        workspace_dir = str(session.workspace_dir.relative_to(ROOT))
-    except ValueError:
-        workspace_dir = str(session.workspace_dir)
     return DeleteSessionResponse(
         session_id=session.session_id,
         sandbox_id=session.sandbox_backend.id,
         synced=synced,
-        workspace_dir=workspace_dir,
     )
 
 
@@ -115,11 +105,16 @@ async def save_history(payload: HistoryPayload) -> dict[str, str]:
 
 
 @app.get("/session_state")
-async def get_session_state() -> dict[str, Any]:
+async def get_session_state(client_id: str | None = None) -> dict[str, Any]:
     async with SESSION_STATE_LOCK:
         payload = await read_json_file(SESSION_STATE_PATH)
     if not isinstance(payload, dict):
         payload = {}
+    if client_id:
+        clients = payload.get("clients")
+        if isinstance(clients, dict):
+            return clients.get(client_id, {}) or {}
+        return {}
     return payload
 
 
@@ -129,7 +124,25 @@ async def save_session_state(payload: SessionStatePayload) -> dict[str, str]:
     if data.get("timestamp") is None:
         data["timestamp"] = time.time()
     async with SESSION_STATE_LOCK:
-        await write_json_file(SESSION_STATE_PATH, data)
+        state = await read_json_file(SESSION_STATE_PATH)
+        if not isinstance(state, dict):
+            state = {}
+        clients = state.get("clients")
+        if not isinstance(clients, dict):
+            clients = {}
+        client_id = data.get("client_id")
+        if client_id:
+            entry = {
+                "session_id": data.get("session_id"),
+                "chat_id": data.get("chat_id"),
+                "has_messages": data.get("has_messages", False),
+                "timestamp": data.get("timestamp"),
+            }
+            clients[client_id] = entry
+            state["clients"] = clients
+            await write_json_file(SESSION_STATE_PATH, state)
+        else:
+            await write_json_file(SESSION_STATE_PATH, data)
     return {"status": "ok"}
 
 
