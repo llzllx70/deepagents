@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
@@ -80,6 +81,7 @@ class Session:
     agent: Any
     backend: Any
     sandbox_backend: DockerSandboxBackend
+    workspace_dir: Path
     run_queue: asyncio.Queue[RunRequest] = field(default_factory=asyncio.Queue)
     run_status: dict[str, str] = field(default_factory=dict)
     connections: set[WebSocket] = field(default_factory=set)
@@ -587,6 +589,8 @@ class SessionManager:
     async def create_session(self, assistant_id: str | None, auto_approve: bool) -> Session:
         logger.info("Creating session: assistant_id=%s auto_approve=%s", assistant_id, auto_approve)
         session_id = uuid.uuid4().hex
+        session_workspace_dir = WORKSPACE_DIR / session_id
+        session_workspace_dir.mkdir(parents=True, exist_ok=True)
         model = create_model()
         tools = [http_request, fetch_url]
         logger.info(
@@ -601,17 +605,17 @@ class SessionManager:
             logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
-        sandbox_backend = await self._pool.acquire_for_session(session_id, WORKSPACE_DIR)
+        sandbox_backend = await self._pool.acquire_for_session(session_id, session_workspace_dir)
         tools.extend(
             build_qwen_tools(
                 sandbox_backend=sandbox_backend,
-                workspace_dir=WORKSPACE_DIR,
+                workspace_dir=session_workspace_dir,
             )
         )
         tools.extend(
             build_sandbox_tools(
                 sandbox_backend=sandbox_backend,
-                workspace_dir=WORKSPACE_DIR,
+                workspace_dir=session_workspace_dir,
             )
         )
         logger.info(
@@ -634,6 +638,7 @@ class SessionManager:
             agent=agent,
             backend=backend,
             sandbox_backend=sandbox_backend,
+            workspace_dir=session_workspace_dir,
         )
         await session.start()
         async with self._lock:
@@ -662,7 +667,7 @@ class SessionManager:
                 if self._pool.config.bind_workspace:
                     synced = True
                 else:
-                    await self._pool.sync_workspace(session.sandbox_backend, WORKSPACE_DIR)
+                    await self._pool.sync_workspace(session.sandbox_backend, session.workspace_dir)
                     synced = True
         except Exception as exc:
             logger.warning("Failed to sync workspace for %s: %s", session_id, exc)

@@ -321,6 +321,13 @@ class DockerSandboxPool:
         args.append(self._config.image)
 
         result = subprocess.run(args, capture_output=True, text=True)
+        logger.debug(
+            "Docker run args=%s rc=%s stdout=%s stderr=%s",
+            args,
+            result.returncode,
+            result.stdout.strip(),
+            result.stderr.strip(),
+        )
         if result.returncode != 0:
             msg = result.stderr.strip() or "Failed to start Docker sandbox."
             raise RuntimeError(msg)
