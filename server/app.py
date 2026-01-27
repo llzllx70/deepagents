@@ -6,11 +6,11 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import HISTORY_PATH, SESSION_STATE_PATH, WORKSPACE_DIR, client_logger, logger
+from .config import WORKSPACE_DIR, client_logger, logger
 from deepagents_cli.integrations.docker_pool import DockerPoolConfig, DockerSandboxPool
 from .models import (
     ClientLogRequest,
@@ -18,10 +18,23 @@ from .models import (
     CreateSessionResponse,
     DeleteSessionResponse,
     HistoryPayload,
+    LoginRequest,
+    LoginResponse,
     SessionStatePayload,
+    UserConfigPayload,
 )
 from .sessions import RunRequest, Session, SessionManager
-from .storage import HISTORY_LOCK, SESSION_STATE_LOCK, read_json_file, write_json_file
+from .storage import (
+    read_session_owners,
+    read_user_config,
+    read_user_history,
+    read_user_session_state,
+    write_session_owners,
+    write_user_config,
+    write_user_history,
+    write_user_session_state,
+)
+from .auth import create_auth_token, delete_auth_token, get_user_for_token, verify_credentials
 
 docker_pool: DockerSandboxPool | None = None
 manager: SessionManager | None = None
@@ -58,8 +71,92 @@ app.add_middleware(
 )
 
 
+def extract_auth_token(request: Request) -> str | None:
+    token = request.headers.get("X-Auth-Token")
+    if token:
+        return token.strip()
+    query_token = request.query_params.get("token")
+    if query_token:
+        return query_token.strip()
+    return None
+
+
+async def require_user(request: Request) -> str:
+    token = extract_auth_token(request)
+    username = await get_user_for_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return username
+
+
+async def get_session_owner(session_id: str) -> str | None:
+    owners = await read_session_owners()
+    entry = owners.get(session_id)
+    if isinstance(entry, dict):
+        owner = entry.get("username")
+        if isinstance(owner, str) and owner:
+            return owner
+    return None
+
+
+async def set_session_owner(session_id: str, username: str) -> None:
+    owners = await read_session_owners()
+    owners[session_id] = {"username": username, "created_at": time.time()}
+    await write_session_owners(owners)
+
+
+async def clear_session_owner(session_id: str) -> None:
+    owners = await read_session_owners()
+    if session_id in owners:
+        owners.pop(session_id, None)
+        await write_session_owners(owners)
+
+
+@app.post("/login", response_model=LoginResponse)
+async def login(payload: LoginRequest) -> LoginResponse:
+    username = payload.username.strip()
+    if not verify_credentials(username, payload.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = await create_auth_token(username)
+    return LoginResponse(token=token, username=username)
+
+
+@app.post("/logout")
+async def logout(request: Request) -> dict[str, str]:
+    token = extract_auth_token(request)
+    await delete_auth_token(token)
+    return {"status": "ok"}
+
+
+@app.get("/me")
+async def me(request: Request) -> dict[str, str]:
+    username = await require_user(request)
+    return {"username": username}
+
+
+@app.get("/user_config")
+async def get_user_config(request: Request) -> dict[str, Any]:
+    username = await require_user(request)
+    payload = await read_user_config(username)
+    auto_approve = payload.get("auto_approve") if isinstance(payload, dict) else None
+    if auto_approve is None:
+        auto_approve = True
+    return {"auto_approve": bool(auto_approve)}
+
+
+@app.put("/user_config")
+async def save_user_config(payload: UserConfigPayload, request: Request) -> dict[str, str]:
+    username = await require_user(request)
+    data = payload.model_dump()
+    if data.get("auto_approve") is None:
+        data["auto_approve"] = True
+    await write_user_config(username, data)
+    return {"status": "ok"}
+
+
 @app.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
+async def create_session(req: CreateSessionRequest, request: Request) -> CreateSessionResponse:
+    username = await require_user(request)
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
     logger.info(
@@ -68,6 +165,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         req.auto_approve,
     )
     session = await manager.create_session(req.assistant_id, req.auto_approve)
+    await set_session_owner(session.session_id, username)
     return CreateSessionResponse(
         session_id=session.session_id,
         sandbox_id=session.sandbox_backend.id,
@@ -75,12 +173,17 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
 
 
 @app.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
-async def delete_session(session_id: str) -> DeleteSessionResponse:
+async def delete_session(session_id: str, request: Request) -> DeleteSessionResponse:
+    username = await require_user(request)
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
+    owner = await get_session_owner(session_id)
+    if owner and owner != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
     session, synced = await manager.delete_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    await clear_session_owner(session_id)
     return DeleteSessionResponse(
         session_id=session.session_id,
         sandbox_id=session.sandbox_backend.id,
@@ -89,65 +192,40 @@ async def delete_session(session_id: str) -> DeleteSessionResponse:
 
 
 @app.get("/history")
-async def get_history() -> dict[str, Any]:
-    async with HISTORY_LOCK:
-        payload = await read_json_file(HISTORY_PATH)
-    if not isinstance(payload, list):
-        payload = []
+async def get_history(request: Request) -> dict[str, Any]:
+    username = await require_user(request)
+    payload = await read_user_history(username)
     return {"history": payload}
 
 
 @app.put("/history")
-async def save_history(payload: HistoryPayload) -> dict[str, str]:
-    async with HISTORY_LOCK:
-        await write_json_file(HISTORY_PATH, payload.history)
+async def save_history(payload: HistoryPayload, request: Request) -> dict[str, str]:
+    username = await require_user(request)
+    await write_user_history(username, payload.history)
     return {"status": "ok"}
 
 
 @app.get("/session_state")
-async def get_session_state(client_id: str | None = None) -> dict[str, Any]:
-    async with SESSION_STATE_LOCK:
-        payload = await read_json_file(SESSION_STATE_PATH)
-    if not isinstance(payload, dict):
-        payload = {}
-    if client_id:
-        clients = payload.get("clients")
-        if isinstance(clients, dict):
-            return clients.get(client_id, {}) or {}
-        return {}
+async def get_session_state(request: Request) -> dict[str, Any]:
+    username = await require_user(request)
+    payload = await read_user_session_state(username)
     return payload
 
 
 @app.put("/session_state")
-async def save_session_state(payload: SessionStatePayload) -> dict[str, str]:
+async def save_session_state(payload: SessionStatePayload, request: Request) -> dict[str, str]:
+    username = await require_user(request)
     data = payload.model_dump()
     if data.get("timestamp") is None:
         data["timestamp"] = time.time()
-    async with SESSION_STATE_LOCK:
-        state = await read_json_file(SESSION_STATE_PATH)
-        if not isinstance(state, dict):
-            state = {}
-        clients = state.get("clients")
-        if not isinstance(clients, dict):
-            clients = {}
-        client_id = data.get("client_id")
-        if client_id:
-            entry = {
-                "session_id": data.get("session_id"),
-                "chat_id": data.get("chat_id"),
-                "has_messages": data.get("has_messages", False),
-                "timestamp": data.get("timestamp"),
-            }
-            clients[client_id] = entry
-            state["clients"] = clients
-            await write_json_file(SESSION_STATE_PATH, state)
-        else:
-            await write_json_file(SESSION_STATE_PATH, data)
+    data.pop("client_id", None)
+    await write_user_session_state(username, data)
     return {"status": "ok"}
 
 
 @app.post("/client_logs")
-async def client_logs(req: ClientLogRequest) -> dict[str, str]:
+async def client_logs(req: ClientLogRequest, request: Request) -> dict[str, str]:
+    username = await get_user_for_token(extract_auth_token(request))
     payload = {
         "event": req.event,
         "level": req.level or "info",
@@ -155,6 +233,8 @@ async def client_logs(req: ClientLogRequest) -> dict[str, str]:
         "ts": req.ts or time.time(),
         "detail": req.detail or {},
     }
+    if username:
+        payload["user"] = username
     client_logger.info(json.dumps(payload, ensure_ascii=False))
     return {"status": "ok"}
 
@@ -165,6 +245,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
         await websocket.close(code=1011)
         return
+    token = websocket.query_params.get("token")
+    username = await get_user_for_token(token)
+    if not username:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+    owner = await get_session_owner(session_id)
+    if owner and owner != username:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+    if owner is None:
+        await set_session_owner(session_id, username)
     session = await manager.get_session(session_id)
     if session is None:
         await websocket.accept()

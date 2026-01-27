@@ -42,7 +42,8 @@ class DeepAgentsClient {
         this.forceReconnect = false;
         this.defaultInputPlaceholder = '';
         this.sessionCreatePromise = null;
-        this.clientId = this.getClientId();
+        this.authToken = null;
+        this.currentUser = null;
 
         // UI elements
         this.elements = {};
@@ -61,30 +62,181 @@ class DeepAgentsClient {
         return urlParams.get('server') || defaultUrl;
     }
 
+    isAuthenticated() {
+        return Boolean(this.authToken);
+    }
+
+    authHeaders(extra = {}) {
+        const headers = { ...extra };
+        if (this.authToken) {
+            headers['X-Auth-Token'] = this.authToken;
+        }
+        return headers;
+    }
+
+    async authFetch(url, options = {}) {
+        const headers = this.authHeaders(options.headers || {});
+        const response = await fetch(url, { ...options, headers });
+        if (response.status === 401) {
+            this.handleAuthExpired();
+        }
+        return response;
+    }
+
+    handleAuthExpired() {
+        if (!this.isAuthenticated()) return;
+        this.handleLogout({ silent: true, statusMessage: '登录已失效，请重新登录' });
+    }
+
+    setLoginStatus(message, level = 'info') {
+        if (!this.elements.loginStatus) return;
+        this.elements.loginStatus.textContent = message || '';
+        this.elements.loginStatus.classList.remove('error', 'success');
+        if (level === 'error') {
+            this.elements.loginStatus.classList.add('error');
+        } else if (level === 'success') {
+            this.elements.loginStatus.classList.add('success');
+        }
+    }
+
+    applyLoggedOutState() {
+        this.authToken = null;
+        this.currentUser = null;
+        this.chatHistory = [];
+        this.renderHistory();
+        this.disconnectWebSocket({ allowReconnect: false });
+        this.sessionId = null;
+        this.wsUrl = null;
+        this.currentRunId = null;
+        this.activeChatId = null;
+        this.isRunning = false;
+        this.currentRunStatus = null;
+        this.pendingMessages = [];
+        this.pendingRunStatusId = null;
+        this.runIdToChatId.clear();
+        this.runStates.clear();
+        this.messageBuffer.clear();
+        this.updateConnectionStatus('disconnected');
+        this.elements.chatTitle.textContent = '未登录';
+        this.elements.welcomeMessage.style.display = 'flex';
+        this.resetChatView();
+        this.autoApprove = true;
+        if (this.elements.userInput) {
+            this.elements.userInput.value = '';
+            this.elements.userInput.disabled = true;
+            this.elements.userInput.placeholder = '请先登录';
+        }
+        if (this.elements.sendBtn) this.elements.sendBtn.disabled = true;
+        if (this.elements.newChatBtn) this.elements.newChatBtn.disabled = true;
+        if (this.elements.autoApproveToggle) {
+            this.elements.autoApproveToggle.disabled = true;
+            this.elements.autoApproveToggle.checked = this.autoApprove;
+        }
+        if (this.elements.loginForm) this.elements.loginForm.classList.remove('hidden');
+        if (this.elements.logoutBtn) this.elements.logoutBtn.disabled = true;
+        if (this.elements.loginUser) this.elements.loginUser.textContent = '未登录';
+        if (this.elements.loginPassword) this.elements.loginPassword.value = '';
+        this.setLoginStatus('');
+        this.updateSendButton();
+    }
+
+    applyLoggedInState() {
+        if (this.elements.userInput) {
+            this.elements.userInput.disabled = false;
+            this.elements.userInput.placeholder = this.defaultInputPlaceholder || '';
+        }
+        if (this.elements.newChatBtn) this.elements.newChatBtn.disabled = false;
+        if (this.elements.autoApproveToggle) {
+            this.elements.autoApproveToggle.disabled = false;
+            this.elements.autoApproveToggle.checked = this.autoApprove;
+        }
+        if (this.elements.loginForm) this.elements.loginForm.classList.add('hidden');
+        if (this.elements.logoutBtn) this.elements.logoutBtn.disabled = false;
+        if (this.elements.loginUser) {
+            this.elements.loginUser.textContent = this.currentUser ? `已登录：${this.currentUser}` : '已登录';
+        }
+        this.updateSendButton();
+    }
+
+    async handleLogin() {
+        if (!this.serverUrl) return;
+        const username = this.elements.loginUsername?.value?.trim() || '';
+        const password = this.elements.loginPassword?.value || '';
+        if (!username || !password) {
+            this.setLoginStatus('请输入账号和密码', 'error');
+            return;
+        }
+        this.setLoginStatus('登录中…');
+        if (this.elements.loginBtn) this.elements.loginBtn.disabled = true;
+        try {
+            const response = await fetch(`${this.serverUrl}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            if (!response.ok) {
+                throw new Error(`登录失败：${response.statusText || response.status}`);
+            }
+            const data = await response.json();
+            if (!data?.token) {
+                throw new Error('登录失败：无效响应');
+            }
+            this.authToken = data.token;
+            this.currentUser = data.username || username;
+            if (this.elements.loginPassword) this.elements.loginPassword.value = '';
+            this.applyLoggedInState();
+            this.setLoginStatus('登录成功', 'success');
+            await this.afterLogin();
+        } catch (error) {
+            this.setLoginStatus(error.message || '登录失败', 'error');
+        } finally {
+            if (this.elements.loginBtn) this.elements.loginBtn.disabled = false;
+        }
+    }
+
+    async handleLogout({ silent = false, statusMessage = '' } = {}) {
+        if (this.serverUrl && this.authToken) {
+            try {
+                await fetch(`${this.serverUrl}/logout`, {
+                    method: 'POST',
+                    headers: this.authHeaders()
+                });
+            } catch {
+                // ignore logout failures
+            }
+        }
+        this.applyLoggedOutState();
+        if (statusMessage) {
+            this.setLoginStatus(statusMessage, 'error');
+        } else if (!silent) {
+            this.setLoginStatus('已退出登录');
+        }
+    }
+
+    async afterLogin() {
+        await this.loadUserConfig();
+        await this.loadHistory();
+        this.renderHistory();
+        const resumed = await this.resumeSessionIfPossible();
+        if (!resumed) {
+            this.updateConnectionStatus('disconnected');
+            this.elements.chatTitle.textContent = '新对话';
+        }
+        this.updateInputState();
+    }
+
     async init() {
         // Cache DOM elements
         this.cacheElements();
 
-        // Load config (auto-approve default, etc.)
-        this.loadConfig();
-
         // Setup event listeners
         this.setupEventListeners();
-
-        // Load chat history from server
-        await this.loadHistory();
-        this.renderHistory();
 
         const navEntry = performance.getEntriesByType('navigation')[0];
         const navType = navEntry?.type || 'navigate';
         const action = navType === 'reload' ? 'refresh' : 'load';
         this.logClient('page_load', { url: window.location.href, navType, action });
-
-        // Connect to server
-        const resumed = await this.resumeSessionIfPossible();
-        if (!resumed) {
-            this.updateConnectionStatus('disconnected');
-        }
+        this.applyLoggedOutState();
     }
 
     cacheElements() {
@@ -96,6 +248,13 @@ class DeepAgentsClient {
             historyList: document.getElementById('historyList'),
             autoApproveToggle: document.getElementById('autoApproveToggle'),
             connectionStatus: document.getElementById('connectionStatus'),
+            loginForm: document.getElementById('loginForm'),
+            loginUsername: document.getElementById('loginUsername'),
+            loginPassword: document.getElementById('loginPassword'),
+            loginBtn: document.getElementById('loginBtn'),
+            logoutBtn: document.getElementById('logoutBtn'),
+            loginStatus: document.getElementById('loginStatus'),
+            loginUser: document.getElementById('loginUser'),
 
             // Header
             sidebarToggle: document.getElementById('sidebarToggle'),
@@ -137,8 +296,19 @@ class DeepAgentsClient {
             if (this.sessionId) {
                 this.send({ type: 'auto_approve', enabled: this.autoApprove });
             }
-            this.saveConfig();
+            this.saveUserConfig();
         });
+
+        if (this.elements.loginForm) {
+            this.elements.loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.handleLogin();
+            });
+        }
+
+        if (this.elements.logoutBtn) {
+            this.elements.logoutBtn.addEventListener('click', () => this.handleLogout());
+        }
 
         // Cancel button
         if (this.elements.cancelBtn) {
@@ -231,11 +401,15 @@ class DeepAgentsClient {
     }
 
     async createSession() {
+        if (!this.isAuthenticated()) {
+            this.setLoginStatus('请先登录', 'error');
+            throw new Error('未登录');
+        }
         try {
             this.updateConnectionStatus('connecting');
             this.logClient('session_create_start', { mode: 'new' });
 
-            const response = await fetch(`${this.serverUrl}/sessions`, {
+            const response = await this.authFetch(`${this.serverUrl}/sessions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -266,6 +440,10 @@ class DeepAgentsClient {
     }
 
     async ensureSession() {
+        if (!this.isAuthenticated()) {
+            this.setLoginStatus('请先登录', 'error');
+            throw new Error('未登录');
+        }
         if (this.sessionId) return this.sessionId;
         if (this.sessionCreatePromise) return this.sessionCreatePromise;
         this.sessionCreatePromise = this.createSession();
@@ -295,8 +473,9 @@ class DeepAgentsClient {
 
     async deleteSession(sessionId) {
         if (!sessionId) return;
+        if (!this.isAuthenticated()) return;
         try {
-            const response = await fetch(`${this.serverUrl}/sessions/${sessionId}`, {
+            const response = await this.authFetch(`${this.serverUrl}/sessions/${sessionId}`, {
                 method: 'DELETE'
             });
             if (!response.ok && response.status !== 404) {
@@ -312,7 +491,8 @@ class DeepAgentsClient {
         this.sessionId = sessionId;
         const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
         const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
-        this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}`;
+        const tokenParam = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
+        this.wsUrl = `${wsProtocol}//${wsHost}/ws/${this.sessionId}${tokenParam}`;
         this.elements.chatTitle.textContent = sessionId;
     }
 
@@ -381,7 +561,7 @@ class DeepAgentsClient {
     }
 
     connectWebSocket() {
-        if (!this.wsUrl) return;
+        if (!this.wsUrl || !this.isAuthenticated()) return;
         if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
@@ -1632,6 +1812,10 @@ class DeepAgentsClient {
     async sendMessage() {
         const input = this.elements.userInput.value.trim();
         if (!input || this.isRunning || this.isViewOnlyMode()) return;
+        if (!this.isAuthenticated()) {
+            this.setLoginStatus('请先登录', 'error');
+            return;
+        }
 
         if (!this.sessionId) {
             try {
@@ -1692,6 +1876,10 @@ class DeepAgentsClient {
     }
 
     newChat() {
+        if (!this.isAuthenticated()) {
+            this.setLoginStatus('请先登录', 'error');
+            return;
+        }
         if (this.hasCurrentMessages()) {
             this.backgroundCurrentChat('new_chat');
         }
@@ -1769,9 +1957,13 @@ class DeepAgentsClient {
     updateInputState() {
         if (!this.elements.userInput || !this.elements.sendBtn) return;
         const isViewOnly = this.isViewOnlyMode();
-        this.elements.userInput.disabled = isViewOnly;
+        const isLocked = !this.isAuthenticated();
+        this.elements.userInput.disabled = isViewOnly || isLocked;
         if (isViewOnly) {
             this.elements.userInput.placeholder = '当前会话正在运行，无法在此发送消息';
+            this.elements.userInput.blur();
+        } else if (isLocked) {
+            this.elements.userInput.placeholder = '请先登录';
             this.elements.userInput.blur();
         } else {
             this.elements.userInput.placeholder = this.defaultInputPlaceholder || '';
@@ -1780,9 +1972,8 @@ class DeepAgentsClient {
     }
 
     setSessionState({ sessionId, chatId = null, hasMessages = false }) {
-        if (!sessionId) return;
+        if (!sessionId || !this.isAuthenticated()) return;
         this.persistSessionState({
-            client_id: this.clientId,
             session_id: sessionId,
             chat_id: chatId,
             has_messages: Boolean(hasMessages),
@@ -1791,10 +1982,9 @@ class DeepAgentsClient {
     }
 
     async loadSessionState() {
-        if (!this.serverUrl) return null;
+        if (!this.serverUrl || !this.isAuthenticated()) return null;
         try {
-            const query = this.clientId ? `?client_id=${encodeURIComponent(this.clientId)}` : '';
-            const response = await fetch(`${this.serverUrl}/session_state${query}`);
+            const response = await this.authFetch(`${this.serverUrl}/session_state`);
             if (!response.ok) return null;
             const parsed = await response.json();
             if (!parsed || typeof parsed !== 'object') return null;
@@ -1837,9 +2027,10 @@ class DeepAgentsClient {
                 console.warn('client log beacon failed:', error);
             }
         }
+        const headers = this.authHeaders({ 'Content-Type': 'application/json' });
         fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body,
             keepalive: true
         }).catch(error => {
@@ -1918,6 +2109,7 @@ class DeepAgentsClient {
         const btn = this.elements.sendBtn;
         const hasText = this.elements.userInput.value.trim().length > 0;
         const isViewOnly = this.isViewOnlyMode();
+        const isLocked = !this.isAuthenticated();
 
         if (this.isRunning) {
             btn.disabled = false;
@@ -1926,6 +2118,19 @@ class DeepAgentsClient {
             btn.innerHTML = `
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect>
+                </svg>
+            `;
+            return;
+        }
+
+        if (isLocked) {
+            btn.disabled = true;
+            btn.classList.remove('stop');
+            btn.title = '请先登录';
+            btn.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
             `;
             return;
@@ -2047,12 +2252,13 @@ class DeepAgentsClient {
 
     // History Management
     async loadHistory() {
-        if (!this.serverUrl) {
+        if (!this.serverUrl || !this.isAuthenticated()) {
             this.chatHistory = [];
+            this.runIdToChatId.clear();
             return this.chatHistory;
         }
         try {
-            const response = await fetch(`${this.serverUrl}/history`);
+            const response = await this.authFetch(`${this.serverUrl}/history`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             const raw = Array.isArray(payload?.history) ? payload.history : [];
@@ -2075,9 +2281,9 @@ class DeepAgentsClient {
     }
 
     async persistHistory() {
-        if (!this.serverUrl) return;
+        if (!this.serverUrl || !this.isAuthenticated()) return;
         try {
-            await fetch(`${this.serverUrl}/history`, {
+            await this.authFetch(`${this.serverUrl}/history`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ history: this.chatHistory })
@@ -2088,13 +2294,10 @@ class DeepAgentsClient {
     }
 
     async persistSessionState(payload) {
-        if (!this.serverUrl) return;
+        if (!this.serverUrl || !this.isAuthenticated()) return;
         const data = { ...payload };
-        if (!data.client_id && this.clientId) {
-            data.client_id = this.clientId;
-        }
         try {
-            await fetch(`${this.serverUrl}/session_state`, {
+            await this.authFetch(`${this.serverUrl}/session_state`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
@@ -2380,35 +2583,31 @@ class DeepAgentsClient {
         }
     }
 
-    saveConfig() {
-        localStorage.setItem('deepagents_config', JSON.stringify({
-            autoApprove: this.autoApprove,
-            serverUrl: this.serverUrl
-        }));
-    }
-
-    getClientId() {
-        const storageKey = 'deepagents_client_id';
-        let clientId = localStorage.getItem(storageKey);
-        if (!clientId) {
-            if (window.crypto?.randomUUID) {
-                clientId = window.crypto.randomUUID();
-            } else {
-                clientId = `client_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-            }
-            localStorage.setItem(storageKey, clientId);
-        }
-        return clientId;
-    }
-
-    loadConfig() {
-        const stored = localStorage.getItem('deepagents_config');
-        if (stored) {
-            const config = JSON.parse(stored);
-            if (Object.prototype.hasOwnProperty.call(config, 'autoApprove')) {
-                this.autoApprove = Boolean(config.autoApprove);
+    async loadUserConfig() {
+        if (!this.serverUrl || !this.isAuthenticated()) return;
+        try {
+            const response = await this.authFetch(`${this.serverUrl}/user_config`);
+            if (!response.ok) return;
+            const config = await response.json();
+            if (Object.prototype.hasOwnProperty.call(config, 'auto_approve')) {
+                this.autoApprove = Boolean(config.auto_approve);
             }
             this.elements.autoApproveToggle.checked = this.autoApprove;
+        } catch {
+            // ignore config load failures
+        }
+    }
+
+    async saveUserConfig() {
+        if (!this.serverUrl || !this.isAuthenticated()) return;
+        try {
+            await this.authFetch(`${this.serverUrl}/user_config`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ auto_approve: this.autoApprove })
+            });
+        } catch {
+            // ignore config save failures
         }
     }
 

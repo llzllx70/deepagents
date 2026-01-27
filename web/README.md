@@ -11,7 +11,7 @@ A modern web-based client for interacting with the DeepAgents server, inspired b
 - **Todo List Display**: Track agent task progress
 - **Human-in-the-Loop**: Approve or reject agent actions when needed
 - **Auto-Approve Mode**: Toggle automatic action approval
-- **History Persistence**: Chat history saved to local storage
+- **History Persistence**: Per-user server-side storage (under `data/users/`)
 - **Run Cancellation**: Stop running agent tasks
 - **Responsive Design**: Works on desktop and mobile devices
 - **Markdown Rendering**: Rich text display for assistant messages
@@ -61,6 +61,10 @@ http://localhost:8080/?server=http://192.168.1.100:8000
 ```
 
 ## Usage
+
+### Login
+
+Use one of the default accounts: `xh1/xh1`, `xh2/xh2`, `xh3/xh3`, `xh4/xh4`.
 
 ### Basic Chat
 
@@ -219,16 +223,16 @@ web/
 
 ### History Not Saving
 
-1. Check if localStorage is enabled in browser
-2. Clear browser cache and try again
-3. Check browser console for storage errors
+1. Confirm you are logged in and the token is valid
+2. Check that the server `data/` directory is writable
+3. Review browser console and server logs
 
 ## Security Notes
 
 - The web client connects via WebSocket to the server
 - All communication happens client-side; no data is sent to external services
-- Chat history is stored locally in the browser
-- For production use, consider adding authentication
+- Chat history is stored on the server per user (under `data/users/`)
+- Authentication is required for session and history access
 
 ## License
 

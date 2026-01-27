@@ -39,6 +39,27 @@
                         <span class="status-text">未连接</span>
                     </div>
                 </div>
+                <div class="login-panel" id="loginPanel">
+                    <div class="login-header">
+                        <span class="login-title">登录</span>
+                        <span class="login-user" id="loginUser">未登录</span>
+                    </div>
+                    <form class="login-form" id="loginForm">
+                        <label for="loginUsername">账号</label>
+                        <input id="loginUsername" name="username" list="loginUsers" autocomplete="username" placeholder="xh1" required>
+                        <datalist id="loginUsers">
+                            <option value="xh1"></option>
+                            <option value="xh2"></option>
+                            <option value="xh3"></option>
+                            <option value="xh4"></option>
+                        </datalist>
+                        <label for="loginPassword">密码</label>
+                        <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="••••" required>
+                        <button class="btn btn-primary login-btn" id="loginBtn" type="submit">登录</button>
+                    </form>
+                    <button class="btn btn-secondary logout-btn" id="logoutBtn" type="button">退出登录</button>
+                    <div class="login-status" id="loginStatus"></div>
+                </div>
             </div>
         </aside>
 

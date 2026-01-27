@@ -109,9 +109,10 @@ class DockerSandboxPool:
             if workspace_dir is None:
                 msg = "workspace_dir required when bind_workspace is enabled."
                 raise RuntimeError(msg)
-            await asyncio.to_thread(
+            container_id = await asyncio.to_thread(
                 self._create_container, name=session_id, workspace_dir=workspace_dir
             )
+            await asyncio.to_thread(self._unpause_container, container_id)
             async with self._lock:
                 self._in_use.add(session_id)
                 in_use_count = len(self._in_use)
@@ -134,7 +135,11 @@ class DockerSandboxPool:
         if container_id is not None:
             await asyncio.to_thread(self._rename_container, container_id, session_id)
         else:
-            await asyncio.to_thread(self._create_container, name=session_id)
+            container_id = await asyncio.to_thread(self._create_container, name=session_id)
+        if container_id is None:
+            msg = "Failed to acquire Docker sandbox."
+            raise RuntimeError(msg)
+        await asyncio.to_thread(self._unpause_container, container_id)
 
         async with self._lock:
             self._in_use.add(session_id)
@@ -190,6 +195,7 @@ class DockerSandboxPool:
             idle_count,
             in_use_count,
         )
+        await asyncio.to_thread(self._unpause_container, container_id)
         return DockerSandboxBackend(container_id, workdir=self._config.workdir)
 
     async def release(self, backend: DockerSandboxBackend) -> None:
@@ -356,4 +362,17 @@ class DockerSandboxPool:
             if "already paused" in stderr.lower():
                 return
             msg = stderr or "Failed to pause Docker sandbox."
+            raise RuntimeError(msg)
+
+    def _unpause_container(self, container_id: str) -> None:
+        result = subprocess.run(
+            ["docker", "unpause", container_id],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "not paused" in stderr.lower():
+                return
+            msg = stderr or "Failed to unpause Docker sandbox."
             raise RuntimeError(msg)

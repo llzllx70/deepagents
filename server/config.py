@@ -20,6 +20,10 @@ DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 HISTORY_PATH = DATA_DIR / "chat_history.json"
 SESSION_STATE_PATH = DATA_DIR / "session_state.json"
+USERS_DIR = DATA_DIR / "users"
+USERS_DIR.mkdir(parents=True, exist_ok=True)
+AUTH_SESSIONS_PATH = DATA_DIR / "auth_sessions.json"
+SESSION_OWNERS_PATH = DATA_DIR / "session_owners.json"
 
 logging.basicConfig(
     level=logging.INFO,

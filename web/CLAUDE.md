@@ -125,7 +125,7 @@ web/
 - **Todo List Display**: Task progress tracking
 - **Human-in-the-Loop**: Modal-based approve/reject workflow
 - **Auto-Approve Mode**: Toggle for automatic approval
-- **History Persistence**: LocalStorage (max 50 chats)
+- **History Persistence**: Server-side per user (max 50 chats)
 - **Markdown Rendering**: Via `marked.js`
 - **Syntax Highlighting**: Via `highlight.js`
 - **Responsive Design**: Mobile-friendly with collapsible sidebar
@@ -140,6 +140,6 @@ web/
 ## Security
 
 - All WebSocket communication is client-side; no external services
-- Chat history stored locally in browser localStorage
+- Chat history stored on the server under `data/users/`
 - User input sanitized via `escapeHtml()` before rendering
-- For production: consider adding authentication
+- Authentication required for history/session access

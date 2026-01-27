@@ -39,3 +39,17 @@ class SessionStatePayload(BaseModel):
     chat_id: str | None = None
     has_messages: bool = False
     timestamp: float | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    username: str
+
+
+class UserConfigPayload(BaseModel):
+    auto_approve: bool | None = None
