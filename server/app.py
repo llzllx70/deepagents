@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import WORKSPACE_DIR, client_logger, logger
-from deepagents_cli.integrations.docker_pool import DockerPoolConfig, DockerSandboxPool
+from .docker_pool import DockerPoolConfig, DockerSandboxPool
 from .models import (
     ClientLogRequest,
     CreateSessionRequest,

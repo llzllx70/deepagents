@@ -28,6 +28,21 @@ def _preview_args(value: Any, limit: int = 200) -> str:
     return text
 
 
+def _log_write_file_debug(tool_name: str, args: Any, tool_call_id: str | None) -> None:
+    if not DEBUG_TOOL_CALLS or tool_name != "write_file":
+        return
+    args_dict = args if isinstance(args, dict) else {}
+    content = args_dict.get("content")
+    content_len = len(content) if isinstance(content, str) else 0
+    logger.info(
+        "write_file invoke: tool_call_id=%s file_path=%s content_len=%s args_type=%s",
+        tool_call_id,
+        args_dict.get("file_path"),
+        content_len,
+        type(args).__name__,
+    )
+
+
 async def emit_tool_call_started(
     *,
     session: "Session",
@@ -47,6 +62,8 @@ async def emit_tool_call_started(
 
     if tool_name == "write_file":
         print('get')
+
+    _log_write_file_debug(tool_name, args, tool_call_id)
 
     logger.info(
         "Tool call started: session_id=%s run_id=%s tool=%s tool_call_id=%s args=%s",
@@ -149,6 +166,8 @@ async def handle_tool_call_block(
             file_op_tracker.update_args(buffer_id, parsed_args)
 
     tool_call_buffers.pop(buffer_key, None)
+
+    _log_write_file_debug(buffer_name, parsed_args, buffer_id)
 
     if DEBUG_TOOL_CALLS:
         logger.info(

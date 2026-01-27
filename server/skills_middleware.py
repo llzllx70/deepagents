@@ -11,21 +11,21 @@ Project-level: {PROJECT_ROOT}/.deepagents/skills/
 
 Example structure:
 ~/.deepagents/{AGENT_NAME}/skills/
-├── web-research/
-│   ├── SKILL.md        # Required: YAML frontmatter + instructions
-│   └── helper.py       # Optional: supporting files
-├── code-review/
-│   ├── SKILL.md
-│   └── checklist.md
+|-- web-research/
+|   |-- SKILL.md        # Required: YAML frontmatter + instructions
+|   `-- helper.py       # Optional: supporting files
+|-- code-review/
+|   |-- SKILL.md
+|   `-- checklist.md
 
 .deepagents/skills/
-├── project-specific/
-│   └── SKILL.md        # Project-specific skills
+`-- project-specific/
+    `-- SKILL.md        # Project-specific skills
 """
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import NotRequired, TypedDict
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -75,7 +75,7 @@ Skills follow a **progressive disclosure** pattern - you know they exist (name +
 4. **Access supporting files**: Skills may include Python scripts, configs, or reference docs - use absolute paths
 
 **When to Use Skills:**
-- When the user's request matches a skill's domain (e.g., "research X" → web-research skill)
+- When the user's request matches a skill's domain (e.g., "research X" -> web-research skill)
 - When you need specialized knowledge or structured workflows
 - When a skill provides proven patterns for complex tasks
 
@@ -90,9 +90,9 @@ Skills may contain Python scripts or other executable files. Always use absolute
 
 User: "Can you research the latest developments in quantum computing?"
 
-1. Check available skills above → See "web-research" skill with its full path
+1. Check available skills above -> See "web-research" skill with its full path
 2. Read the skill using the path shown in the list
-3. Follow the skill's research workflow (search → organize → synthesize)
+3. Follow the skill's research workflow (search -> organize -> synthesize)
 4. Use any helper scripts with absolute paths
 
 Remember: Skills are tools to make you more capable and consistent. When in doubt, check if a skill exists for the task!
@@ -146,9 +146,7 @@ class SkillsMiddleware(AgentMiddleware):
             Path(project_skills_dir).expanduser() if project_skills_dir else None
         )
         # Store display paths for prompts
-        self.skills_dir_display = (
-            skills_display_root or f"~/.deepagents/{assistant_id}/skills"
-        )
+        self.skills_dir_display = skills_display_root or f"~/.deepagents/{assistant_id}/skills"
         self.project_skills_display = (
             project_skills_display_root
             if project_skills_display_root
@@ -163,12 +161,8 @@ class SkillsMiddleware(AgentMiddleware):
         """Format skills locations for display in system prompt."""
         locations = [f"**User Skills**: `{self.skills_dir_display}`"]
         if self.project_skills_dir:
-            project_display = (
-                self.project_skills_display or str(self.project_skills_dir)
-            )
-            locations.append(
-                f"**Project Skills**: `{project_display}` (overrides user skills)"
-            )
+            project_display = self.project_skills_display or str(self.project_skills_dir)
+            locations.append(f"**Project Skills**: `{project_display}` (overrides user skills)")
         return "\n".join(locations)
 
     def _format_skill_path(self, skill: SkillMetadata) -> str:
@@ -197,9 +191,7 @@ class SkillsMiddleware(AgentMiddleware):
         if not skills:
             locations = [f"{self.skills_dir_display}/"]
             if self.project_skills_dir:
-                project_display = (
-                    self.project_skills_display or str(self.project_skills_dir)
-                )
+                project_display = self.project_skills_display or str(self.project_skills_dir)
                 locations.append(f"{project_display}/")
             return f"(No skills available yet. You can create skills in {' or '.join(locations)})"
 
@@ -207,7 +199,7 @@ class SkillsMiddleware(AgentMiddleware):
         user_skills = [s for s in skills if s["source"] == "user"]
         project_skills = [s for s in skills if s["source"] == "project"]
 
-        lines = []
+        lines: list[str] = []
 
         # Show user skills
         if user_skills:
@@ -215,7 +207,7 @@ class SkillsMiddleware(AgentMiddleware):
             for skill in user_skills:
                 lines.append(f"- **{skill['name']}**: {skill['description']}")
                 skill_path = self._format_skill_path(skill)
-                lines.append(f"  → Read `{skill_path}` for full instructions")
+                lines.append(f"  -> Read `{skill_path}` for full instructions")
             lines.append("")
 
         # Show project skills
@@ -224,7 +216,7 @@ class SkillsMiddleware(AgentMiddleware):
             for skill in project_skills:
                 lines.append(f"- **{skill['name']}**: {skill['description']}")
                 skill_path = self._format_skill_path(skill)
-                lines.append(f"  → Read `{skill_path}` for full instructions")
+                lines.append(f"  -> Read `{skill_path}` for full instructions")
 
         return "\n".join(lines)
 
@@ -259,64 +251,48 @@ class SkillsMiddleware(AgentMiddleware):
         This runs on every model call to ensure skills info is always available.
 
         Args:
-            request: The model request being processed.
-            handler: The handler function to call with the modified request.
+            request: ModelRequest containing messages and system prompt
+            handler: Next middleware or model to call
 
         Returns:
-            The model response from the handler.
+            ModelResponse with skills info injected into system prompt
         """
-        # Get skills metadata from state
         skills_metadata = request.state.get("skills_metadata", [])
-
-        # Format skills locations and list
         skills_locations = self._format_skills_locations()
         skills_list = self._format_skills_list(skills_metadata)
 
-        # Format the skills documentation
         skills_section = self.system_prompt_template.format(
             skills_locations=skills_locations,
             skills_list=skills_list,
         )
 
-        if request.system_prompt:
-            system_prompt = request.system_prompt + "\n\n" + skills_section
-        else:
-            system_prompt = skills_section
+        request.messages[0].content = f"{request.messages[0].content}\n\n{skills_section}"
 
-        return handler(request.override(system_prompt=system_prompt))
+        return handler(request)
+
+    async def wrap_model_call_async(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        """Async version of wrap_model_call."""
+        skills_metadata = request.state.get("skills_metadata", [])
+        skills_locations = self._format_skills_locations()
+        skills_list = self._format_skills_list(skills_metadata)
+
+        skills_section = self.system_prompt_template.format(
+            skills_locations=skills_locations,
+            skills_list=skills_list,
+        )
+
+        request.messages[0].content = f"{request.messages[0].content}\n\n{skills_section}"
+
+        return await handler(request)
 
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """(async) Inject skills documentation into the system prompt.
-
-        Args:
-            request: The model request being processed.
-            handler: The handler function to call with the modified request.
-
-        Returns:
-            The model response from the handler.
-        """
-        # The state is guaranteed to be SkillsState due to state_schema
-        state = cast("SkillsState", request.state)
-        skills_metadata = state.get("skills_metadata", [])
-
-        # Format skills locations and list
-        skills_locations = self._format_skills_locations()
-        skills_list = self._format_skills_list(skills_metadata)
-
-        # Format the skills documentation
-        skills_section = self.system_prompt_template.format(
-            skills_locations=skills_locations,
-            skills_list=skills_list,
-        )
-
-        # Inject into system prompt
-        if request.system_prompt:
-            system_prompt = request.system_prompt + "\n\n" + skills_section
-        else:
-            system_prompt = skills_section
-
-        return await handler(request.override(system_prompt=system_prompt))
+        """Async hook expected by AgentMiddleware."""
+        return await self.wrap_model_call_async(request, handler)

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import logging
-
-from deepagents_cli.integrations.docker import DockerSandboxBackend, ensure_docker_available
+from .docker import DockerSandboxBackend, ensure_docker_available
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +43,7 @@ class DockerPoolConfig:
                 return default
             return raw.strip().lower() in ("1", "true", "yes", "on")
 
-        image = os.environ.get(
-            "DEEPAGENTS_DOCKER_IMAGE", "deepagents-sandbox:22.04"
-        )
+        image = os.environ.get("DEEPAGENTS_DOCKER_IMAGE", "deepagents-sandbox:22.04")
         pool_size = _int_from_env("DEEPAGENTS_DOCKER_POOL_SIZE", 10)
         min_idle = _int_from_env("DEEPAGENTS_DOCKER_MIN_IDLE", 2)
         workdir = os.environ.get("DEEPAGENTS_DOCKER_WORKDIR", "/workspace")

@@ -1,4 +1,6 @@
-"""Agent management and creation for the CLI."""
+"""Agent management and creation for the server."""
+
+from __future__ import annotations
 
 import os
 import shutil
@@ -9,9 +11,8 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.sandbox import SandboxBackendProtocol
-from langchain.agents.middleware import (
-    InterruptOnConfig,
-)
+from deepagents.middleware import MemoryMiddleware
+from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentState
 from langchain.messages import ToolCall
 from langchain.tools import BaseTool
@@ -20,11 +21,33 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 from langgraph.runtime import Runtime
 
-from deepagents_cli.agent_memory import AgentMemoryMiddleware
 from deepagents_cli.config import COLORS, config, console, get_default_coding_instructions, settings
-from deepagents_cli.integrations.sandbox_factory import get_default_working_dir
 from deepagents_cli.shell import ShellMiddleware
-from deepagents_cli.skills import SkillsMiddleware
+
+from .skills_middleware import SkillsMiddleware
+
+
+_PROVIDER_TO_WORKING_DIR: dict[str, str] = {
+    "modal": "/workspace",
+    "runloop": "/home/user",
+    "daytona": "/home/daytona",
+    "docker": "/workspace",
+}
+
+
+def get_default_working_dir(provider: str) -> str:
+    """Get the default working directory for a given sandbox provider.
+
+    Args:
+        provider: Sandbox provider name ("modal", "runloop", "daytona", "docker")
+
+    Returns:
+        Default working directory path as string
+    """
+    if provider not in _PROVIDER_TO_WORKING_DIR:
+        msg = f"Unsupported sandbox provider: {provider}"
+        raise ValueError(msg)
+    return _PROVIDER_TO_WORKING_DIR[provider]
 
 
 def list_agents() -> None:
@@ -47,11 +70,12 @@ def list_agents() -> None:
             agent_md = agent_path / "agent.md"
 
             if agent_md.exists():
-                console.print(f"  • [bold]{agent_name}[/bold]", style=COLORS["primary"])
+                console.print(f"  * [bold]{agent_name}[/bold]", style=COLORS["primary"])
                 console.print(f"    {agent_path}", style=COLORS["dim"])
             else:
                 console.print(
-                    f"  • [bold]{agent_name}[/bold] [dim](incomplete)[/dim]", style=COLORS["tool"]
+                    f"  * [bold]{agent_name}[/bold] [dim](incomplete)[/dim]",
+                    style=COLORS["tool"],
                 )
                 console.print(f"    {agent_path}", style=COLORS["dim"])
 
@@ -88,7 +112,7 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
     agent_md = agent_dir / "agent.md"
     agent_md.write_text(source_content)
 
-    console.print(f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"])
+    console.print(f"OK: Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"])
     console.print(f"Location: {agent_dir}\n", style=COLORS["dim"])
 
 
@@ -109,8 +133,6 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
     current_datetime = now.isoformat(timespec="minutes")
 
     if sandbox_type:
-        # Get provider-specific working directory
-
         working_dir = get_default_working_dir(sandbox_type)
 
         working_dir_section = f"""### Current Working Directory
@@ -246,7 +268,7 @@ def _format_web_search_description(
     query = args.get("query", "unknown")
     max_results = args.get("max_results", 5)
 
-    return f"Query: {query}\nMax results: {max_results}\n\n⚠️  This will use Tavily API credits"
+    return f"Query: {query}\nMax results: {max_results}\n\nWARNING: This will use Tavily API credits"
 
 
 def _format_fetch_url_description(
@@ -257,7 +279,7 @@ def _format_fetch_url_description(
     url = args.get("url", "unknown")
     timeout = args.get("timeout", 30)
 
-    return f"URL: {url}\nTimeout: {timeout}s\n\n⚠️  Will fetch and convert web content to markdown"
+    return f"URL: {url}\nTimeout: {timeout}s\n\nWARNING: Will fetch and convert web content to markdown"
 
 
 def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
@@ -278,10 +300,10 @@ def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: 
     return (
         f"Subagent Type: {subagent_type}\n\n"
         f"Task Instructions:\n"
-        f"{'─' * 40}\n"
+        f"{'-' * 40}\n"
         f"{description_preview}\n"
-        f"{'─' * 40}\n\n"
-        f"⚠️  Subagent will have access to file operations and shell commands"
+        f"{'-' * 40}\n\n"
+        f"WARNING: Subagent will have access to file operations and shell commands"
     )
 
 
@@ -376,7 +398,7 @@ def create_cli_agent(
                       based on sandbox_type and assistant_id.
         auto_approve: If True, automatically approves all tool calls without human
                      confirmation. Useful for automated workflows.
-        enable_memory: Enable AgentMemoryMiddleware for persistent memory
+        enable_memory: Enable MemoryMiddleware for persistent memory
         enable_skills: Enable SkillsMiddleware for custom agent skills
         enable_shell: Enable ShellMiddleware for local shell execution (only in local mode)
 
@@ -389,12 +411,24 @@ def create_cli_agent(
         tools = []
 
     # Setup agent directory for persistent memory (if enabled)
+    agent_md: Path | None = None
     if enable_memory or enable_skills:
         agent_dir = settings.ensure_agent_dir(assistant_id)
         agent_md = agent_dir / "agent.md"
         if not agent_md.exists():
             source_content = get_default_coding_instructions()
             agent_md.write_text(source_content)
+
+    memory_sources: list[str] = []
+    if enable_memory:
+        if agent_md is None:
+            msg = "Agent directory not initialized for memory storage"
+            raise RuntimeError(msg)
+        memory_sources.append(str(agent_md))
+        project_root = settings.project_root
+        if project_root:
+            memory_sources.append(str(project_root / ".deepagents" / "agent.md"))
+            memory_sources.append(str(project_root / "agent.md"))
 
     # Skills directories (if enabled)
     skills_dir = None
@@ -425,7 +459,10 @@ def create_cli_agent(
         # Add memory middleware
         if enable_memory:
             agent_middleware.append(
-                AgentMemoryMiddleware(settings=settings, assistant_id=assistant_id)
+                MemoryMiddleware(
+                    backend=FilesystemBackend(),
+                    sources=memory_sources,
+                )
             )
 
         # Add skills middleware
@@ -458,7 +495,10 @@ def create_cli_agent(
         # Add memory middleware
         if enable_memory:
             agent_middleware.append(
-                AgentMemoryMiddleware(settings=settings, assistant_id=assistant_id)
+                MemoryMiddleware(
+                    backend=FilesystemBackend(),
+                    sources=memory_sources,
+                )
             )
 
         # Add skills middleware

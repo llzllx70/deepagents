@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -16,12 +17,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from .config import WORKSPACE_DIR, logger
 
-from deepagents_cli.agent import create_cli_agent
+from .agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
 from deepagents_cli.file_ops import FileOpTracker
-from deepagents_cli.integrations.docker import DockerSandboxBackend
-from deepagents_cli.integrations.docker_pool import DockerSandboxPool
 from deepagents_cli.tools import fetch_url, http_request, web_search
+from .docker import DockerSandboxBackend
+from .docker_pool import DockerSandboxPool
 from .context import inject_file_context
 from .message_utils import (
     extract_skill_name,
@@ -39,6 +40,29 @@ from .qwen_tools import build_qwen_tools
 from .sandbox_tools import build_sandbox_tools
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
+
+
+def _format_stream_input_for_log(value: object) -> str:
+    if isinstance(value, Command):
+        resume = getattr(value, "resume", None)
+        if isinstance(resume, dict):
+            return f"Command(resume_interrupts={list(resume.keys())})"
+        return "Command(resume=<non-dict>)"
+    if isinstance(value, dict):
+        messages = value.get("messages")
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                role = last.get("role")
+                content = last.get("content")
+                if isinstance(content, str):
+                    content_preview = content.replace("\n", "\\n")
+                    if len(content_preview) > 200:
+                        content_preview = content_preview[:200] + "...(truncated)"
+                    return f"dict(messages[-1].role={role!r}, content={content_preview!r})"
+                return f"dict(messages[-1].role={role!r}, content_type={type(content).__name__})"
+        return f"dict(keys={list(value.keys())})"
+    return f"{type(value).__name__}({value!r})"
 
 
 @dataclass
@@ -202,6 +226,7 @@ class Session:
             )
 
         stream_input: dict[str, Any] | Command = {"messages": [{"role": "user", "content": prompt_text}]}
+        stream_round = 0
         auto_approve = (
             run_request.auto_approve
             if run_request.auto_approve is not None
@@ -219,6 +244,13 @@ class Session:
 
         try:
             while True:
+                stream_round += 1
+                if os.getenv("DEEPAGENTS_CLI_DEBUG_STREAM_INPUT"):
+                    logger.info(
+                        "Stream round %s: %s",
+                        stream_round,
+                        _format_stream_input_for_log(stream_input),
+                    )
                 interrupt_occurred = False
                 pending_interrupts: dict[str, HITLRequest] = {}
                 hitl_response: dict[str, HITLResponse] = {}
