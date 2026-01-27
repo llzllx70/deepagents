@@ -5,6 +5,7 @@ import os
 from typing import Any, TYPE_CHECKING
 
 from .config import logger
+from .message_utils import format_tool_display
 
 if TYPE_CHECKING:
     from deepagents_cli.file_ops import FileOpTracker
@@ -55,6 +56,7 @@ async def emit_tool_call_started(
         tool_call_id,
         args,
     )
+    display = format_tool_display(tool_name, args)
     await session.broadcast(
         {
             "type": "tool.call.started",
@@ -62,6 +64,8 @@ async def emit_tool_call_started(
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
             "args": args,
+            "display_title": display["title"],
+            "display_content": display["content"],
         }
     )
 
@@ -155,6 +159,7 @@ async def handle_tool_call_block(
             _preview_args(parsed_args),
         )
 
+    display = format_tool_display(buffer_name, parsed_args)
     await session.broadcast(
         {
             "type": "tool.call.started",
@@ -162,5 +167,7 @@ async def handle_tool_call_block(
             "tool_name": buffer_name,
             "tool_call_id": buffer_id,
             "args": parsed_args,
+            "display_title": display["title"],
+            "display_content": display["content"],
         }
     )

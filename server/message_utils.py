@@ -4,6 +4,25 @@ import json
 import re
 from typing import Any
 
+TOOL_TITLE_MAP: dict[str, str] = {
+    "task": "任务分解",
+    "write_todos": "任务列表",
+    "web_search": "搜索",
+    "fetch_url": "浏览",
+    "http_request": "浏览",
+    "read_file": "读取文件",
+    "write_file": "创建文件",
+    "edit_file": "编辑文件",
+    "shell": "执行命令",
+    "execute": "执行命令",
+    "ls": "查看目录",
+    "pdf_to_word": "转换文件格式",
+    "qwen_image_understand": "查看图片",
+    "qwen_image_generate": "生成图片",
+}
+
+TOOL_DISPLAY_LIMIT = 160
+
 
 def is_root_namespace(namespace: object) -> bool:
     if namespace is None:
@@ -73,6 +92,90 @@ def truncate_text(text: str, limit: int) -> tuple[str, bool]:
     if len(text) <= limit:
         return text, False
     return text[:limit], True
+
+
+def _compact_single_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _truncate_inline(text: str, limit: int = TOOL_DISPLAY_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _first_arg(args: dict[str, Any], keys: list[str]) -> str | None:
+    for key in keys:
+        value = args.get(key)
+        if value is None or value == "":
+            continue
+        return str(value)
+    return None
+
+
+def _summarize_todos(todos: Any) -> str | None:
+    if not isinstance(todos, list) or not todos:
+        return None
+    counts = {"pending": 0, "in_progress": 0, "completed": 0}
+    for item in todos:
+        status = str(item.get("status") if isinstance(item, dict) else "pending")
+        if status == "completed":
+            counts["completed"] += 1
+        elif status == "in_progress":
+            counts["in_progress"] += 1
+        else:
+            counts["pending"] += 1
+    total = counts["pending"] + counts["in_progress"] + counts["completed"]
+    if not total:
+        return None
+    return f"处理中：{counts['in_progress']}  待处理：{counts['pending']}  已完成：{counts['completed']}"
+
+
+def format_tool_display(
+    tool_name: str | None, args: dict[str, Any] | None
+) -> dict[str, str | None]:
+    name = str(tool_name or "")
+    title = TOOL_TITLE_MAP.get(name, name or "tool")
+    parsed_args: dict[str, Any] = args if isinstance(args, dict) else {}
+    content: str | None = None
+
+    if name in ("read_file", "write_file", "edit_file"):
+        content = _first_arg(parsed_args, ["file_path", "path", "file"])
+    elif name == "ls":
+        content = _first_arg(parsed_args, ["path", "dir", "directory"]) or "当前目录"
+    elif name == "web_search":
+        content = _first_arg(parsed_args, ["query", "q", "text"])
+    elif name == "fetch_url":
+        content = _first_arg(parsed_args, ["url"])
+    elif name == "http_request":
+        method = _first_arg(parsed_args, ["method"])
+        url = _first_arg(parsed_args, ["url"])
+        if method or url:
+            parts = []
+            if method:
+                parts.append(method.upper())
+            if url:
+                parts.append(url)
+            content = " ".join(parts)
+    elif name in ("shell", "execute"):
+        content = _first_arg(parsed_args, ["command", "cmd", "value"])
+    elif name == "write_todos":
+        content = _summarize_todos(parsed_args.get("todos"))
+    elif name == "task":
+        content = _first_arg(parsed_args, ["description"])
+    elif name == "pdf_to_word":
+        content = _first_arg(parsed_args, ["output_path", "output", "out_path", "pdf_path"])
+    elif name == "qwen_image_understand":
+        content = _first_arg(parsed_args, ["image_path", "path"])
+    elif name == "qwen_image_generate":
+        content = _first_arg(parsed_args, ["output_path", "path"])
+
+    if content:
+        content = _truncate_inline(_compact_single_line(content))
+        if not content:
+            content = None
+
+    return {"title": title, "content": content}
 
 
 def extract_skill_name(text: str) -> str | None:

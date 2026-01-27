@@ -205,7 +205,7 @@ export class MessageModule {
 
     handleToolCallStarted(data) {
         const app = this.app;
-        const { tool_name, args, tool_call_id } = data;
+        const { tool_name, args, tool_call_id, display_title, display_content } = data;
 
         if (tool_name == 'write_file') {
             app.network.logClient('tool_call_started', { data: data });
@@ -217,7 +217,14 @@ export class MessageModule {
 
         if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
             const toolElement = state.toolCalls.get(tool_call_id);
-            app.ui.updateToolCallElement(toolElement, { name: tool_name, args, status: 'running', todoState: state?.todoState || null });
+            app.ui.updateToolCallElement(toolElement, {
+                name: tool_name,
+                args,
+                status: 'running',
+                todoState: state?.todoState || null,
+                displayTitle: display_title,
+                displayContent: display_content,
+            });
             if (state.chatId === app.activeChatId) {
                 app.ui.scrollToBottom();
             }
@@ -229,7 +236,9 @@ export class MessageModule {
             args: args,
             id: tool_call_id,
             status: 'running',
-            todoState: state?.todoState || null
+            todoState: state?.todoState || null,
+            displayTitle: display_title,
+            displayContent: display_content,
         });
 
         const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
@@ -248,7 +257,7 @@ export class MessageModule {
 
     handleToolCallEnded(data) {
         const app = this.app;
-        const { tool_name, status, tool_call_id, content_preview, content } = data;
+        const { tool_name, status, tool_call_id, content_preview, content, display_title, display_content } = data;
         const toolContent = typeof content === 'string' && content.length ? content : content_preview;
         const runId = data.run_id || app.currentRunId || 'default';
         const state = app.ui.getRunState(runId);
@@ -263,7 +272,9 @@ export class MessageModule {
                 args: {},
                 id: tool_call_id,
                 status: status || 'success',
-                todoState: state?.todoState || null
+                todoState: state?.todoState || null,
+                displayTitle: display_title,
+                displayContent: display_content,
             });
 
             const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);

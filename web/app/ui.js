@@ -315,14 +315,15 @@ export class UiModule {
         app.messageBuffer.delete(runId);
     }
 
-    createToolCallElement({ name, args, id, status, todoState = null }) {
+    createToolCallElement({ name, args, id, status, todoState = null, displayTitle = null, displayContent = null }) {
         const app = this.app;
         const toolDiv = document.createElement('div');
         toolDiv.className = 'tool-call';
         toolDiv.setAttribute('data-tool-id', id);
 
         const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-        const summary = app.utils.formatToolSummary(name, args, todoState);
+        const display = app.utils.formatToolDisplay(name, args, todoState, displayTitle, displayContent);
+        const summary = display.content ? `: ${display.content}` : '';
 
         toolDiv.innerHTML = `
             <div class="tool-call-header" onclick="this.parentElement.classList.toggle('expanded')">
@@ -332,7 +333,7 @@ export class UiModule {
                     <path d="m1 12h6m6 0h6"></path>
                 </svg>
                 <div class="tool-title">
-                    <span class="tool-name">${app.utils.escapeHtml(name)}</span>
+                    <span class="tool-name">${app.utils.escapeHtml(display.title)}</span>
                     ${summary ? `<span class="tool-summary">${app.utils.escapeHtml(summary)}</span>` : ''}
                 </div>
                 <span class="tool-status ${status}">${app.utils.escapeHtml(app.utils.formatToolStatus(status))}</span>
@@ -425,14 +426,15 @@ export class UiModule {
         return fileOpDiv;
     }
 
-    updateToolCallElement(toolElement, { name, args, status, todoState = null }) {
+    updateToolCallElement(toolElement, { name, args, status, todoState = null, displayTitle = null, displayContent = null }) {
         const app = this.app;
         if (!toolElement) return;
 
         const headerName = toolElement.querySelector('.tool-name');
-        if (headerName && name) headerName.textContent = name;
+        const display = app.utils.formatToolDisplay(name, args, todoState, displayTitle, displayContent);
+        if (headerName && display.title) headerName.textContent = display.title;
 
-        const summaryText = app.utils.formatToolSummary(name, args, todoState);
+        const summaryText = display.content ? `: ${display.content}` : '';
         const title = toolElement.querySelector('.tool-title');
         if (title) {
             let summary = title.querySelector('.tool-summary');

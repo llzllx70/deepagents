@@ -39,6 +39,41 @@ export class UtilsModule {
         return map[status] || String(status || '');
     }
 
+    compactInline(value, maxLength = 160) {
+        const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        if (text.length <= maxLength) return text;
+        return `${text.slice(0, maxLength)}...`;
+    }
+
+    formatToolDisplay(toolName, args, todoStateOverride = null, displayTitle = null, displayContent = null) {
+        const name = String(toolName || '');
+        const a = args && typeof args === 'object' ? args : {};
+        const titleMap = {
+            task: '任务分解',
+            write_todos: '任务列表',
+            web_search: '搜索',
+            fetch_url: '浏览',
+            http_request: '浏览',
+            read_file: '读取文件',
+            write_file: '创建文件',
+            edit_file: '编辑文件',
+            shell: '执行命令',
+            execute: '执行命令',
+            ls: '查看目录',
+            pdf_to_word: '转换文件格式',
+            qwen_image_understand: '查看图片',
+            qwen_image_generate: '生成图片',
+        };
+        const title = displayTitle || titleMap[name] || name || 'tool';
+        let content = displayContent;
+        if (!content) {
+            content = this.formatToolSummary(name, a, todoStateOverride);
+        }
+        content = this.compactInline(content);
+        return { title, content: content || '' };
+    }
+
     formatFileOpStatus(status) {
         const map = {
             pending: '进行中',
@@ -65,7 +100,7 @@ export class UtilsModule {
 
         if (name === 'web_search') {
             const query = a.query || a.q || a.text || '';
-            return query ? `查询：\n${String(query)}` : '';
+            return query ? String(query) : '';
         }
 
         if (name === 'write_todos') {
@@ -81,39 +116,68 @@ export class UtilsModule {
 
         if (name === 'read_file' || name === 'write_file' || name === 'edit_file') {
             const filePath = a.file_path || a.path || a.file || '';
-            return filePath ? `路径：\n${String(filePath)}` : '';
+            return filePath ? String(filePath) : '';
         }
 
         if (name === 'ls') {
             const path = a.path || a.dir || a.directory || '';
-            return path ? `路径：\n${String(path)}` : '';
+            return path ? String(path) : '当前目录';
         }
 
-        if (name === 'shell') {
+        if (name === 'shell' || name === 'execute') {
             const command = a.command || a.cmd || a.value || '';
-            return command ? `命令：\n${String(command)}` : '';
+            return command ? String(command) : '';
+        }
+
+        if (name === 'fetch_url') {
+            const url = a.url || '';
+            return url ? String(url) : '';
+        }
+
+        if (name === 'http_request') {
+            const method = a.method ? String(a.method).toUpperCase() : '';
+            const url = a.url ? String(a.url) : '';
+            return [method, url].filter(Boolean).join(' ');
+        }
+
+        if (name === 'task') {
+            const description = a.description || '';
+            return description ? String(description) : '';
+        }
+
+        if (name === 'pdf_to_word') {
+            const outputPath = a.output_path || a.output || a.out_path || a.pdf_path || '';
+            return outputPath ? String(outputPath) : '';
+        }
+
+        if (name === 'qwen_image_understand') {
+            const imagePath = a.image_path || a.path || '';
+            return imagePath ? String(imagePath) : '';
+        }
+
+        if (name === 'qwen_image_generate') {
+            const outputPath = a.output_path || a.path || '';
+            return outputPath ? String(outputPath) : '';
         }
 
         if (name === 'glob') {
             const pattern = a.pattern || a.glob || a.value || '';
             const path = a.path || a.dir || a.directory || '';
-            if (!pattern && !path) return '';
-            const lines = [];
-            if (pattern) lines.push(`匹配：\n${String(pattern)}`);
-            if (path) lines.push(`目录：\n${String(path)}`);
-            return lines.join('\n');
+            const parts = [];
+            if (pattern) parts.push(String(pattern));
+            if (path) parts.push(String(path));
+            return parts.join(' / ');
         }
 
         if (name === 'grep') {
             const pattern = a.pattern || a.query || a.q || a.value || '';
             const path = a.path || a.dir || a.directory || '';
             const glob = a.glob || a.include || a.file_glob || '';
-            if (!pattern && !path && !glob) return '';
-            const lines = [];
-            if (pattern) lines.push(`查找：\n${String(pattern)}`);
-            if (glob) lines.push(`文件：\n${String(glob)}`);
-            if (path) lines.push(`目录：\n${String(path)}`);
-            return lines.join('\n');
+            const parts = [];
+            if (pattern) parts.push(String(pattern));
+            if (glob) parts.push(String(glob));
+            if (path) parts.push(String(path));
+            return parts.join(' / ');
         }
 
         return '';

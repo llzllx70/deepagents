@@ -26,6 +26,7 @@ from .context import inject_file_context
 from .message_utils import (
     extract_skill_name,
     extract_tool_calls,
+    format_tool_display,
     format_tool_content,
     is_root_namespace,
     normalize_text_content,
@@ -408,6 +409,7 @@ class Session:
                             tool_name,
                             tool_status,
                         )
+                        display = format_tool_display(tool_name, None)
                         await self.broadcast(
                             {
                                 "type": "tool.call.ended",
@@ -418,6 +420,8 @@ class Session:
                                 "content": tool_full_content,
                                 "content_preview": format_tool_content(tool_full_content, limit=preview_limit),
                                 "content_truncated": len(tool_full_content) > preview_limit,
+                                "display_title": display["title"],
+                                "display_content": display["content"],
                             }
                         )
                         continue
