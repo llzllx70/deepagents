@@ -63,8 +63,8 @@ Output file: 2025-2026_A.pptx
 
 ## 打开浏览器
 
-- 输入: 打开sina.com.cn，则使用Playwright在genspark client 打开了一个标签页面
-  +![1769395179477](image/remark/1769395179477.png)
+- 输入: 打开sina.com.cn，则使用Playwright在genspark client 打开了一个标签页面，而不是在sandbox中打开
+  ![1769395179477](image/remark/1769395179477.png)
 - 打开过程中，会不停的截图并分析
 - 打开后，等待一段时间就自动关闭了，实测，基本不可用
   
@@ -112,6 +112,8 @@ Output file: 2025-2026_A.pptx
 - 开始写ppt，md->ppt，为每张pptx设计提示词
 
 ## ppt制作
+
+- 可能不需要导出来，生成过程中直接和用户交互，边做边修改
 
 - PPT 整体要求
 
