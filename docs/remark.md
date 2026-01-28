@@ -237,3 +237,9 @@ _make_model_to_tools_edge -> Send('tools')
 1. 修改ui，颜色，字体，logo
 2. 运行上传图片
 3. 添加图片理解，图片生成
+
+
+# 20260127
+
+1. 添加playwright, 尝试在boss中进行搜索， 页面滚动等
+2. 主要针对教育场景
