@@ -186,7 +186,7 @@ stop_server() {
 
 stop_web() {
   echo "Stopping web..."
-  pkill -f "python web_server.py 8080" >/dev/null 2>&1 || true
+  pkill -f "python -m http.server 8080" >/dev/null 2>&1 || true
 }
 
 start_server() {
@@ -230,11 +230,11 @@ show_server_process() {
 
 show_web_process() {
   print_header "Web Process"
-  if pgrep -f "python web_server.py 8080" >/dev/null 2>&1; then
+  if pgrep -f "python -m http.server 8080" >/dev/null 2>&1; then
     while read -r pid; do
       cmd="$(ps -p "$pid" -o command=)"
       echo "  pid=$pid cmd=$cmd"
-    done < <(pgrep -f "python web_server.py 8080")
+    done < <(pgrep -f "python -m http.server 8080")
   else
     echo "  not running"
   fi
