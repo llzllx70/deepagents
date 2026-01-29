@@ -245,3 +245,14 @@ _make_model_to_tools_edge -> Send('tools')
 
 1. 添加playwright, 尝试在boss中进行搜索， 页面滚动等
 2. 主要针对教育场景
+
+# 20260128
+
+1. agent browser， 最新的，有skills，比较省token，但试用后发现playwright 与 chrome 版本不一致，试了几次都不行
+2. playwright, 用的最多，有90k star，支持chromium，webkit，firefox, 风评比较好，暂定选择
+  - 成功打开，并scroll
+  - 建议使用，同时使用确定好的网站，在skill 中写好登陆信息，比如固定的几个招聘网站，在宿主主机中打开，并使用复用的方式
+  - 缺点：用户无法看到打开的网站，固定的几个网站
+3. chrome-devtools-mcp, 官方，比较火，有skills
+  - 成功打开，但是没有scroll
+ 

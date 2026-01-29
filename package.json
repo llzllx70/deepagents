@@ -7,8 +7,8 @@
     "build": "node create_presentation.js"
   },
   "dependencies": {
-    "pptxgenjs": "^3.12.0",
     "playwright": "^1.40.0",
+    "pptxgenjs": "^3.12.0",
     "sharp": "^0.32.0"
   },
   "keywords": [
@@ -18,5 +18,8 @@
     "china-a-share"
   ],
   "author": "AI Assistant",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "chrome-devtools-mcp": "^0.14.0"
+  }
 }
