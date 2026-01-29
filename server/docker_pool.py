@@ -291,6 +291,16 @@ class DockerSandboxPool:
         project_skills_path = Path(project_skills_dir).expanduser()
         user_skills_path.mkdir(parents=True, exist_ok=True)
         project_skills_path.mkdir(parents=True, exist_ok=True)
+        env_args: list[str] = []
+        masked_env_args: list[str] = []
+        passthrough_env = ["COZE_TOKEN", "COZE_FLOW_ID", "COZE_APP_ID"]
+        for key in passthrough_env:
+            value = os.environ.get(key)
+            if value:
+                env_args += ["-e", f"{key}={value}"]
+                masked_value = "***" if key == "COZE_TOKEN" else value
+                masked_env_args += ["-e", f"{key}={masked_value}"]
+
         args = [
             "docker",
             "run",
@@ -306,21 +316,30 @@ class DockerSandboxPool:
             "-v",
             f"{project_skills_path}:/skills:ro",
         ]
+        masked_args = args[:]
+        if env_args:
+            args += env_args
+            masked_args += masked_env_args
         if workspace_dir is not None:
             workspace_path = workspace_dir.resolve()
             args += ["-v", f"{workspace_path}:{self._config.workdir}"]
+            masked_args += ["-v", f"{workspace_path}:{self._config.workdir}"]
         if self._config.cpus:
             args += ["--cpus", self._config.cpus]
+            masked_args += ["--cpus", self._config.cpus]
         if self._config.memory:
             args += ["--memory", self._config.memory]
+            masked_args += ["--memory", self._config.memory]
         if self._config.pids_limit:
             args += ["--pids-limit", self._config.pids_limit]
+            masked_args += ["--pids-limit", self._config.pids_limit]
         args.append(self._config.image)
+        masked_args.append(self._config.image)
 
         result = subprocess.run(args, capture_output=True, text=True)
         logger.debug(
             "Docker run args=%s rc=%s stdout=%s stderr=%s",
-            args,
+            masked_args,
             result.returncode,
             result.stdout.strip(),
             result.stderr.strip(),
