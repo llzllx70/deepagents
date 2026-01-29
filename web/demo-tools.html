@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CortexAI - 工具展示样式演示</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            background: var(--bg-primary);
+            padding: 40px;
+        }
+        .demo-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .demo-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .demo-section {
+            margin-bottom: 40px;
+        }
+        .demo-section-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .message {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h1 class="demo-title">CortexAI 工具展示样式演示</h1>
+        
+        <!-- 思考中动画演示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">思考中动画</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="thinking-indicator">
+                            <div class="thinking-dots">
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                            </div>
+                            <span class="thinking-text">思考中</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 工具调用展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">工具调用展示 - 执行中</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="tool-call">
+                            <div class="tool-call-header">
+                                <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                                </svg>
+                                <div class="tool-title">
+                                    <span class="tool-name">browser_navigate</span>
+                                    <span class="tool-summary"></span>
+                                </div>
+                                <span class="tool-status running">执行中</span>
+                                <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="tool-call-body">
+                                <div class="tool-args">
+                                    <div class="tool-args-label">参数</div>
+                                    <div class="tool-args-content">{
+  "url": "https://example.com",
+  "intent": "informational"
+}</div>
+                                </div>
+                                <div class="tool-result">
+                                    <div class="tool-result-label">结果</div>
+                                    <div class="tool-result-content">等待中...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 工具调用成功 -->
+        <div class="demo-section">
+            <div class="demo-section-title">工具调用展示 - 成功</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="tool-call expanded">
+                            <div class="tool-call-header">
+                                <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                                </svg>
+                                <div class="tool-title">
+                                    <span class="tool-name">file_write</span>
+                                    <span class="tool-summary"></span>
+                                </div>
+                                <span class="tool-status success">成功</span>
+                                <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="tool-call-body">
+                                <div class="tool-args">
+                                    <div class="tool-args-label">参数</div>
+                                    <div class="tool-args-content">{
+  "path": "/home/ubuntu/output.txt",
+  "content": "Hello, World!"
+}</div>
+                                </div>
+                                <div class="tool-result">
+                                    <div class="tool-result-label">结果</div>
+                                    <div class="tool-result-content">文件写入成功: /home/ubuntu/output.txt</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 工具调用失败 -->
+        <div class="demo-section">
+            <div class="demo-section-title">工具调用展示 - 失败</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="tool-call">
+                            <div class="tool-call-header">
+                                <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                                </svg>
+                                <div class="tool-title">
+                                    <span class="tool-name">shell_exec</span>
+                                    <span class="tool-summary"></span>
+                                </div>
+                                <span class="tool-status error">失败</span>
+                                <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="tool-call-body">
+                                <div class="tool-args">
+                                    <div class="tool-args-label">参数</div>
+                                    <div class="tool-args-content">{
+  "command": "npm install"
+}</div>
+                                </div>
+                                <div class="tool-result">
+                                    <div class="tool-result-label">结果</div>
+                                    <div class="tool-result-content">Error: Command failed with exit code 1</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 文件操作展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">文件操作展示</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="file-operation expanded">
+                            <div class="file-operation-header">
+                                <svg class="file-op-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                    <polyline points="14 2 14 8 20 8"/>
+                                </svg>
+                                <span class="file-op-path">/home/ubuntu/web/styles.css</span>
+                                <span class="file-op-status">modified</span>
+                                <svg class="file-op-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="file-operation-body">
+                                <div class="file-op-metrics">
+                                    <span>行数: 1500</span>
+                                    <span>大小: 45KB</span>
+                                </div>
+                                <div class="file-op-content">
+                                    <div class="file-op-content-label">内容</div>
+                                    <pre><code>:root {
+    --accent-start: #63BDFF;
+    --accent-end: #547AFF;
+    --bg-primary: #ffffff;
+    ...
+}</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 任务列表展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">任务列表展示</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="todo-list expanded">
+                            <div class="todo-list-header">
+                                <div class="todo-header-text">
+                                    <span class="todo-title">UI优化任务</span>
+                                    <div class="todo-badges">
+                                        <div class="todo-progress-chips">
+                                            <span class="todo-progress started">3/5</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <svg class="todo-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="todo-items">
+                                <div class="todo-item completed">
+                                    <input type="checkbox" class="todo-checkbox" checked disabled>
+                                    <span class="todo-text">设计Logo</span>
+                                </div>
+                                <div class="todo-item completed">
+                                    <input type="checkbox" class="todo-checkbox" checked disabled>
+                                    <span class="todo-text">调整布局</span>
+                                </div>
+                                <div class="todo-item completed">
+                                    <input type="checkbox" class="todo-checkbox" checked disabled>
+                                    <span class="todo-text">优化样式</span>
+                                </div>
+                                <div class="todo-item">
+                                    <input type="checkbox" class="todo-checkbox" disabled>
+                                    <span class="todo-text">添加动画</span>
+                                </div>
+                                <div class="todo-item">
+                                    <input type="checkbox" class="todo-checkbox" disabled>
+                                    <span class="todo-text">测试功能</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 用户消息展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">用户消息展示</div>
+            <div class="message user">
+                <div class="message-avatar">
+                    <img src="assets/user-avatar.png" alt="User">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        请帮我优化CortexAI的前端界面，包括Logo设计、布局调整和样式优化。
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI回复展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">AI回复展示</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="assistant-markdown assistant-segment">
+                            <p>好的，我将为您进行CortexAI的前端UI优化。主要包括以下几个方面：</p>
+                            <ol>
+                                <li><strong>Logo设计</strong>：使用#63BDFF到#547AFF渐变色，体现AI大脑/神经网络的概念</li>
+                                <li><strong>布局调整</strong>：优化侧边栏和主内容区的布局</li>
+                                <li><strong>样式优化</strong>：采用白色背景+蓝色元素的主色调</li>
+                            </ol>
+                            <p>现在开始执行优化任务...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // 点击展开/收起工具详情
+        document.querySelectorAll('.tool-call-header').forEach(header => {
+            header.addEventListener('click', () => {
+                header.parentElement.classList.toggle('expanded');
+            });
+        });
+        document.querySelectorAll('.file-operation-header').forEach(header => {
+            header.addEventListener('click', () => {
+                header.parentElement.classList.toggle('expanded');
+            });
+        });
+        document.querySelectorAll('.todo-list-header').forEach(header => {
+            header.addEventListener('click', () => {
+                header.parentElement.classList.toggle('expanded');
+            });
+        });
+    </script>
+</body>
+</html>

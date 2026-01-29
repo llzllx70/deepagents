@@ -76,9 +76,7 @@ export class MessageModule {
             app.runIdToChatId.set(data.run_id, app.activeChatId);
         }
         app.history.updateChatStatus(data.run_id, 'queued');
-        if (app.ui.isRunActiveChat(data.run_id)) {
-            app.ui.syncRunStatusElement(data.run_id, 'queued', { createIfMissing: true });
-        }
+        // 已删除运行状态提示元素
     }
 
     handleRunStarted(data) {
@@ -102,9 +100,7 @@ export class MessageModule {
 
         if (isActiveChatRun) {
             app.elements.welcomeMessage.style.display = 'none';
-
-            app.ui.finalizeStaleRunStatuses(data.run_id);
-            app.ui.syncRunStatusElement(data.run_id, 'running', { createIfMissing: true });
+            // 已删除运行状态提示元素
         }
         app.history.updateChatStatus(data.run_id, 'running');
     }
@@ -135,18 +131,7 @@ export class MessageModule {
             app.currentAssistantSegmentText = '';
         }
 
-        if (runId && app.ui.isRunActiveChat(runId)) {
-            const statusElement =
-                (runId ? app.runStatusElements.get(runId) : null) ||
-                app.currentRunStatusElement ||
-                Array.from(document.querySelectorAll('.run-status')).pop();
-            if (statusElement) {
-                statusElement.className = `run-status ${status}`;
-                statusElement.innerHTML = `<span>${app.utils.formatRunStatus(status)}</span>`;
-            }
-            app.runStatusElements.delete(runId);
-            app.currentRunStatusElement = null;
-        }
+        // 已删除运行状态提示元素更新代码
 
         if (runId) {
             app.ui.finalizeRunState(runId, status);
@@ -172,12 +157,7 @@ export class MessageModule {
         if (status === 'cancelled' && app.pendingCancelLogElement && app.pendingCancelLogElement.isConnected) {
             app.pendingCancelLogElement.textContent = `[${app.utils.formatLogLevel('info')}] 已取消`;
         }
-        if (isActiveChatRun && (status === 'running' || status === 'queued')) {
-            app.ui.finalizeStaleRunStatuses(runId);
-        }
-        if (isActiveChatRun) {
-            app.ui.syncRunStatusElement(runId, status, { createIfMissing: status === 'running' || status === 'queued' });
-        }
+        // 已删除运行状态提示元素相关代码
 
         if (app.currentRunId && runId === app.currentRunId) {
             app.currentRunStatus = status;
@@ -215,6 +195,11 @@ export class MessageModule {
         const state = app.ui.getRunState(runId);
         app.ui.closeAssistantSegment(state);
 
+        // 工具调用时先隐藏思考动效，稍后在工具元素后重新显示
+        if (state?.messageElement) {
+            app.ui.hideThinkingIndicator(state.messageElement);
+        }
+
         if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
             const toolElement = state.toolCalls.get(tool_call_id);
             app.ui.updateToolCallElement(toolElement, {
@@ -245,6 +230,9 @@ export class MessageModule {
         if (!messageElement) return;
         const contentElement = messageElement.querySelector('.message-text');
         contentElement.appendChild(toolElement);
+
+        // 工具元素添加后，在最下方重新显示思考动效
+        app.ui.showThinkingIndicator(messageElement);
 
         if (tool_call_id && state) {
             state.toolCalls.set(tool_call_id, toolElement);
@@ -310,6 +298,14 @@ export class MessageModule {
         }
 
         if (tool_call_id && state) state.toolCalls.delete(tool_call_id);
+
+        // 工具调用结束后，重新在最下方显示思考动效
+        const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
+        if (messageElement) {
+            app.ui.hideThinkingIndicator(messageElement);
+            app.ui.showThinkingIndicator(messageElement);
+        }
+
         if (state?.chatId === app.activeChatId) {
             app.ui.scrollToBottom();
         }
@@ -439,6 +435,9 @@ export class MessageModule {
         const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
         if (!messageElement || !state) return;
 
+        // 当 AI 开始回复时，隐藏思考动效
+        app.ui.hideThinkingIndicator(messageElement);
+
         const segmentElement = app.ui.getOrCreateAssistantSegmentElement(messageElement, state);
         state.assistantSegmentText += appended;
         segmentElement.innerHTML = app.utils.parseMarkdown(state.assistantSegmentText);
@@ -474,7 +473,6 @@ export class MessageModule {
 
         app.elements.welcomeMessage.style.display = 'none';
 
-        app.currentMessageElement = null;
         app.currentAssistantSegmentElement = null;
         app.currentAssistantSegmentText = '';
 
@@ -485,6 +483,19 @@ export class MessageModule {
             app.activeChatId = app.utils.generateTaskId();
         }
         app.runIdToChatId.set(runId, app.activeChatId);
+
+        // 创建 AI 消息元素并显示思考动效
+        const assistantMessage = app.ui.createMessageElement('assistant');
+        app.elements.messages.appendChild(assistantMessage);
+        app.currentMessageElement = assistantMessage;
+        app.ui.showThinkingIndicator(assistantMessage);
+
+        // 将消息元素关联到 runState
+        const state = app.ui.getRunState(runId);
+        if (state) {
+            state.messageElement = assistantMessage;
+            state.chatId = app.activeChatId;
+        }
         app.history.saveCurrentChat({ status: 'queued', runId, title: input });
         app.network.send({
             type: 'run',

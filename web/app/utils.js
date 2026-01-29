@@ -465,7 +465,7 @@ export class UtilsModule {
 
         const linkBlocks = [];
         const linkPlaceholderPrefix = '__LINK_BLOCK__';
-        const downloadPattern = /下载[:：]\s*\/files\/[^\s'"<>),]+/g;
+        const downloadPattern = /下载[:：]\s*\/files\/[^\s'"<>),，。！？；：）】」』》]+/g;
         processed = processed.replace(downloadPattern, (match) => {
             const rawPath = match.replace(/^下载[:：]\s*/, '');
             const relative = this.getFilesRelativePath(rawPath);
@@ -479,7 +479,7 @@ export class UtilsModule {
             return token;
         });
 
-        const urlPattern = /https?:\/\/[^\s'"<>),]+/g;
+        const urlPattern = /https?:\/\/[^\s'"<>),，。！？；：）】」』》]+/g;
         processed = processed.replace(urlPattern, (match) => {
             const url = this.getDownloadUrl(match) || match;
             if (!url.includes('/files/')) return match;
@@ -487,7 +487,7 @@ export class UtilsModule {
             return `[${label}](${url})`;
         });
 
-        const pathPattern = /(?:[A-Za-z]:)?[\\/][^\s'"<>),]+?workspace[\\/][^\s'"<>),]+\.[A-Za-z0-9]+|workspace\/[^\s'"<>),]+\.[A-Za-z0-9]+|\.\/[^\s'"<>),]+\.[A-Za-z0-9]+|[^\s'"<>),]+\/[^\s'"<>),]+\.[A-Za-z0-9]+/g;
+        const pathPattern = /(?:[A-Za-z]:)?[\\/][^\s'"<>),，。！？；：）】」』》]+?workspace[\\/][^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|workspace\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|\.\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|[^\s'"<>),，。！？；：）】」』》]+\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+/g;
         processed = processed.replace(pathPattern, (match) => {
             const url = this.getDownloadUrl(match);
             if (!url) return match;

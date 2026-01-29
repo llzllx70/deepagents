@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CortexAI - 思考中动画演示</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            background: var(--bg-primary);
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .demo-container {
+            max-width: 800px;
+            width: 100%;
+        }
+        .demo-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 40px;
+            text-align: center;
+        }
+        .demo-section {
+            margin-bottom: 40px;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: var(--shadow-md);
+        }
+        .demo-section-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .message {
+            margin-bottom: 16px;
+        }
+        .message:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h1 class="demo-title">CortexAI 思考中动画演示</h1>
+        
+        <!-- 思考中动画演示 - 样式1 -->
+        <div class="demo-section">
+            <div class="demo-section-title">思考中动画 - 对话气泡样式</div>
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="thinking-indicator">
+                            <div class="thinking-dots">
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                            </div>
+                            <span class="thinking-text">思考中</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 思考中动画演示 - 样式2：独立展示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">思考中动画 - 独立展示</div>
+            <div style="display: flex; justify-content: center; padding: 30px 0;">
+                <div class="thinking-indicator" style="font-size: 16px;">
+                    <div class="thinking-dots">
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                    </div>
+                    <span class="thinking-text">思考中</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 思考中动画演示 - 样式3：纯文字样式 -->
+        <div class="demo-section">
+            <div class="demo-section-title">思考中动画 - 纯文字样式（无背景框）</div>
+            <div style="display: flex; justify-content: center; padding: 20px 0;">
+                <div class="thinking-indicator" style="font-size: 15px;">
+                    <div class="thinking-dots">
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                        <div class="thinking-dot"></div>
+                    </div>
+                    <span class="thinking-text">思考中</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 完整对话流程演示 -->
+        <div class="demo-section">
+            <div class="demo-section-title">完整对话流程演示</div>
+            
+            <!-- 用户消息 -->
+            <div class="message user">
+                <div class="message-avatar">
+                    <img src="assets/user-avatar.png" alt="User">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        请帮我分析一下这份数据报告
+                    </div>
+                </div>
+            </div>
+            
+            <!-- AI思考中 -->
+            <div class="message assistant">
+                <div class="message-avatar">
+                    <img src="assets/ai-avatar.png" alt="AI">
+                </div>
+                <div class="message-content">
+                    <div class="message-text">
+                        <div class="thinking-indicator">
+                            <div class="thinking-dots">
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                            </div>
+                            <span class="thinking-text">思考中</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 动画参数说明 -->
+        <div class="demo-section">
+            <div class="demo-section-title">动画参数说明</div>
+            <div style="color: var(--text-secondary); font-size: 14px; line-height: 1.8;">
+                <p><strong>动画类型：</strong>三个圆点依次跳动 + "思考中"文字</p>
+                <p><strong>动画周期：</strong>1.4秒循环</p>
+                <p><strong>圆点颜色：</strong>#63BDFF 到 #547AFF 渐变色</p>
+                <p><strong>跳动高度：</strong>-8px</p>
+                <p><strong>延迟间隔：</strong>每个圆点延迟0.16秒</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

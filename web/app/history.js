@@ -256,7 +256,8 @@ export class HistoryModule {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const chatId = btn.getAttribute('data-chat-id');
-                this.deleteChat(chatId);
+                // Show confirmation modal instead of direct delete
+                app.ui.showDeleteConfirmModal(chatId);
             });
         });
     }
@@ -281,6 +282,14 @@ export class HistoryModule {
             app.runIdToChatId.set(chat.runId, chat.id);
         }
 
+        // 清理该对话相关的 runStates，避免与历史消息重复显示
+        for (const [runId, state] of app.runStates.entries()) {
+            if (state.chatId === chat.id) {
+                app.runStates.delete(runId);
+                app.messageBuffer.delete(runId);
+            }
+        }
+
         chat.messages.forEach(msg => {
             const messageElement = app.ui.createMessageElement(msg.role);
             const textElement = messageElement.querySelector('.message-text');
@@ -292,8 +301,6 @@ export class HistoryModule {
             }
             app.elements.messages.appendChild(messageElement);
         });
-
-        app.ui.attachRunMessagesForChat(chat.id);
         if (chat.sessionId) {
             app.network.setSessionState({ sessionId: chat.sessionId, chatId: chat.id, hasMessages: chat.messages.length > 0 });
         }
