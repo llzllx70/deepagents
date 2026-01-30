@@ -6,16 +6,31 @@ import base64
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from openai import OpenAI
 
 DEFAULT_NAV_URL = "https://www.zhipin.com/hangzhou/?seoRefer=index"
+# DEFAULT_NAV_URL = "https://www.sina.com.cn"
 DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
-MAX_LINK_CANDIDATES = 40
+DEFAULT_LOCALE = "zh-CN"
+DEFAULT_TIMEZONE = "Asia/Shanghai"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_0) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+DEFAULT_USER_DATA_DIR = Path(__file__).resolve().parents[1] / "workspace" / "playwright_profile"
+DEFAULT_CHROME_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-infobars",
+    "--no-first-run",
+    "--no-default-browser-check",
+]
+MAX_LINK_CANDIDATES = 80
 MAX_STEPS = 8
 MAX_DEPTH = 3
 INFO_LIMIT = 2
@@ -34,6 +49,156 @@ class LinkCandidate:
 def _env_truthy(name: str) -> bool:
     value = os.getenv(name, "").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def _env_truthy_default(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _guess_accept_language(locale: str) -> str:
+    if not locale:
+        return "en-US,en;q=0.9"
+    if locale.lower().startswith("zh"):
+        return "zh-CN,zh;q=0.9,en;q=0.8"
+    if locale.lower().startswith("ja"):
+        return "ja-JP,ja;q=0.9,en;q=0.8"
+    if locale.lower().startswith("ko"):
+        return "ko-KR,ko;q=0.9,en;q=0.8"
+    return f"{locale},{locale.split('-')[0]};q=0.9,en;q=0.8"
+
+
+def _chrome_args() -> list[str]:
+    extra = os.getenv("PLAYWRIGHT_EXTRA_ARGS", "").strip()
+    args = list(DEFAULT_CHROME_ARGS)
+    if extra:
+        for raw in extra.split(","):
+            item = raw.strip()
+            if item:
+                args.append(item)
+    return args
+
+
+def _stealth_script() -> str:
+    return """
+(() => {
+  Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+  Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en-US', 'en']});
+  Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+  Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
+  Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+  Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+  Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+  Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 0});
+  if (!window.chrome) {
+    window.chrome = { runtime: {} };
+  }
+  const originalQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) => {
+    if (parameters && parameters.name === 'notifications') {
+      return Promise.resolve({ state: Notification.permission });
+    }
+    return originalQuery(parameters);
+  };
+})();
+"""
+
+
+def _guard_nav_script(
+    block_blank: bool,
+    prevent_close: bool,
+    log_nav: bool,
+    force_same_tab: bool,
+) -> str:
+    from string import Template
+
+    template = Template(
+        """
+(() => {
+  const blockBlank = $block_blank;
+  const preventClose = $prevent_close;
+  const logNav = $log_nav;
+  const forceSameTab = $force_same_tab;
+  const shouldBlock = (url) => blockBlank && (url === 'about:blank' || url.startsWith('about:blank#'));
+  const log = (label, url) => {
+    if (!logNav) return;
+    try {
+      const stack = new Error().stack || '';
+      console.warn('[vlm-guard]', label, url || '', stack);
+    } catch (e) {}
+  };
+  const wrap = (obj, name) => {
+    const orig = obj[name];
+    if (!orig) return;
+    obj[name] = function(url, ...rest) {
+      const target = String(url || '');
+      if (shouldBlock(target)) {
+        log(name + ':blocked', target);
+        return;
+      }
+      log(name, target);
+      return orig.apply(this, [url, ...rest]);
+    };
+  };
+  try { wrap(window.location, 'assign'); } catch (e) {}
+  try { wrap(window.location, 'replace'); } catch (e) {}
+  try {
+    const origOpen = window.open;
+    window.open = function(url, ...rest) {
+      const target = String(url || '');
+      log('window.open', target);
+      if (forceSameTab) {
+        if (target && !shouldBlock(target)) {
+          window.location.assign(target);
+        }
+        return window;
+      }
+      return origOpen.apply(this, [url, ...rest]);
+    };
+  } catch (e) {}
+  if (preventClose) {
+    try {
+      const origClose = window.close;
+      window.close = function() {
+        log('window.close', '');
+        return undefined;
+      };
+      if (origClose && origClose.toString) {
+        window.close.toString = () => 'function close() { [native code] }';
+      }
+    } catch (e) {}
+  }
+  try {
+    const desc = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+    if (desc && desc.set && desc.get) {
+      Object.defineProperty(window.location, 'href', {
+        set: function(url) {
+          const target = String(url || '');
+          if (shouldBlock(target)) {
+            log('location.href:blocked', target);
+            return;
+          }
+          log('location.href', target);
+          return desc.set.call(this, url);
+        },
+        get: function() {
+          return desc.get.call(this);
+        }
+      });
+    }
+  } catch (e) {}
+})();
+"""
+    )
+    return template.substitute(
+        block_blank=str(block_blank).lower(),
+        prevent_close=str(prevent_close).lower(),
+        log_nav=str(log_nav).lower(),
+        force_same_tab=str(force_same_tab).lower(),
+    )
 
 
 def _extract_index(text: str) -> int | None:
@@ -78,6 +243,137 @@ def _extract_action(text: str) -> dict[str, Any] | None:
 
 def _raise(message: str) -> None:
     raise RuntimeError(message)
+
+
+def _is_real_url(url: str) -> bool:
+    if not url or url == "about:blank":
+        return False
+    if url.startswith("chrome-error://"):
+        return False
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def _attach_debug_listeners(context: Any, page: Any) -> None:
+    if not _env_truthy("VLM_DEBUG"):
+        return
+
+    def _describe(p: Any) -> str:
+        url = getattr(p, "url", "") or ""
+        return f"id={id(p)} url={url!r}"
+
+    def _log(message: str) -> None:
+        print(f"[vlm-debug] {message}")
+
+    def _wire(p: Any) -> None:
+        _log(f"page.open {_describe(p)}")
+        p.on("close", lambda: _log(f"page.close {_describe(p)}"))
+        p.on("crash", lambda: _log(f"page.crash {_describe(p)}"))
+        p.on("domcontentloaded", lambda: _log(f"page.domcontentloaded {_describe(p)}"))
+        p.on("load", lambda: _log(f"page.load {_describe(p)}"))
+
+        def _on_nav(frame: Any) -> None:
+            try:
+                if frame == p.main_frame:
+                    _log(f"page.navigate {_describe(p)}")
+            except Exception:
+                _log(f"page.navigate {_describe(p)}")
+
+        p.on("framenavigated", _on_nav)
+        p.on("popup", lambda popup: _log(f"page.popup parent={_describe(p)} child={_describe(popup)}"))
+        p.on(
+            "requestfailed",
+            lambda request: _log(
+                f"request.failed url={request.url!r} type={request.resource_type} error={request.failure}"
+            ),
+        )
+        p.on(
+            "response",
+            lambda response: _log(
+                f"response url={response.url!r} status={response.status}"
+            )
+            if response.request.resource_type == "document"
+            else None,
+        )
+        p.on(
+            "console",
+            lambda message: _log(f"console.{message.type} {message.text}")
+            if "vlm-guard" in message.text or _env_truthy("VLM_DEBUG_CONSOLE_ALL")
+            else None,
+        )
+
+    context.on("page", _wire)
+    _wire(page)
+
+
+def _wait_for_page_ready(page: Any, timeout_ms: int) -> None:
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        pass
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(10000, timeout_ms))
+    except Exception:
+        pass
+
+
+def _pick_non_blank_page(context: Any) -> Any | None:
+    for candidate in reversed(getattr(context, "pages", []) or []):
+        if candidate.is_closed():
+            continue
+        url = getattr(candidate, "url", "") or ""
+        if url and url != "about:blank":
+            return candidate
+    return None
+
+
+def _ensure_active_page(context: Any, page: Any) -> Any:
+    if page.is_closed():
+        return _pick_non_blank_page(context) or page
+    if page.url and page.url != "about:blank":
+        return page
+    page.wait_for_timeout(500)
+    return _pick_non_blank_page(context) or page
+
+
+def _wait_for_real_page(context: Any, timeout_ms: int) -> Any | None:
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        candidate = _pick_non_blank_page(context)
+        if candidate and _is_real_url(candidate.url):
+            return candidate
+        time.sleep(0.2)
+    return None
+
+
+def _goto_stable(context: Any, page: Any, url: str, timeout_ms: int, retries: int) -> Any:
+    for attempt in range(1, retries + 1):
+        if page.is_closed():
+            page = context.new_page()
+            _attach_debug_listeners(context, page)
+        if _env_truthy("VLM_DEBUG"):
+            print(f"[vlm-debug] goto attempt={attempt} url={url!r}")
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+        page = _ensure_active_page(context, page)
+        _wait_for_page_ready(page, min(15000, timeout_ms))
+        page = _ensure_active_page(context, page)
+        if _is_real_url(page.url):
+            return page
+        replacement = _wait_for_real_page(context, 3000)
+        if replacement:
+            return replacement
+    _raise(f"Failed to open a stable page for {url!r} after {retries} attempts")
+    return page
+
+
+def _wait_until_closed(page: Any) -> None:
+    try:
+        while not page.is_closed():
+            page.wait_for_timeout(500)
+    except Exception:
+        pass
 
 
 def _load_models_config() -> dict[str, dict[str, str]]:
@@ -131,6 +427,11 @@ def _vlm_request(image_path: Path, prompt: str) -> str:
 
     if not api_key or not base_url:
         pytest.skip("Missing qwen3-vl-plus config in config/model.yml")
+
+    try:
+        from openai import OpenAI
+    except ModuleNotFoundError:
+        pytest.skip("openai is not installed")
 
     image_data_url = _encode_image(image_path)
     client = OpenAI(api_key=api_key, base_url=base_url)
@@ -295,6 +596,17 @@ def _run_vlm_click() -> None:
     max_steps = int(os.getenv("VLM_MAX_STEPS", str(MAX_STEPS)))
     max_depth = int(os.getenv("VLM_MAX_DEPTH", str(MAX_DEPTH)))
     info_limit = int(os.getenv("VLM_INFO_LIMIT", str(INFO_LIMIT)))
+    nav_retries = int(os.getenv("PLAYWRIGHT_NAV_RETRIES", "3"))
+    nav_timeout_ms = int(os.getenv("PLAYWRIGHT_NAV_TIMEOUT_MS", "30000"))
+    use_chrome = _env_truthy_default("PLAYWRIGHT_USE_CHROME", True)
+    persistent = _env_truthy_default("PLAYWRIGHT_PERSISTENT", True)
+    nav_only = _env_truthy_default("VLM_NAV_ONLY", False)
+    block_blank = _env_truthy_default("PLAYWRIGHT_BLOCK_BLANK", True)
+    prevent_close = _env_truthy_default("PLAYWRIGHT_PREVENT_CLOSE", True)
+    log_nav = _env_truthy_default("PLAYWRIGHT_LOG_NAV", True)
+    force_same_tab = _env_truthy_default("PLAYWRIGHT_FORCE_SAME_TAB", True)
+    keep_open = _env_truthy_default("PLAYWRIGHT_KEEP_OPEN", True)
+    cdp_url = os.getenv("PLAYWRIGHT_CDP_URL", "").strip()
 
     headless = _env_truthy("PLAYWRIGHT_HEADLESS")
     if _env_truthy("PLAYWRIGHT_HEADFUL"):
@@ -309,12 +621,110 @@ def _run_vlm_click() -> None:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=slow_mo)
+            browser = None
+            context = None
+            close_browser = True
+            close_context = True
             try:
-                context = browser.new_context(viewport=DEFAULT_VIEWPORT)
-                page = context.new_page()
-                page.goto(entry_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_load_state("networkidle")
+                locale = os.getenv("PLAYWRIGHT_LOCALE", DEFAULT_LOCALE).strip() or DEFAULT_LOCALE
+                timezone_id = os.getenv("PLAYWRIGHT_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+                user_agent = os.getenv("PLAYWRIGHT_USER_AGENT", DEFAULT_USER_AGENT).strip() or DEFAULT_USER_AGENT
+                stealth = _env_truthy_default("PLAYWRIGHT_STEALTH", True)
+                channel = "chrome" if use_chrome else None
+                launch_args = _chrome_args()
+
+                if cdp_url:
+                    browser = p.chromium.connect_over_cdp(cdp_url)
+                    close_browser = False
+                    if browser.contexts:
+                        context = browser.contexts[0]
+                        close_context = False
+                    else:
+                        context = browser.new_context(
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                elif persistent:
+                    user_data_dir = Path(
+                        os.getenv("PLAYWRIGHT_USER_DATA_DIR", str(DEFAULT_USER_DATA_DIR)).strip()
+                        or str(DEFAULT_USER_DATA_DIR)
+                    )
+                    user_data_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        context = p.chromium.launch_persistent_context(
+                            user_data_dir=str(user_data_dir),
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                    except PlaywrightError:
+                        if not use_chrome:
+                            raise
+                        channel = None
+                        context = p.chromium.launch_persistent_context(
+                            user_data_dir=str(user_data_dir),
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                else:
+                    try:
+                        browser = p.chromium.launch(
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                        )
+                    except PlaywrightError:
+                        if not use_chrome:
+                            raise
+                        browser = p.chromium.launch(
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            args=launch_args,
+                        )
+                    context = browser.new_context(
+                        viewport=DEFAULT_VIEWPORT,
+                        locale=locale,
+                        timezone_id=timezone_id,
+                        user_agent=user_agent,
+                    )
+
+                if context is None:
+                    _raise("Failed to create a browser context")
+
+                context.set_extra_http_headers({"Accept-Language": _guess_accept_language(locale)})
+                context.set_default_timeout(nav_timeout_ms)
+                context.set_default_navigation_timeout(nav_timeout_ms)
+                if stealth:
+                    context.add_init_script(_stealth_script())
+                if block_blank or prevent_close or log_nav or force_same_tab:
+                    context.add_init_script(
+                        _guard_nav_script(block_blank, prevent_close, log_nav, force_same_tab)
+                    )
+
+                page = context.pages[0] if context.pages else context.new_page()
+                _attach_debug_listeners(context, page)
+                page = _goto_stable(context, page, entry_url, nav_timeout_ms, nav_retries)
+
+                if nav_only:
+                    page.screenshot(path=str(screenshot_path), full_page=False)
+                    if keep_open:
+                        print("[vlm-debug] waiting for manual close (PLAYWRIGHT_KEEP_OPEN=1)")
+                        _wait_until_closed(page)
+                    return
 
                 info_collected: list[dict[str, str]] = []
                 visited: set[str] = set()
@@ -364,8 +774,154 @@ def _run_vlm_click() -> None:
                         continue
 
                     _raise(f"Unsupported action from VLM: {action!r}")
+                if keep_open:
+                    print("[vlm-debug] waiting for manual close (PLAYWRIGHT_KEEP_OPEN=1)")
+                    _wait_until_closed(page)
             finally:
-                browser.close()
+                if context is not None and close_context:
+                    context.close()
+                if browser is not None and close_browser:
+                    browser.close()
+    except PlaywrightError as exc:
+        lowered = str(exc).lower()
+        if "executable doesn't exist" in lowered or "playwright install" in lowered:
+            pytest.skip("Playwright browsers are not installed. Run `playwright install`.")
+        raise
+
+
+def _run_playwright_open_only() -> None:
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError:
+        pytest.skip("playwright is not installed")
+
+    entry_url = os.getenv("VLM_ENTRY_URL", DEFAULT_NAV_URL).strip() or DEFAULT_NAV_URL
+    nav_retries = int(os.getenv("PLAYWRIGHT_NAV_RETRIES", "3"))
+    nav_timeout_ms = int(os.getenv("PLAYWRIGHT_NAV_TIMEOUT_MS", "30000"))
+    use_chrome = _env_truthy_default("PLAYWRIGHT_USE_CHROME", True)
+    persistent = _env_truthy_default("PLAYWRIGHT_PERSISTENT", True)
+    block_blank = _env_truthy_default("PLAYWRIGHT_BLOCK_BLANK", True)
+    prevent_close = _env_truthy_default("PLAYWRIGHT_PREVENT_CLOSE", True)
+    log_nav = _env_truthy_default("PLAYWRIGHT_LOG_NAV", True)
+    force_same_tab = _env_truthy_default("PLAYWRIGHT_FORCE_SAME_TAB", True)
+    keep_open = _env_truthy_default("PLAYWRIGHT_KEEP_OPEN", False)
+    cdp_url = os.getenv("PLAYWRIGHT_CDP_URL", "").strip()
+
+    headless = _env_truthy("PLAYWRIGHT_HEADLESS")
+    if _env_truthy("PLAYWRIGHT_HEADFUL"):
+        headless = False
+    slow_mo = 0
+    if not headless:
+        slow_mo = int(os.getenv("PLAYWRIGHT_SLOW_MO_MS", "200"))
+
+    try:
+        with sync_playwright() as p:
+            browser = None
+            context = None
+            close_browser = True
+            close_context = True
+            try:
+                locale = os.getenv("PLAYWRIGHT_LOCALE", DEFAULT_LOCALE).strip() or DEFAULT_LOCALE
+                timezone_id = os.getenv("PLAYWRIGHT_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+                user_agent = os.getenv("PLAYWRIGHT_USER_AGENT", DEFAULT_USER_AGENT).strip() or DEFAULT_USER_AGENT
+                stealth = _env_truthy_default("PLAYWRIGHT_STEALTH", True)
+                channel = "chrome" if use_chrome else None
+                launch_args = _chrome_args()
+
+                if cdp_url:
+                    browser = p.chromium.connect_over_cdp(cdp_url)
+                    close_browser = False
+                    if browser.contexts:
+                        context = browser.contexts[0]
+                        close_context = False
+                    else:
+                        context = browser.new_context(
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                elif persistent:
+                    user_data_dir = Path(
+                        os.getenv("PLAYWRIGHT_USER_DATA_DIR", str(DEFAULT_USER_DATA_DIR)).strip()
+                        or str(DEFAULT_USER_DATA_DIR)
+                    )
+                    user_data_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        context = p.chromium.launch_persistent_context(
+                            user_data_dir=str(user_data_dir),
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                    except PlaywrightError:
+                        if not use_chrome:
+                            raise
+                        channel = None
+                        context = p.chromium.launch_persistent_context(
+                            user_data_dir=str(user_data_dir),
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                            viewport=DEFAULT_VIEWPORT,
+                            locale=locale,
+                            timezone_id=timezone_id,
+                            user_agent=user_agent,
+                        )
+                else:
+                    try:
+                        browser = p.chromium.launch(
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            channel=channel,
+                            args=launch_args,
+                        )
+                    except PlaywrightError:
+                        if not use_chrome:
+                            raise
+                        browser = p.chromium.launch(
+                            headless=headless,
+                            slow_mo=slow_mo,
+                            args=launch_args,
+                        )
+                    context = browser.new_context(
+                        viewport=DEFAULT_VIEWPORT,
+                        locale=locale,
+                        timezone_id=timezone_id,
+                        user_agent=user_agent,
+                    )
+
+                if context is None:
+                    _raise("Failed to create a browser context")
+
+                context.set_extra_http_headers({"Accept-Language": _guess_accept_language(locale)})
+                context.set_default_timeout(nav_timeout_ms)
+                context.set_default_navigation_timeout(nav_timeout_ms)
+                if stealth:
+                    context.add_init_script(_stealth_script())
+                if block_blank or prevent_close or log_nav or force_same_tab:
+                    context.add_init_script(
+                        _guard_nav_script(block_blank, prevent_close, log_nav, force_same_tab)
+                    )
+
+                page = context.pages[0] if context.pages else context.new_page()
+                _attach_debug_listeners(context, page)
+                page = _goto_stable(context, page, entry_url, nav_timeout_ms, nav_retries)
+                if keep_open:
+                    print("[vlm-debug] waiting for manual close (PLAYWRIGHT_KEEP_OPEN=1)")
+                    _wait_until_closed(page)
+            finally:
+                if context is not None and close_context:
+                    context.close()
+                if browser is not None and close_browser:
+                    browser.close()
     except PlaywrightError as exc:
         lowered = str(exc).lower()
         if "executable doesn't exist" in lowered or "playwright install" in lowered:
@@ -374,4 +930,21 @@ def _run_vlm_click() -> None:
 
 
 def test_playwright_vlm_click() -> None:
+    if _env_truthy("PLAYWRIGHT_OPEN_ONLY"):
+        pytest.skip("PLAYWRIGHT_OPEN_ONLY enabled; use test_playwright_open_only instead.")
     _run_vlm_click()
+
+
+def test_playwright_open_only() -> None:
+    if not _env_truthy("PLAYWRIGHT_OPEN_ONLY"):
+        pytest.skip("Set PLAYWRIGHT_OPEN_ONLY=1 to enable the open-only test.")
+    _run_playwright_open_only()
+
+
+def test_playwright_open_only_cdp() -> None:
+    if not _env_truthy("PLAYWRIGHT_OPEN_ONLY"):
+        pytest.skip("Set PLAYWRIGHT_OPEN_ONLY=1 to enable the open-only test.")
+    cdp_url = os.getenv("PLAYWRIGHT_CDP_URL", "").strip()
+    if not cdp_url:
+        pytest.skip("Set PLAYWRIGHT_CDP_URL to use the CDP (方案3) workflow.")
+    _run_playwright_open_only()

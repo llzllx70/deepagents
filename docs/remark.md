@@ -256,3 +256,100 @@ _make_model_to_tools_edge -> Send('tools')
 3. chrome-devtools-mcp, 官方，比较火，有skills
   - 成功打开，但是没有scroll
  
+# 20260119
+
+1. 参考 crawl4ai (风评比较好, manus 推荐)
+2. 内部封装了playwright
+3. ExpectedGain(link) = Relevance (BM25) × Novelty × Authority (对链接进行多维度打分)
+   但好像是说不支持qury，那么BM25是如何计算的？
+4. 对LLM友好，指结果友好，而不是需要用LLM进行解析
+5. 49 上命令行可以成功，macos不行，可能与playwright 与chrome有关
+6. 网络搜索建议先用 coze，这是一个大工程
+7. 可先接入图片等， 以及需求
+8. 建议先专有搜索
+9. manus 自己回答用的是用模拟点击
+10. vlm返回的结果不对，找不到链接，考虑使用LLM, 反正内容已经取到
+
+
+爬虫和浏览器自动化是两个需求，前者侧重获取数据，后者侧重在特定操作，完成任务
+
+# 20250130
+
+1. https://www.zhipin.com/hangzhou/?seoRefer=index 的反爬，playwright会自动打开blank，genspark 也一样，导致反复打开
+2. manus使用用户端chrome能够打开，可能使用了不同的技术，比如客户端插件。
+3. manus使用默认浏览器也会出现blank，但是最后会稳定
+
+4. 有一种方式可以稳定的打开boss
+
+5. chrome extensions 跨平台，免编译，但是存在翻墙问题
+
+打开本地浏览器
+
+``` 
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome 
+--remote-debugging-port=9222 
+--user-data-dir="/Users/double/vsproject/deepagents/workspace/cdp_profile"
+```
+
+curl http://127.0.0.1:9222/json/version
+获取webSocketDebuggerUrl
+
+{
+   "Browser": "Chrome/144.0.7559.110",
+   "Protocol-Version": "1.3",
+   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+   "V8-Version": "14.4.258.23",
+   "WebKit-Version": "537.36 (@cfecec24a8e1b3d5f3b58e52f11d1327ac1534c0)",
+   "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/03d0aa0c-c7ae-4021-9efd-fd73bd83f561"
+}
+
+playwright 连接此chrome
+
+```
+PLAYWRIGHT_OPEN_ONLY=1 \
+PLAYWRIGHT_CDP_URL="ws://127.0.0.1:9222/devtools/browser/03d0aa0c-c7ae-4021-9efd-fd73bd83f561" \
+pytest -k test_playwright_open_only_cdp test/test_playwright_vlm_click.py
+
+
+
+```
+
+有一种方式可以稳定的打开boss
+
+打开本地浏览器
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome 
+--remote-debugging-port=9222 
+--user-data-dir="/Users/double/vsproject/deepagents/workspace/cdp_profile"
+
+curl http://127.0.0.1:9222/json/version
+获取webSocketDebuggerUrl
+
+{
+   "Browser": "Chrome/144.0.7559.110",
+   "Protocol-Version": "1.3",
+   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+   "V8-Version": "14.4.258.23",
+   "WebKit-Version": "537.36 (@cfecec24a8e1b3d5f3b58e52f11d1327ac1534c0)",
+   "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/03d0aa0c-c7ae-4021-9efd-fd73bd83f561"
+}
+
+playwright 连接此chrome
+PLAYWRIGHT_OPEN_ONLY=1 \
+PLAYWRIGHT_CDP_URL="ws://127.0.0.1:9222/devtools/browser/03d0aa0c-c7ae-4021-9efd-fd73bd83f561" \
+pytest -k test_playwright_open_only_cdp test/test_playwright_vlm_click.py
+
+
+以上是一种可靠的反爬打开网站的方式，针对上面的用法，考虑如何在当前项目中集成，要求如下：
+
+- 不是一个测试程序，抛开crawl 和 test目录，考虑在当前deepagents项目中集成，关键代码在web 和 server中
+- 要打开用户的浏览器，而不是在服务器上打开浏览器
+- 要能够获取用户浏览器中的内容，并发送到服务端
+- 服务端接收当前页面的信息，并结合用户query，一起交给llm 进行下一步浏览器操作，比如滚动页面，点击按钮，打开新链接
+- 使用Chrome 扩展（0 本地依赖），通过加载未打包的应用程序来加载
+- 回传给server的数据要精简，但是要能满足llm分析，并能产生回应操控浏览器
+
+实际上要做的是：依据用户输入，在客户端模拟浏览器操作，进行针对性搜索，走到满足要求
+
+给出方案
+
+```

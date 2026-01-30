@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-DEFAULT_NAV_URL = "https://www.sina.com.cn"
+DEFAULT_NAV_URL = "https://www.zhipin.com/hangzhou/?seoRefer=index"
 DEFAULT_SCROLL_OFFSET = 800
 SCROLL_STEP_DELAY_SECONDS = 0.6
 SCROLL_MAX_STEPS = 60
