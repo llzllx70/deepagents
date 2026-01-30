@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "DeepAgents Browser Bridge",
+  "version": "0.1.0",
+  "description": "Connect DeepAgents to the user's Chrome via CDP for local browsing control.",
+  "permissions": ["tabs", "scripting", "storage", "activeTab", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "DeepAgents Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

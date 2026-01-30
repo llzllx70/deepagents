@@ -7,6 +7,58 @@ export class UtilsModule {
         this.app = app;
     }
 
+    updateBridgeMeta() {
+        const app = this.app;
+        const doc = document.documentElement;
+        const serverUrl = app.serverUrl || '';
+        const wsProtocol = serverUrl.startsWith('https') ? 'wss:' : 'ws:';
+        const wsHost = serverUrl.replace(/^https?:\/\//, '');
+        const wsBase = serverUrl ? `${wsProtocol}//${wsHost}/ws/browser` : '';
+        const sessionId = app.sessionId || '';
+        const token = app.authToken || '';
+        if (doc) {
+            if (wsBase) {
+                doc.dataset.daServerWsBase = wsBase;
+            } else {
+                delete doc.dataset.daServerWsBase;
+            }
+            if (sessionId) {
+                doc.dataset.daSessionId = sessionId;
+            } else {
+                delete doc.dataset.daSessionId;
+            }
+            if (token) {
+                doc.dataset.daToken = token;
+            } else {
+                delete doc.dataset.daToken;
+            }
+        }
+        try {
+            if (wsBase) {
+                localStorage.setItem('deepagents_server_ws_base', wsBase);
+            } else {
+                localStorage.removeItem('deepagents_server_ws_base');
+            }
+            if (serverUrl) {
+                localStorage.setItem('deepagents_server_url', serverUrl);
+            } else {
+                localStorage.removeItem('deepagents_server_url');
+            }
+            if (sessionId) {
+                localStorage.setItem('deepagents_session_id', sessionId);
+            } else {
+                localStorage.removeItem('deepagents_session_id');
+            }
+            if (token) {
+                localStorage.setItem('deepagents_auth_token', token);
+            } else {
+                localStorage.removeItem('deepagents_auth_token');
+            }
+        } catch {
+            // ignore storage failures
+        }
+    }
+
     // Text helpers (zh-CN)
     formatConnectionStatus(status) {
         const map = {

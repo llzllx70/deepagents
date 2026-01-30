@@ -19,6 +19,8 @@ TOOL_TITLE_MAP: dict[str, str] = {
     "pdf_to_word": "转换文件格式",
     "qwen_image_understand": "查看图片",
     "qwen_image_generate": "生成图片",
+    "browser_request_snapshot": "浏览器快照",
+    "browser_action": "浏览器操作",
 }
 
 TOOL_DISPLAY_LIMIT = 160
@@ -169,6 +171,18 @@ def format_tool_display(
         content = _first_arg(parsed_args, ["image_path", "path"])
     elif name == "qwen_image_generate":
         content = _first_arg(parsed_args, ["output_path", "path"])
+    elif name == "browser_request_snapshot":
+        content = _first_arg(parsed_args, ["mode", "reason"]) or "请求快照"
+    elif name == "browser_action":
+        action = _first_arg(parsed_args, ["action"])
+        target = parsed_args.get("target") if isinstance(parsed_args, dict) else None
+        target_hint = None
+        if isinstance(target, dict):
+            target_hint = target.get("id") or target.get("selector")
+        if action and target_hint:
+            content = f"{action} {target_hint}"
+        elif action:
+            content = action
 
     if content:
         content = _truncate_inline(_compact_single_line(content))

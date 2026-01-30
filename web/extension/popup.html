@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepAgents Bridge</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Helvetica Neue", "PingFang SC", Arial, sans-serif;
+        font-size: 13px;
+      }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 320px;
+        background: #f7f7f8;
+        color: #1e1f22;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      label {
+        display: block;
+        margin-top: 8px;
+        font-size: 12px;
+        color: #4b4e57;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border: 1px solid #d6d7db;
+        border-radius: 6px;
+        margin-top: 4px;
+        background: #fff;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      button {
+        flex: 1;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 10px;
+        cursor: pointer;
+        background: #2563eb;
+        color: #fff;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: #e5e7eb;
+        color: #1f2937;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: #fff;
+        border: 1px solid #e3e4e8;
+      }
+      .status.connected {
+        border-color: #10b981;
+        color: #065f46;
+      }
+      .status.disconnected {
+        border-color: #f59e0b;
+        color: #92400e;
+      }
+      .hint {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #6b7280;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>DeepAgents Browser Bridge</h1>
+    <label>Server WS Base</label>
+    <input id="baseUrl" placeholder="ws://localhost:8000/ws/browser" />
+    <label>Session ID</label>
+    <input id="sessionId" placeholder="session id" />
+    <label>Token</label>
+    <input id="token" placeholder="auth token" />
+    <div class="row">
+      <button id="connectBtn">Connect</button>
+      <button id="bindBtn" class="secondary">Bind Active Tab</button>
+    </div>
+    <div id="status" class="status disconnected">Disconnected</div>
+    <div class="hint">
+      Tip: copy token and sessionId from DeepAgents Web, then connect and open the target page.
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

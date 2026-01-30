@@ -67,6 +67,7 @@ export class DeepAgentsClient {
         this.serverUrl = this.network.getServerUrl();
 
         this.ui.init();
+        this.utils.updateBridgeMeta();
     }
 }
 

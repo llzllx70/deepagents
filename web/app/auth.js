@@ -86,6 +86,7 @@ export class AuthModule {
         if (app.elements.loginUser) app.elements.loginUser.textContent = '未登录';
         if (app.elements.loginPassword) app.elements.loginPassword.value = '';
         this.setLoginStatus('');
+        app.utils.updateBridgeMeta();
         app.ui.updateSendButton();
     }
 
@@ -137,6 +138,7 @@ export class AuthModule {
             if (app.elements.loginPassword) app.elements.loginPassword.value = '';
             this.applyLoggedInState();
             this.setLoginStatus('登录成功', 'success');
+            app.utils.updateBridgeMeta();
             await this.afterLogin();
         } catch (error) {
             this.setLoginStatus(error.message || '登录失败', 'error');

@@ -21,6 +21,8 @@ from .agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
 from deepagents_cli.file_ops import FileOpTracker
 from deepagents_cli.tools import fetch_url, http_request, web_search
+from .browser_bridge import BrowserBridge
+from .browser_tools import build_browser_tools
 from .docker import DockerSandboxBackend
 from .docker_pool import DockerSandboxPool
 from .context import inject_file_context
@@ -107,6 +109,7 @@ class Session:
     backend: Any
     sandbox_backend: DockerSandboxBackend
     workspace_dir: Path
+    browser_bridge: BrowserBridge | None = None
     run_queue: asyncio.Queue[RunRequest] = field(default_factory=asyncio.Queue)
     run_status: dict[str, str] = field(default_factory=dict)
     connections: set[WebSocket] = field(default_factory=set)
@@ -215,6 +218,18 @@ class Session:
         )
 
         prompt_text, warnings = inject_file_context(run_request.user_input)
+        if self.browser_bridge and self.browser_bridge.is_connected():
+            browser_context = self.browser_bridge.format_snapshot_for_prompt()
+            if browser_context:
+                prompt_text = (
+                    f"{prompt_text}\n\n## Browser Snapshot\n{browser_context}\n\n"
+                    "If you need a fresh snapshot, call browser_request_snapshot."
+                )
+            else:
+                prompt_text = (
+                    f"{prompt_text}\n\n## Browser Snapshot\n"
+                    "No snapshot yet. Call browser_request_snapshot first."
+                )
         for warning in warnings:
             await self.broadcast(
                 {
@@ -641,6 +656,8 @@ class SessionManager:
             logger.warning("Tavily API key not configured, web_search disabled")
 
         session_state = SessionState(auto_approve=auto_approve)
+        browser_bridge = BrowserBridge(session_id=session_id)
+        tools.extend(build_browser_tools(browser_bridge))
         sandbox_backend = await self._pool.acquire_for_session(session_id, session_workspace_dir)
         tools.extend(
             build_qwen_tools(
@@ -675,6 +692,7 @@ class SessionManager:
             backend=backend,
             sandbox_backend=sandbox_backend,
             workspace_dir=session_workspace_dir,
+            browser_bridge=browser_bridge,
         )
         await session.start()
         async with self._lock:

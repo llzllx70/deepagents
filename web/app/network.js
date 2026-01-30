@@ -113,6 +113,7 @@ export class NetworkModule {
         const tokenParam = app.authToken ? `?token=${encodeURIComponent(app.authToken)}` : '';
         app.wsUrl = `${wsProtocol}//${wsHost}/ws/${app.sessionId}${tokenParam}`;
         app.elements.chatTitle.textContent = sessionId;
+        app.utils.updateBridgeMeta();
     }
 
     connectToSession(sessionId, { requestRunStatusId = null } = {}) {
