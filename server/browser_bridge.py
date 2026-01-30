@@ -102,7 +102,7 @@ class BrowserBridge:
         reason: str | None = None,
     ) -> dict[str, Any]:
         if self._connection is None:
-            return {"success": False, "error": "Browser not connected"}
+            return {"success": False, "error": "Browser Bridge not connected"}
         request_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -129,7 +129,7 @@ class BrowserBridge:
         timeout: float = 12.0,
     ) -> dict[str, Any]:
         if self._connection is None:
-            return {"success": False, "error": "Browser not connected"}
+            return {"success": False, "error": "Browser Bridge not connected"}
         action_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
