@@ -6,13 +6,16 @@ import json
 import os
 import shlex
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import yaml
 from langchain_core.tools import BaseTool, tool
 
 from deepagents.backends.protocol import SandboxBackendProtocol
 
+from .config import logger
 from .sandbox_tool_utils import (
     _ensure_workspace_path,
     _parse_sandbox_result,
@@ -20,17 +23,114 @@ from .sandbox_tool_utils import (
 )
 
 
-def _get_qwen_env() -> tuple[dict[str, str] | None, str | None]:
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get(
+def _get_qwen_env(scene: str) -> tuple[dict[str, str] | None, str | None]:
+    config_api_key, config_api_base, _model = _get_scene_qwen_config(scene)
+    api_key = config_api_key or os.environ.get("DASHSCOPE_API_KEY") or os.environ.get(
         "QWEN_OPENAI_API_KEY"
     )
+    api_base = config_api_base or os.environ.get("DASHSCOPE_API_BASE")
     if not api_key:
         return None, "Missing DASHSCOPE_API_KEY or QWEN_OPENAI_API_KEY"
     env = {"DASHSCOPE_API_KEY": api_key}
-    api_base = os.environ.get("DASHSCOPE_API_BASE")
     if api_base:
         env["DASHSCOPE_API_BASE"] = api_base
     return env, None
+
+
+def _log_qwen_failure(
+    task: str,
+    result: dict[str, Any],
+    *,
+    model: str | None = None,
+    api_base: str | None = None,
+) -> None:
+    details = {
+        "task": task,
+        "error": result.get("error"),
+        "status_code": result.get("status_code"),
+        "request_id": result.get("request_id"),
+        "task_id": result.get("task_id"),
+        "task_status": result.get("task_status"),
+        "exit_code": result.get("exit_code"),
+        "response_summary": result.get("response_summary"),
+        "model": model,
+        "api_base": api_base,
+    }
+    logger.warning("Qwen tool failure: %s", json.dumps(details, ensure_ascii=False))
+
+
+@lru_cache(maxsize=1)
+def _load_model_config() -> dict[str, dict[str, Any]]:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "model.yml"
+    if not config_path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    models = data.get("models")
+    if not isinstance(models, dict):
+        return {}
+    return {key: value for key, value in models.items() if isinstance(value, dict)}
+
+
+@lru_cache(maxsize=1)
+def _load_scene_config() -> dict[str, str]:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "llm-scene.yml"
+    if not config_path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: value
+        for key, value in data.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _scene_model(scene: str) -> str | None:
+    return _load_scene_config().get(scene)
+
+
+def _get_model_config(model_key: str | None) -> tuple[str | None, str | None, str | None]:
+    if not model_key:
+        return None, None, None
+    models = _load_model_config()
+    config = models.get(model_key)
+    if not isinstance(config, dict):
+        return None, None, None
+    api_key = config.get("api_key")
+    api_base = config.get("base_url")
+    model = config.get("model")
+    api_key = api_key if isinstance(api_key, str) and api_key else None
+    api_base = api_base if isinstance(api_base, str) and api_base else None
+    model = model if isinstance(model, str) and model else None
+    return api_key, api_base, model
+
+
+def _scene_fallback_model(scene: str) -> str:
+    if scene == "image-create":
+        return "qwen-image-max"
+    return "qwen3-vl-plus"
+
+
+def _get_scene_qwen_config(scene: str) -> tuple[str | None, str | None, str | None]:
+    model_key = _scene_model(scene) or _scene_fallback_model(scene)
+    return _get_model_config(model_key)
+
+
+def _default_qwen_understand_model() -> str:
+    _api_key, _api_base, model = _get_scene_qwen_config("image-understand")
+    return model or "qwen-image-max"
+
+
+def _default_qwen_generate_model() -> str:
+    _api_key, _api_base, model = _get_scene_qwen_config("image-create")
+    return model or "qwen-image-max"
 
 
 class QwenSandboxClient:
@@ -69,18 +169,30 @@ class QwenSandboxClient:
             return None, f"Upload failed: {upload[0].error}"
         return payload_path, None
 
-    def _run_task(self, task: str, payload: dict[str, Any]) -> dict[str, Any]:
-        env, error = _get_qwen_env()
+    def _run_task(self, task: str, payload: dict[str, Any], scene: str) -> dict[str, Any]:
+        env, error = _get_qwen_env(scene)
+        model = payload.get("model") if isinstance(payload, dict) else None
+        api_base = None
+        if env and env.get("DASHSCOPE_API_BASE"):
+            api_base = env["DASHSCOPE_API_BASE"]
+        else:
+            api_base = "https://dashscope.aliyuncs.com"
         if error:
-            return {"success": False, "error": error}
+            result = {"success": False, "error": error}
+            _log_qwen_failure(task, result, model=model, api_base=api_base)
+            return result
 
         ready, error = self._ensure_runner()
         if not ready:
-            return {"success": False, "error": error or "Runner setup failed"}
+            result = {"success": False, "error": error or "Runner setup failed"}
+            _log_qwen_failure(task, result, model=model, api_base=api_base)
+            return result
 
         payload_path, error = self._upload_payload(payload)
         if error or payload_path is None:
-            return {"success": False, "error": error or "Payload upload failed"}
+            result = {"success": False, "error": error or "Payload upload failed"}
+            _log_qwen_failure(task, result, model=model, api_base=api_base)
+            return result
 
         env_prefix = ""
         if env:
@@ -95,7 +207,10 @@ class QwenSandboxClient:
             f"--task {shlex.quote(task)} --payload {shlex.quote(payload_path)}"
         )
         result = self._sandbox_backend.execute(command)
-        return _parse_sandbox_result(result.output, result.exit_code)
+        parsed = _parse_sandbox_result(result.output, result.exit_code)
+        if not parsed.get("success", True):
+            _log_qwen_failure(task, parsed, model=model, api_base=api_base)
+        return parsed
 
     def understand(
         self,
@@ -105,7 +220,7 @@ class QwenSandboxClient:
     ) -> dict[str, Any]:
         image_path = _ensure_workspace_path(image_path)
         payload = {"image_path": image_path, "prompt": prompt, "model": model}
-        return self._run_task("understand", payload)
+        return self._run_task("understand", payload, "image-understand")
 
     def generate(
         self,
@@ -123,7 +238,7 @@ class QwenSandboxClient:
             "size": size,
             "model": model,
         }
-        result = self._run_task("generate", payload)
+        result = self._run_task("generate", payload, "image-create")
         output_path = result.get("output_path")
         if isinstance(output_path, str):
             host_path = _sync_to_host(
@@ -153,9 +268,10 @@ def build_qwen_tools(
     def qwen_image_understand(
         image_path: str,
         prompt: str = "Describe the image in detail.",
-        model: str = "qwen-image-max",
+        model: str | None = None,
     ) -> dict[str, Any]:
-        return client.understand(image_path, prompt, model)
+        selected_model = model or _default_qwen_understand_model()
+        return client.understand(image_path, prompt, selected_model)
 
     @tool(
         "qwen_image_generate",
@@ -168,9 +284,10 @@ def build_qwen_tools(
         prompt: str,
         output_path: str | None = None,
         size: str = "1024*1024",
-        model: str = "qwen-image-max",
+        model: str | None = None,
     ) -> dict[str, Any]:
-        return client.generate(prompt, output_path, size, model)
+        selected_model = model or _default_qwen_generate_model()
+        return client.generate(prompt, output_path, size, selected_model)
 
     return [qwen_image_understand, qwen_image_generate]
 

@@ -13,6 +13,7 @@ from typing import Any
 import requests
 
 _RESULT_PREFIX = "RESULT_JSON:"
+_IMAGE_DATA_KEYS = {"b64_json", "image", "base64"}
 
 
 class QwenImageClient:
@@ -20,14 +21,20 @@ class QwenImageClient:
 
     def __init__(self, api_key: str, api_base: str | None = None) -> None:
         self._api_key = api_key
-        self._api_base = api_base or "https://dashscope.aliyuncs.com"
+        self._api_base = api_base or "https://dashscope.aliyuncs.com/api/v1"
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
+    def _build_url(self, path: str) -> str:
+        base = self._api_base.rstrip("/")
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"{base}{path}"
+
     def _post(self, path: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any], int | None]:
-        url = f"{self._api_base}{path}"
+        url = self._build_url(path)
         resp = requests.post(url, headers=self._headers, json=payload, timeout=60)
         try:
             data = resp.json()
@@ -36,12 +43,104 @@ class QwenImageClient:
         return resp.ok, data, resp.status_code
 
     def _get(self, path: str) -> dict[str, Any] | None:
-        url = f"{self._api_base}{path}"
+        url = self._build_url(path)
         resp = requests.get(url, headers=self._headers, timeout=60)
         try:
             return resp.json()
         except Exception:
             return None
+
+    def _extract_image_from_results(
+        self, output: dict[str, Any] | None
+    ) -> tuple[str | None, str | None]:
+        results = output.get("results") if isinstance(output, dict) else None
+        if not isinstance(results, list) or not results:
+            return None, None
+        item = results[0]
+        if not isinstance(item, dict):
+            return None, None
+        image_url = item.get("url") or item.get("image_url")
+        image_b64 = item.get("b64_json") or item.get("image") or item.get("base64")
+        return image_url, image_b64
+
+    def _extract_image_from_content(self, content: Any) -> tuple[str | None, str | None]:
+        if isinstance(content, list):
+            for part in content:
+                image_url, image_b64 = self._extract_image_from_part(part)
+                if image_url or image_b64:
+                    return image_url, image_b64
+        elif isinstance(content, dict):
+            return self._extract_image_from_part(content)
+        return None, None
+
+    def _extract_image_from_part(self, part: Any) -> tuple[str | None, str | None]:
+        if not isinstance(part, dict):
+            return None, None
+        image_url = None
+        image_b64 = None
+        image_url_part = part.get("image_url")
+        if isinstance(image_url_part, dict):
+            image_url = image_url_part.get("url")
+        elif isinstance(image_url_part, str):
+            image_url = image_url_part
+        for key in ("url", "image"):
+            value = part.get(key)
+            if isinstance(value, str) and value:
+                if value.startswith("http"):
+                    image_url = value
+                elif value.startswith("data:image/"):
+                    image_b64 = value.split(",", 1)[-1]
+                else:
+                    image_b64 = value
+        for key in ("b64_json", "base64"):
+            value = part.get(key)
+            if isinstance(value, str) and value:
+                image_b64 = value
+        return image_url, image_b64
+
+    def _extract_image_from_multimodal(self, data: dict[str, Any]) -> tuple[str | None, str | None]:
+        output = data.get("output") if isinstance(data, dict) else None
+        if not isinstance(output, dict):
+            return None, None
+        choices = output.get("choices")
+        if not isinstance(choices, list):
+            return None, None
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            image_url, image_b64 = self._extract_image_from_content(content)
+            if image_url or image_b64:
+                return image_url, image_b64
+        return None, None
+
+    def _write_image(
+        self,
+        output_path: str,
+        image_url: str | None,
+        image_b64: str | None,
+    ) -> dict[str, Any] | None:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        if image_url and image_url.startswith("data:image/"):
+            image_b64 = image_url.split(",", 1)[-1]
+            image_url = None
+        if image_b64:
+            with open(output_path, "wb") as f:
+                f.write(base64.b64decode(image_b64))
+            return None
+        if image_url:
+            try:
+                image_resp = requests.get(image_url, timeout=60)
+                image_resp.raise_for_status()
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+            with open(output_path, "wb") as f:
+                f.write(image_resp.content)
+            return None
+        return {"success": False, "error": "No image returned"}
 
     def understand(self, image_path: str, prompt: str, model: str) -> dict[str, Any]:
         if not os.path.isfile(image_path):
@@ -69,7 +168,7 @@ class QwenImageClient:
         }
 
         ok, data, status_code = self._post(
-            "/api/v1/services/aigc/multimodal-generation/generation",
+            "/services/aigc/multimodal-generation/generation",
             payload,
         )
 
@@ -96,9 +195,96 @@ class QwenImageClient:
         }
         if not ok:
             result["error"] = data.get("message") if isinstance(data, dict) else "Request failed"
+            result["response_summary"] = _summarize_response(data)
         return result
 
     def generate(
+        self,
+        prompt: str,
+        output_path: str,
+        size: str,
+        model: str,
+    ) -> dict[str, Any]:
+        multimodal_payload = {
+            "model": model,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": prompt},
+                        ],
+                    }
+                ]
+            },
+            "parameters": {
+                "size": size,
+                "result_format": "message",
+                "watermark": False,
+                "prompt_extend": True,
+            },
+        }
+        ok, data, status_code = self._post(
+            "/services/aigc/multimodal-generation/generation",
+            multimodal_payload,
+        )
+        output = data.get("output", {}) if isinstance(data, dict) else {}
+        task_id = output.get("task_id")
+        task_status = output.get("task_status")
+        response_summary = _summarize_response(data)
+
+        if task_id and task_status not in ("SUCCEEDED", "FAILED"):
+            for _ in range(60):
+                time.sleep(2)
+                poll_data = self._get(f"/tasks/{task_id}")
+                if not poll_data:
+                    continue
+                output = poll_data.get("output", {}) if isinstance(poll_data, dict) else {}
+                response_summary = _summarize_response(poll_data) or response_summary
+                task_status = output.get("task_status")
+                if task_status in ("SUCCEEDED", "FAILED"):
+                    data = poll_data
+                    break
+
+        image_url, image_b64 = self._extract_image_from_multimodal(data)
+        if not image_url and not image_b64:
+            image_url, image_b64 = self._extract_image_from_results(output)
+        if not image_url and not image_b64:
+            fallback = self._generate_text2image(prompt, output_path, size, model)
+            if fallback.get("success"):
+                return fallback
+            result = {
+                "success": False,
+                "error": "No image returned",
+                "task_id": task_id,
+                "task_status": task_status,
+                "status_code": status_code,
+                "request_id": data.get("request_id") if isinstance(data, dict) else None,
+                "response_summary": response_summary,
+            }
+            result["fallback"] = {
+                "error": fallback.get("error"),
+                "status_code": fallback.get("status_code"),
+                "response_summary": fallback.get("response_summary"),
+            }
+            return result
+
+        write_error = self._write_image(output_path, image_url, image_b64)
+        if write_error:
+            write_error["task_id"] = task_id
+            return write_error
+
+        return {
+            "success": True,
+            "output_path": output_path,
+            "task_id": task_id,
+            "task_status": task_status,
+            "status_code": status_code,
+            "request_id": data.get("request_id") if isinstance(data, dict) else None,
+            "response_summary": response_summary,
+        }
+
+    def _generate_text2image(
         self,
         prompt: str,
         output_path: str,
@@ -109,59 +295,116 @@ class QwenImageClient:
             "model": model,
             "input": {
                 "prompt": prompt,
+            },
+            "parameters": {
                 "size": size,
             },
         }
-        ok, data, _status = self._post(
-            "/api/v1/services/aigc/text2image/generation",
+        ok, data, status_code = self._post(
+            "/services/aigc/text2image/generation",
             payload,
         )
         output = data.get("output", {}) if isinstance(data, dict) else {}
         task_id = output.get("task_id")
         task_status = output.get("task_status")
+        response_summary = _summarize_response(data)
 
         if task_id and task_status not in ("SUCCEEDED", "FAILED"):
             for _ in range(60):
                 time.sleep(2)
-                poll_data = self._get(f"/api/v1/tasks/{task_id}")
+                poll_data = self._get(f"/tasks/{task_id}")
                 if not poll_data:
                     continue
                 output = poll_data.get("output", {}) if isinstance(poll_data, dict) else {}
+                response_summary = _summarize_response(poll_data) or response_summary
                 task_status = output.get("task_status")
                 if task_status in ("SUCCEEDED", "FAILED"):
                     break
 
-        results = output.get("results") if isinstance(output, dict) else None
-        image_url = None
-        image_b64 = None
-        if isinstance(results, list) and results:
-            item = results[0]
-            if isinstance(item, dict):
-                image_url = item.get("url") or item.get("image_url")
-                image_b64 = item.get("b64_json") or item.get("image") or item.get("base64")
+        image_url, image_b64 = self._extract_image_from_results(output)
 
         if not image_url and not image_b64:
-            return {"success": False, "error": "No image returned", "task_id": task_id}
+            return {
+                "success": False,
+                "error": "No image returned",
+                "task_id": task_id,
+                "task_status": task_status,
+                "status_code": status_code,
+                "request_id": data.get("request_id") if isinstance(data, dict) else None,
+                "response_summary": response_summary,
+            }
 
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        if image_b64:
-            with open(output_path, "wb") as f:
-                f.write(base64.b64decode(image_b64))
-        else:
-            try:
-                image_resp = requests.get(image_url, timeout=60)
-                image_resp.raise_for_status()
-            except Exception as exc:
-                return {"success": False, "error": str(exc), "task_id": task_id}
-            with open(output_path, "wb") as f:
-                f.write(image_resp.content)
+        write_error = self._write_image(output_path, image_url, image_b64)
+        if write_error:
+            write_error["task_id"] = task_id
+            return write_error
 
         return {
             "success": bool(ok),
             "output_path": output_path,
             "task_id": task_id,
             "task_status": task_status,
+            "status_code": status_code,
+            "request_id": data.get("request_id") if isinstance(data, dict) else None,
+            "response_summary": response_summary,
         }
+
+
+def _sanitize_output(output: Any) -> Any:
+    if not isinstance(output, dict):
+        return output
+    sanitized = dict(output)
+    results = sanitized.get("results")
+    if isinstance(results, list):
+        trimmed_results: list[Any] = []
+        for item in results:
+            if isinstance(item, dict):
+                trimmed_results.append(
+                    {key: value for key, value in item.items() if key not in _IMAGE_DATA_KEYS}
+                )
+            else:
+                trimmed_results.append(item)
+        sanitized["results"] = trimmed_results
+    choices = sanitized.get("choices")
+    if isinstance(choices, list):
+        trimmed_choices: list[Any] = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                trimmed_choices.append(choice)
+                continue
+            choice_copy = dict(choice)
+            message = choice_copy.get("message")
+            if isinstance(message, dict):
+                message_copy = dict(message)
+                content = message_copy.get("content")
+                if isinstance(content, list):
+                    trimmed_content: list[Any] = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            trimmed_content.append(
+                                {key: value for key, value in part.items() if key not in _IMAGE_DATA_KEYS}
+                            )
+                        else:
+                            trimmed_content.append(part)
+                    message_copy["content"] = trimmed_content
+                elif isinstance(content, dict):
+                    message_copy["content"] = {
+                        key: value for key, value in content.items() if key not in _IMAGE_DATA_KEYS
+                    }
+                choice_copy["message"] = message_copy
+            trimmed_choices.append(choice_copy)
+        sanitized["choices"] = trimmed_choices
+    return sanitized
+
+
+def _summarize_response(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(data, dict):
+        return None
+    summary: dict[str, Any] = {}
+    for key in ("request_id", "code", "message", "output", "usage"):
+        if key in data:
+            summary[key] = _sanitize_output(data[key]) if key == "output" else data[key]
+    return summary or None
 
 
 def _load_payload(path: str) -> dict[str, Any]:

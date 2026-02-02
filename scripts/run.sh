@@ -17,8 +17,15 @@ if [ ! -f "$MODEL_CONFIG_FILE" ]; then
   exit 1
 fi
 
+SCENE_CONFIG_FILE="${ROOT_DIR}/config/llm-scene.yml"
+if [ ! -f "$SCENE_CONFIG_FILE" ]; then
+  echo "Missing LLM scene config file: $SCENE_CONFIG_FILE" >&2
+  exit 1
+fi
+
 usage() {
-  echo "Usage: $0 [start|stop|restart|process|log] [all|server|web] [glm|qwen|claude]" >&2
+  echo "Usage: $0 [start|stop|restart|process|log] [all|server|web] [main-model]" >&2
+  echo "Main model defaults to the 'main' entry in config/llm-scene.yml" >&2
 }
 
 validate_action() {
@@ -34,16 +41,6 @@ validate_action() {
 validate_target() {
   case "$TARGET" in
     all|server|web) ;;
-    *)
-      usage
-      exit 1
-      ;;
-  esac
-}
-
-validate_model() {
-  case "$MODEL" in
-    glm|qwen|claude) ;;
     *)
       usage
       exit 1
@@ -93,6 +90,45 @@ export_env_config() {
   done < <(load_env_config)
 }
 
+scene_config_value() {
+  local scene="$1"
+  python - "$SCENE_CONFIG_FILE" "$scene" <<'PY'
+import sys
+
+path = sys.argv[1]
+scene = sys.argv[2]
+value = ""
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if ":" not in stripped:
+            continue
+        key, raw_value = stripped.split(":", 1)
+        if key.strip() != scene:
+            continue
+        value = raw_value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        break
+
+sys.stdout.write(value)
+PY
+}
+
+default_main_model() {
+  local scene_model=""
+  scene_model="$(scene_config_value "main")"
+  if [ -n "$scene_model" ]; then
+    echo "$scene_model"
+    return 0
+  fi
+  echo "glm"
+}
+
 model_config_value() {
   local model="$1"
   local key="$2"
@@ -133,6 +169,76 @@ with open(path, "r", encoding="utf-8") as handle:
 
 sys.stdout.write(models.get(model, {}).get(key, ""))
 PY
+}
+
+model_config_keys() {
+  python - "$MODEL_CONFIG_FILE" <<'PY'
+import sys
+
+path = sys.argv[1]
+current_section = None
+keys = []
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            continue
+        if current_section != "models":
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            keys.append(stripped[:-1].strip())
+
+sys.stdout.write("\n".join(keys))
+PY
+}
+
+model_exists() {
+  local model="$1"
+  if [ -z "$model" ]; then
+    return 1
+  fi
+  python - "$MODEL_CONFIG_FILE" "$model" <<'PY'
+import sys
+
+path = sys.argv[1]
+model = sys.argv[2]
+current_section = None
+found = False
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            continue
+        if current_section != "models":
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            if stripped[:-1].strip() == model:
+                found = True
+                break
+
+sys.exit(0 if found else 1)
+PY
+  return $?
+}
+
+validate_model() {
+  if model_exists "$MODEL"; then
+    return 0
+  fi
+  usage
+  exit 1
 }
 
 set_model_env() {
@@ -420,8 +526,15 @@ prompt_model() {
   local result_var="$1"
   local indent="$2"
   local choice=""
+  local default_model=""
+  local model_list=""
+  default_model="$(default_main_model)"
+  model_list="$(model_config_keys | paste -sd "," -)"
   while true; do
-    echo "${indent}Select model: [1] glm [2] qwen [3] claude (default: glm)" >&2
+    if [ -n "$model_list" ]; then
+      echo "${indent}Available main models: ${model_list}" >&2
+    fi
+    echo "${indent}Select main model (default: ${default_model})" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -430,12 +543,12 @@ prompt_model() {
       INTERRUPTED=0
       return 1
     fi
-    case "${choice:-1}" in
-      1|glm) printf -v "$result_var" "%s" "glm"; return 0 ;;
-      2|qwen) printf -v "$result_var" "%s" "qwen"; return 0 ;;
-      3|claude) printf -v "$result_var" "%s" "claude"; return 0 ;;
-      *) echo "${indent}Invalid model, try again." >&2 ;;
-    esac
+    choice="${choice:-$default_model}"
+    if model_exists "$choice"; then
+      printf -v "$result_var" "%s" "$choice"
+      return 0
+    fi
+    echo "${indent}Invalid model, try again." >&2
   done
 }
 
@@ -456,7 +569,7 @@ interactive_menu() {
       if ! prompt_target TARGET "$INDENT_L3"; then
         return 1
       fi
-      MODEL="glm"
+      MODEL="$(default_main_model)"
       ;;
     restart|start)
       ACTION="$primary"
@@ -472,7 +585,7 @@ interactive_menu() {
       if ! prompt_target TARGET "$INDENT_L2"; then
         return 1
       fi
-      MODEL="glm"
+      MODEL="$(default_main_model)"
       ;;
   esac
   return 0
@@ -510,7 +623,7 @@ read_with_interrupt() {
 if [ "$#" -gt 0 ]; then
   ACTION="$1"
   TARGET="${2:-all}"
-  MODEL="${3:-glm}"
+  MODEL="${3:-$(default_main_model)}"
   do_action
   exit 0
 fi

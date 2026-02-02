@@ -21,3 +21,7 @@ This is an unpacked Chrome extension that connects a user's local browser to the
 5. Click **Connect** then **Bind Active Tab**.
 
 The server can now request snapshots and send CDP actions.
+
+ws://172.16.2.4:8000/ws/browser
+e7a203d0040f489cb2fb6798e45b0810
+

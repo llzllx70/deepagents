@@ -364,4 +364,5 @@ pytest -k test_playwright_open_only_cdp test/test_playwright_vlm_click.py
 
 6. 后面可以考虑 playwright,coze,baidu,google 混合着来
 
+7. 会议结论，暂不考虑导出可编辑的pptx
 
