@@ -4,6 +4,8 @@ import json
 import re
 from typing import Any
 
+from .browser_target_utils import normalize_browser_target
+
 TOOL_TITLE_MAP: dict[str, str] = {
     "task": "任务分解",
     "write_todos": "任务列表",
@@ -24,6 +26,19 @@ TOOL_TITLE_MAP: dict[str, str] = {
 }
 
 TOOL_DISPLAY_LIMIT = 160
+
+BROWSER_ACTION_LABELS: dict[str, str] = {
+    "open": "打开页面",
+    "click": "点击元素",
+    "type": "输入文本",
+    "scroll": "滚动页面",
+    "wait": "等待",
+}
+
+BROWSER_SNAPSHOT_MODE_LABELS: dict[str, str] = {
+    "compact": "紧凑快照",
+    "full": "完整快照",
+}
 
 
 def is_root_namespace(namespace: object) -> bool:
@@ -76,7 +91,12 @@ def parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
     if raw_args is None:
         return None
     if isinstance(raw_args, dict):
-        return raw_args
+        parsed = raw_args
+        normalized_target = normalize_browser_target(parsed.get("target"))
+        if normalized_target is not None:
+            parsed = dict(parsed)
+            parsed["target"] = normalized_target
+        return parsed
     if isinstance(raw_args, str):
         if not raw_args:
             return None
@@ -85,6 +105,10 @@ def parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
         if isinstance(parsed, dict):
+            normalized_target = normalize_browser_target(parsed.get("target"))
+            if normalized_target is not None:
+                parsed = dict(parsed)
+                parsed["target"] = normalized_target
             return parsed
         return {"value": parsed}
     return {"value": raw_args}
@@ -115,6 +139,107 @@ def _first_arg(args: dict[str, Any], keys: list[str]) -> str | None:
     return None
 
 
+def _extract_target_hint(target: Any) -> str | None:
+    if isinstance(target, dict):
+        target_id = target.get("id")
+        selector = target.get("selector")
+        if target_id not in (None, "") and selector not in (None, ""):
+            return _truncate_inline(_compact_single_line(f"{target_id} ({selector})"))
+        value = target_id or selector
+        if value is None or value == "":
+            return None
+        return str(value)
+    if isinstance(target, str):
+        value = target.strip()
+        if not value:
+            return None
+        return value
+    return None
+
+
+def _format_wait_duration(wait_ms: Any) -> str | None:
+    if wait_ms is None or wait_ms == "":
+        return None
+    try:
+        ms = float(wait_ms)
+    except (TypeError, ValueError):
+        return str(wait_ms)
+    if ms < 0:
+        ms = abs(ms)
+    if ms >= 1000:
+        seconds = ms / 1000
+        if seconds.is_integer():
+            return f"{int(seconds)}秒"
+        return f"{seconds:.1f}秒"
+    if ms.is_integer():
+        return f"{int(ms)}毫秒"
+    return f"{ms:.1f}毫秒"
+
+
+def _format_scroll_delta(delta: Any) -> str | None:
+    if delta is None or delta == "":
+        return None
+    try:
+        value = int(float(delta))
+    except (TypeError, ValueError):
+        return str(delta)
+    if value == 0:
+        return "不移动"
+    direction = "向下" if value > 0 else "向上"
+    return f"{direction}{abs(value)}px"
+
+
+def _format_browser_action_display(args: dict[str, Any]) -> tuple[str | None, str | None]:
+    action = _first_arg(args, ["action"])
+    if not action:
+        return None, None
+    action_key = action.strip().lower()
+    action_label = BROWSER_ACTION_LABELS.get(action_key, action)
+    target_hint = _extract_target_hint(args.get("target"))
+    detail: str | None = None
+
+    if action_key == "open":
+        detail = _first_arg(args, ["url"]) or target_hint
+    elif action_key == "click":
+        detail = target_hint
+    elif action_key == "type":
+        text = _first_arg(args, ["text"])
+        if text and target_hint:
+            detail = f"{text} -> {target_hint}"
+        else:
+            detail = text or target_hint
+    elif action_key == "scroll":
+        detail = _format_scroll_delta(args.get("delta")) or target_hint
+    elif action_key == "wait":
+        detail = _format_wait_duration(args.get("wait_ms"))
+    else:
+        detail = target_hint or _first_arg(args, ["url", "text", "delta", "wait_ms"])
+
+    if detail:
+        return f"{action_label}:", detail
+    return action_label, None
+
+
+def _format_snapshot_display(args: dict[str, Any]) -> tuple[str | None, str | None]:
+    mode = _first_arg(args, ["mode"])
+    reason = _first_arg(args, ["reason"])
+    mode_label = None
+    if mode:
+        mode_label = BROWSER_SNAPSHOT_MODE_LABELS.get(mode.strip().lower(), mode)
+
+    detail: str | None = None
+    if mode_label and reason:
+        detail = f"{mode_label}（{reason}）"
+    elif mode_label:
+        detail = mode_label
+    elif reason:
+        detail = f"原因：{reason}"
+
+    if detail:
+        return "浏览器快照", detail
+    return None, None
+
+
 def _summarize_todos(todos: Any) -> str | None:
     if not isinstance(todos, list) or not todos:
         return None
@@ -140,6 +265,7 @@ def format_tool_display(
     title = TOOL_TITLE_MAP.get(name, name or "tool")
     parsed_args: dict[str, Any] = args if isinstance(args, dict) else {}
     content: str | None = None
+    title_override: str | None = None
 
     if name in ("read_file", "write_file", "edit_file"):
         content = _first_arg(parsed_args, ["file_path", "path", "file"])
@@ -172,22 +298,19 @@ def format_tool_display(
     elif name == "qwen_image_generate":
         content = _first_arg(parsed_args, ["output_path", "path"])
     elif name == "browser_request_snapshot":
-        content = _first_arg(parsed_args, ["mode", "reason"]) or "请求快照"
+        title_override, content = _format_snapshot_display(parsed_args)
+        if content is None:
+            content = _first_arg(parsed_args, ["mode", "reason"]) or "请求快照"
     elif name == "browser_action":
-        action = _first_arg(parsed_args, ["action"])
-        target = parsed_args.get("target") if isinstance(parsed_args, dict) else None
-        target_hint = None
-        if isinstance(target, dict):
-            target_hint = target.get("id") or target.get("selector")
-        if action and target_hint:
-            content = f"{action} {target_hint}"
-        elif action:
-            content = action
+        title_override, content = _format_browser_action_display(parsed_args)
 
     if content:
         content = _truncate_inline(_compact_single_line(content))
         if not content:
             content = None
+
+    if title_override:
+        title = title_override
 
     return {"title": title, "content": content}
 

@@ -353,3 +353,15 @@ pytest -k test_playwright_open_only_cdp test/test_playwright_vlm_click.py
 给出具体的实现流程，和技术说明
 
 ```
+
+# 20260202
+
+1. boss 有很强的反爬措施，比如 打开 https://www.zhipin.com/web/geek/jobs?city=101210100&stage=803,805&query=llm 后源码无法看到页面内容
+2. 如 融资阶段 这类弹出式信息无法查看，导致无法进行下一步点击
+3. 默认manus打开后出现问题会调用baidu
+4. manus: 已尝试多次点击融资阶段筛选器，未找到“C轮”。下一步考虑刷新页面或手动搜索筛选。
+5. genspark: 很抱歉，我目前遇到了技术问题，无法直接控制浏览器来完成你要求的操作。浏览器自动化工具暂时无法连接。
+
+6. 后面可以考虑 playwright,coze,baidu,google 混合着来
+
+

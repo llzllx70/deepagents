@@ -5,6 +5,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from .browser_bridge import BrowserBridge
+from .browser_target_utils import normalize_browser_target
 
 
 def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
@@ -36,7 +37,7 @@ def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
     )
     async def browser_action(
         action: str,
-        target: dict[str, Any] | None = None,
+        target: dict[str, Any] | str | None = None,
         text: str | None = None,
         delta: int | None = None,
         url: str | None = None,
@@ -47,8 +48,9 @@ def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
         return_snapshot: bool | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"action": action}
-        if target is not None:
-            payload["target"] = target
+        normalized_target = normalize_browser_target(target)
+        if normalized_target is not None:
+            payload["target"] = normalized_target
         if text is not None:
             payload["text"] = text
         if delta is not None:
