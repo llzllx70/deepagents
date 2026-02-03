@@ -125,7 +125,7 @@ def _get_scene_qwen_config(scene: str) -> tuple[str | None, str | None, str | No
 
 def _default_qwen_understand_model() -> str:
     _api_key, _api_base, model = _get_scene_qwen_config("image-understand")
-    return model or "qwen-image-max"
+    return model or "qwen3-vl-plus"
 
 
 def _default_qwen_generate_model() -> str:
@@ -258,6 +258,16 @@ def build_qwen_tools(
         workspace_dir=workspace_dir,
     )
 
+    def _run_image_understand(
+        image_path: str,
+        prompt: str,
+        model: str | None,
+    ) -> dict[str, Any]:
+        selected_model = model or _default_qwen_understand_model()
+        result = client.understand(image_path, prompt, selected_model)
+        result["image_path"] = image_path
+        return result
+
     @tool(
         "qwen_image_understand",
         description=(
@@ -272,10 +282,21 @@ def build_qwen_tools(
         prompt: str = "Describe the image in detail and extract any key text.",
         model: str | None = None,
     ) -> dict[str, Any]:
-        selected_model = model or _default_qwen_understand_model()
-        result = client.understand(image_path, prompt, selected_model)
-        result["image_path"] = image_path
-        return result
+        return _run_image_understand(image_path, prompt, model)
+
+    @tool(
+        "qwen_image_image_understand",
+        description=(
+            "Deprecated alias of qwen_image_understand (typo compatibility). "
+            "Use qwen_image_understand instead."
+        ),
+    )
+    def qwen_image_image_understand(
+        image_path: str,
+        prompt: str = "Describe the image in detail and extract any key text.",
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        return _run_image_understand(image_path, prompt, model)
 
     @tool(
         "qwen_image_generate",
@@ -295,7 +316,7 @@ def build_qwen_tools(
         selected_model = model or _default_qwen_generate_model()
         return client.generate(prompt, output_path, size, selected_model)
 
-    return [qwen_image_understand, qwen_image_generate]
+    return [qwen_image_understand, qwen_image_image_understand, qwen_image_generate]
 
 
 __all__ = ["build_qwen_tools"]

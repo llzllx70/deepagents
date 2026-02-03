@@ -606,7 +606,7 @@ class Session:
                                 }
                             )
 
-                        if tool_name in ("qwen_image_understand", "extract_file_text"):
+                        if tool_name in ("qwen_image_understand", "qwen_image_image_understand", "extract_file_text"):
                             payload = _parse_tool_payload(tool_full_content)
                             if payload:
                                 container_path = payload.get("image_path") or payload.get("file_path")

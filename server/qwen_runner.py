@@ -14,6 +14,12 @@ import requests
 
 _RESULT_PREFIX = "RESULT_JSON:"
 _IMAGE_DATA_KEYS = {"b64_json", "image", "base64"}
+_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 
 class QwenImageClient:
@@ -32,6 +38,9 @@ class QwenImageClient:
         if not path.startswith("/"):
             path = f"/{path}"
         return f"{base}{path}"
+
+    def _is_compatible_mode(self) -> bool:
+        return "compatible-mode" in self._api_base
 
     def _post(self, path: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any], int | None]:
         url = self._build_url(path)
@@ -149,43 +158,72 @@ class QwenImageClient:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        ext = Path(image_path).suffix.lstrip(".").lower() or "png"
-        image_data_url = f"data:image/{ext};base64,{image_b64}"
+        suffix = Path(image_path).suffix.lower()
+        mime = _IMAGE_MIME_BY_SUFFIX.get(suffix, "image/png")
+        image_data_url = f"data:{mime};base64,{image_b64}"
 
-        payload = {
-            "model": model,
-            "input": {
+        if self._is_compatible_mode():
+            payload = {
+                "model": model,
                 "messages": [
                     {
                         "role": "user",
                         "content": [
-                            {"image": image_data_url},
-                            {"text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_data_url}},
+                            {"type": "text", "text": prompt},
                         ],
                     }
-                ]
-            },
-        }
-
-        ok, data, status_code = self._post(
-            "/services/aigc/multimodal-generation/generation",
-            payload,
-        )
+                ],
+            }
+            ok, data, status_code = self._post("/chat/completions", payload)
+        else:
+            payload = {
+                "model": model,
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"image": image_data_url},
+                                {"text": prompt},
+                            ],
+                        }
+                    ]
+                },
+            }
+            ok, data, status_code = self._post(
+                "/services/aigc/multimodal-generation/generation",
+                payload,
+            )
 
         text = ""
-        output = data.get("output") if isinstance(data, dict) else None
-        if isinstance(output, dict):
-            choices = output.get("choices") or []
-            if choices:
-                message = choices[0].get("message", {})
-                content = message.get("content") if isinstance(message, dict) else None
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and "text" in part:
-                            text = part["text"]
-                            break
-                elif isinstance(content, str):
-                    text = content
+        if isinstance(data, dict):
+            if self._is_compatible_mode():
+                choices = data.get("choices") or []
+                if choices:
+                    message = choices[0].get("message", {})
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and "text" in part:
+                                text = part["text"]
+                                break
+                    elif isinstance(content, str):
+                        text = content
+            else:
+                output = data.get("output")
+                if isinstance(output, dict):
+                    choices = output.get("choices") or []
+                    if choices:
+                        message = choices[0].get("message", {})
+                        content = message.get("content") if isinstance(message, dict) else None
+                        if isinstance(content, list):
+                            for part in content:
+                                if isinstance(part, dict) and "text" in part:
+                                    text = part["text"]
+                                    break
+                        elif isinstance(content, str):
+                            text = content
 
         result = {
             "success": bool(ok),
@@ -194,7 +232,14 @@ class QwenImageClient:
             "request_id": data.get("request_id") if isinstance(data, dict) else None,
         }
         if not ok:
-            result["error"] = data.get("message") if isinstance(data, dict) else "Request failed"
+            error_message = None
+            if isinstance(data, dict):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error_message = error.get("message")
+                if not error_message:
+                    error_message = data.get("message")
+            result["error"] = error_message or "Request failed"
             result["response_summary"] = _summarize_response(data)
         return result
 
@@ -440,7 +485,7 @@ def main() -> None:
             result = client.understand(
                 image_path=payload.get("image_path", ""),
                 prompt=payload.get("prompt", ""),
-                model=payload.get("model", "qwen-image-max"),
+                model=payload.get("model", "qwen3-vl-plus"),
             )
         else:
             result = client.generate(
