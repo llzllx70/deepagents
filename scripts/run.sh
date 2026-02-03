@@ -12,22 +12,15 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 MODEL_CONFIG_FILE="${ROOT_DIR}/config/model.yml"
-if [ ! -f "$MODEL_CONFIG_FILE" ]; then
-  echo "Missing model config file: $MODEL_CONFIG_FILE" >&2
-  exit 1
-fi
 
 SCENE_CONFIG_FILE="${ROOT_DIR}/config/llm-scene.yml"
-if [ ! -f "$SCENE_CONFIG_FILE" ]; then
-  echo "Missing LLM scene config file: $SCENE_CONFIG_FILE" >&2
-  exit 1
-fi
 
 usage() {
   echo "Usage: $0 [start|stop|restart|process|log|update-web|deploy] [all|server|web] [main-model]" >&2
+  echo "start/stop/restart are server-only (web has no start/restart)." >&2
+  echo "update-web copies web/ to WEB_DEPLOY_DIR (target=web or all)." >&2
+  echo "deploy updates web and restarts server; model is needed only for server targets." >&2
   echo "Main model defaults to the 'main' entry in config/llm-scene.yml" >&2
-  echo "update-web uses WEB_DEPLOY_DIR to sync web/ to a deploy directory." >&2
-  echo "start/restart target=web performs the same sync; it does not run a web server." >&2
 }
 
 validate_action() {
@@ -48,6 +41,20 @@ validate_target() {
       exit 1
       ;;
   esac
+}
+
+require_model_config_file() {
+  if [ ! -f "$MODEL_CONFIG_FILE" ]; then
+    echo "Missing model config file: $MODEL_CONFIG_FILE" >&2
+    exit 1
+  fi
+}
+
+require_scene_config_file() {
+  if [ ! -f "$SCENE_CONFIG_FILE" ]; then
+    echo "Missing LLM scene config file: $SCENE_CONFIG_FILE" >&2
+    exit 1
+  fi
 }
 
 load_env_config() {
@@ -94,6 +101,7 @@ export_env_config() {
 
 scene_config_value() {
   local scene="$1"
+  require_scene_config_file
   python - "$SCENE_CONFIG_FILE" "$scene" <<'PY'
 import sys
 
@@ -134,6 +142,7 @@ default_main_model() {
 model_config_value() {
   local model="$1"
   local key="$2"
+  require_model_config_file
   python - "$MODEL_CONFIG_FILE" "$model" "$key" <<'PY'
 import sys
 
@@ -174,6 +183,7 @@ PY
 }
 
 model_config_keys() {
+  require_model_config_file
   python - "$MODEL_CONFIG_FILE" <<'PY'
 import sys
 
@@ -205,6 +215,7 @@ model_exists() {
   if [ -z "$model" ]; then
     return 1
   fi
+  require_model_config_file
   python - "$MODEL_CONFIG_FILE" "$model" <<'PY'
 import sys
 
@@ -292,20 +303,12 @@ stop_server() {
   pkill -f "server.deepagents_server" >/dev/null 2>&1 || true
 }
 
-stop_web() {
-  echo "Web is static; nothing to stop."
-}
-
 start_server() {
   ensure_logs
   export_env_config
   set_model_env
   echo "Starting server (model=$MODEL, openai_model=$OPENAI_MODEL)..."
   start_detached "Server" "logs/server.log" python -m server.deepagents_server
-}
-
-start_web() {
-  update_web
 }
 
 sync_dir() {
@@ -431,24 +434,60 @@ do_start() {
   if [ "$TARGET" = "all" ] || [ "$TARGET" = "server" ]; then
     start_server
   fi
-  if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
-    start_web
-  fi
 }
 
 do_stop() {
   if [ "$TARGET" = "all" ] || [ "$TARGET" = "server" ]; then
     stop_server
   fi
-  if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
-    stop_web
-  fi
+}
+
+action_requires_model() {
+  case "$ACTION" in
+    start|restart|deploy)
+      if [ "$TARGET" = "server" ] || [ "$TARGET" = "all" ]; then
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
+validate_target_for_action() {
+  case "$ACTION" in
+    start|stop|restart)
+      if [ "$TARGET" = "web" ]; then
+        usage
+        exit 1
+      fi
+      if [ "$TARGET" = "all" ]; then
+        TARGET="server"
+      fi
+      ;;
+    update-web)
+      if [ "$TARGET" = "server" ]; then
+        usage
+        exit 1
+      fi
+      if [ "$TARGET" = "all" ]; then
+        TARGET="web"
+      fi
+      ;;
+  esac
 }
 
 do_action() {
   validate_action
   validate_target
-  validate_model
+  validate_target_for_action
+  if action_requires_model; then
+    if [ -z "$MODEL" ]; then
+      MODEL="$(default_main_model)"
+    fi
+    validate_model
+  else
+    MODEL=""
+  fi
 
   case "$ACTION" in
     start)
@@ -464,9 +503,6 @@ do_action() {
     update-web)
       if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
         update_web
-      fi
-      if [ "$TARGET" = "server" ]; then
-        echo "update-web target=server has nothing to do."
       fi
       ;;
     deploy)
@@ -498,7 +534,11 @@ do_action() {
       ;;
   esac
 
-  echo "Done: action=$ACTION target=$TARGET model=$MODEL"
+  if [ -n "$MODEL" ]; then
+    echo "Done: action=$ACTION target=$TARGET model=$MODEL"
+  else
+    echo "Done: action=$ACTION target=$TARGET"
+  fi
 }
 
 prompt_primary_action() {
@@ -506,7 +546,7 @@ prompt_primary_action() {
   local indent="$2"
   local choice=""
   while true; do
-    echo "${indent}Select action: [1] show [2] restart [3] start [4] stop [5] deploy [0] exit (default: show)" >&2
+    echo "${indent}Select action: [1] show [2] restart-server [3] start-server [4] stop-server [5] deploy [0] exit (default: show)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -619,13 +659,11 @@ interactive_menu() {
       if ! prompt_target TARGET "$INDENT_L3"; then
         return 1
       fi
-      MODEL="$(default_main_model)"
+      MODEL=""
       ;;
     restart|start)
       ACTION="$primary"
-      if ! prompt_target TARGET "$INDENT_L2"; then
-        return 1
-      fi
+      TARGET="server"
       if ! prompt_model MODEL "$INDENT_L3"; then
         return 1
       fi
@@ -635,16 +673,18 @@ interactive_menu() {
       if ! prompt_target TARGET "$INDENT_L2"; then
         return 1
       fi
-      if ! prompt_model MODEL "$INDENT_L3"; then
-        return 1
+      if [ "$TARGET" = "server" ] || [ "$TARGET" = "all" ]; then
+        if ! prompt_model MODEL "$INDENT_L3"; then
+          return 1
+        fi
+      else
+        MODEL=""
       fi
       ;;
     stop)
       ACTION="stop"
-      if ! prompt_target TARGET "$INDENT_L2"; then
-        return 1
-      fi
-      MODEL="$(default_main_model)"
+      TARGET="server"
+      MODEL=""
       ;;
   esac
   return 0
@@ -681,8 +721,15 @@ read_with_interrupt() {
 
 if [ "$#" -gt 0 ]; then
   ACTION="$1"
-  TARGET="${2:-all}"
-  MODEL="${3:-$(default_main_model)}"
+  TARGET="${2:-}"
+  MODEL="${3:-}"
+  if [ -z "$TARGET" ]; then
+    case "$ACTION" in
+      start|stop|restart) TARGET="server" ;;
+      update-web) TARGET="web" ;;
+      *) TARGET="all" ;;
+    esac
+  fi
   do_action
   exit 0
 fi

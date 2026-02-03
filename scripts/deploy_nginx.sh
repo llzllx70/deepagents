@@ -223,7 +223,17 @@ ${listen_block}    server_name ${SERVER_NAMES};
     index index.html;
 
     location / {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
         try_files \$uri /index.html;
+    }
+
+    location ~* \\.(?:html|js|css|json|map)\$ {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        try_files \$uri =404;
     }
 
     location ~ ^/(login|logout|me|sessions|history|session_state|user_config|client_logs|files)(/|$) {
