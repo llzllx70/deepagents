@@ -8,8 +8,7 @@ export class NetworkModule {
     }
 
     getServerUrl() {
-        const hostname = window.location.hostname;
-        const defaultUrl = `http://${hostname}:8000`;
+        const defaultUrl = window.location.origin;
         const urlParams = new URLSearchParams(window.location.search);
         return urlParams.get('server') || defaultUrl;
     }
