@@ -325,7 +325,11 @@ sync_dir() {
   fi
   mkdir -p "$dst"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude ".DS_Store" --exclude "node_modules" "$src"/ "$dst"/
+    if [ "$(id -u)" -eq 0 ]; then
+      rsync -a --delete --exclude ".DS_Store" --exclude "node_modules" "$src"/ "$dst"/
+    else
+      rsync -a --delete --no-perms --no-group --exclude ".DS_Store" --exclude "node_modules" "$src"/ "$dst"/
+    fi
   else
     find "$dst" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
     cp -a "$src"/. "$dst"/
@@ -333,6 +337,7 @@ sync_dir() {
 }
 
 update_web() {
+  export_env_config
   local target="${WEB_DEPLOY_DIR:-}"
   if [ -z "$target" ]; then
     echo "Missing WEB_DEPLOY_DIR; set it to the nginx web root." >&2

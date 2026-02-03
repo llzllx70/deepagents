@@ -12,11 +12,96 @@ LISTEN_PORTS="${LISTEN_PORTS:-}"
 BACKEND_HOST="${BACKEND_HOST:-}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 WEB_ROOT="${WEB_ROOT:-}"
+WEB_DEPLOY_DIR="${WEB_DEPLOY_DIR:-}"
 NGINX_CONF="${NGINX_CONF:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CONFIG_FILE="${ROOT_DIR}/config/deepagents.yml"
 
 usage() {
   echo "Usage: $0 [dev|prod]" >&2
   echo "Optional overrides via env: SERVER_NAMES, LISTEN_PORTS, WEB_ROOT, BACKEND_HOST, BACKEND_PORT, NGINX_CONF" >&2
+}
+
+load_env_config() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    python - "$CONFIG_FILE" <<'PY'
+import sys
+
+path = sys.argv[1]
+current_section = None
+env = {}
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            continue
+        if current_section != "env":
+            continue
+        if indent == 2 and ":" in stripped:
+            raw_key, raw_value = stripped.split(":", 1)
+            value = raw_value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            env[raw_key.strip()] = value
+
+for key, value in env.items():
+    sys.stdout.write(f"{key}\t{value}\n")
+PY
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$CONFIG_FILE" <<'PY'
+import sys
+
+path = sys.argv[1]
+current_section = None
+env = {}
+
+with open(path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            current_section = stripped.rstrip(":")
+            continue
+        if current_section != "env":
+            continue
+        if indent == 2 and ":" in stripped:
+            raw_key, raw_value = stripped.split(":", 1)
+            value = raw_value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            env[raw_key.strip()] = value
+
+for key, value in env.items():
+    sys.stdout.write(f"{key}\t{value}\n")
+PY
+    return 0
+  fi
+  echo "WARN: python not found; skipping env config from $CONFIG_FILE" >&2
+}
+
+export_env_config() {
+  local key=""
+  local value=""
+  while IFS=$'\t' read -r key value; do
+    if [ -n "$key" ]; then
+      export "$key=$value"
+    fi
+  done < <(load_env_config)
 }
 
 apply_env_defaults() {
@@ -25,6 +110,7 @@ apply_env_defaults() {
       SERVER_NAMES="${SERVER_NAMES:-172.16.2.4}"
       LISTEN_PORTS="${LISTEN_PORTS:-8080}"
       WEB_ROOT="${WEB_ROOT:-/opt/deepagents}"
+      WEB_DEPLOY_DIR="${WEB_DEPLOY_DIR:-$WEB_ROOT}"
       BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
       BACKEND_PORT="${BACKEND_PORT:-8000}"
       ;;
@@ -32,6 +118,7 @@ apply_env_defaults() {
       SERVER_NAMES="${SERVER_NAMES:-test01.spark-truth.cn 172.16.2.49}"
       LISTEN_PORTS="${LISTEN_PORTS:-8080}"
       WEB_ROOT="${WEB_ROOT:-/usr/local/deepagents}"
+      WEB_DEPLOY_DIR="${WEB_DEPLOY_DIR:-$WEB_ROOT}"
       BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
       BACKEND_PORT="${BACKEND_PORT:-8000}"
       ;;
@@ -98,9 +185,28 @@ detect_nginx_conf() {
   NGINX_CONF="/etc/nginx/conf.d/deepagents.conf"
 }
 
+export_env_config
 apply_env_defaults
 ensure_nginx
 detect_nginx_conf
+
+if [ -n "${WEB_DEPLOY_DIR}" ] && [ -z "${WEB_ROOT}" ]; then
+  WEB_ROOT="${WEB_DEPLOY_DIR}"
+fi
+if [ -n "${WEB_ROOT}" ] && [ -z "${WEB_DEPLOY_DIR}" ]; then
+  WEB_DEPLOY_DIR="${WEB_ROOT}"
+fi
+if [ -n "${WEB_DEPLOY_DIR}" ] && [ -n "${WEB_ROOT}" ] && [ "${WEB_DEPLOY_DIR}" != "${WEB_ROOT}" ]; then
+  echo "WARN: WEB_DEPLOY_DIR and WEB_ROOT differ; using WEB_DEPLOY_DIR for nginx root to avoid mismatch." >&2
+  WEB_ROOT="${WEB_DEPLOY_DIR}"
+fi
+
+$SUDO mkdir -p "${WEB_DEPLOY_DIR}"
+target_user="${SUDO_USER:-$(id -un)}"
+target_group="$(id -gn "${target_user}")"
+if [ -n "$target_user" ]; then
+  $SUDO chown -R "${target_user}:${target_group}" "${WEB_DEPLOY_DIR}"
+fi
 
 LISTEN_PORTS="${LISTEN_PORTS//,/ }"
 listen_block=""
