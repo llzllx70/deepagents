@@ -24,13 +24,15 @@ if [ ! -f "$SCENE_CONFIG_FILE" ]; then
 fi
 
 usage() {
-  echo "Usage: $0 [start|stop|restart|process|log] [all|server|web] [main-model]" >&2
+  echo "Usage: $0 [start|stop|restart|process|log|update-web|deploy] [all|server|web] [main-model]" >&2
   echo "Main model defaults to the 'main' entry in config/llm-scene.yml" >&2
+  echo "update-web uses WEB_DEPLOY_DIR to sync web/ to a deploy directory." >&2
+  echo "start/restart target=web performs the same sync; it does not run a web server." >&2
 }
 
 validate_action() {
   case "$ACTION" in
-    start|stop|restart|process|log) ;;
+    start|stop|restart|process|log|update-web|deploy) ;;
     *)
       usage
       exit 1
@@ -291,8 +293,7 @@ stop_server() {
 }
 
 stop_web() {
-  echo "Stopping web..."
-  pkill -f "python web_server.py 8080" >/dev/null 2>&1 || true
+  echo "Web is static; nothing to stop."
 }
 
 start_server() {
@@ -304,9 +305,42 @@ start_server() {
 }
 
 start_web() {
-  ensure_logs
-  echo "Starting web..."
-  start_detached "Web" "logs/web.log" bash -c 'cd web && exec python web_server.py 8080'
+  update_web
+}
+
+sync_dir() {
+  local src="$1"
+  local dst="$2"
+  if [ -z "$src" ] || [ -z "$dst" ]; then
+    echo "sync_dir: missing source or destination" >&2
+    exit 1
+  fi
+  if [ ! -d "$src" ]; then
+    echo "sync_dir: source not found: $src" >&2
+    exit 1
+  fi
+  if [ "$dst" = "/" ]; then
+    echo "sync_dir: invalid destination: $dst" >&2
+    exit 1
+  fi
+  mkdir -p "$dst"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete --exclude ".DS_Store" --exclude "node_modules" "$src"/ "$dst"/
+  else
+    find "$dst" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    cp -a "$src"/. "$dst"/
+  fi
+}
+
+update_web() {
+  local target="${WEB_DEPLOY_DIR:-}"
+  if [ -z "$target" ]; then
+    echo "Missing WEB_DEPLOY_DIR; set it to the nginx web root." >&2
+    exit 1
+  fi
+  echo "Updating web to $target..."
+  sync_dir "$ROOT_DIR/web" "$target"
+  echo "Web updated: $target"
 }
 
 print_header() {
@@ -336,14 +370,7 @@ show_server_process() {
 
 show_web_process() {
   print_header "Web Process"
-  if pgrep -f "python web_server.py 8080" >/dev/null 2>&1; then
-    while read -r pid; do
-      cmd="$(ps -p "$pid" -o command=)"
-      echo "  pid=$pid cmd=$cmd"
-    done < <(pgrep -f "python web_server.py 8080")
-  else
-    echo "  not running"
-  fi
+  echo "  static assets; no process"
 }
 
 follow_log_file() {
@@ -429,6 +456,23 @@ do_action() {
       do_stop
       do_start
       ;;
+    update-web)
+      if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
+        update_web
+      fi
+      if [ "$TARGET" = "server" ]; then
+        echo "update-web target=server has nothing to do."
+      fi
+      ;;
+    deploy)
+      if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
+        update_web
+      fi
+      if [ "$TARGET" = "all" ] || [ "$TARGET" = "server" ]; then
+        stop_server
+        start_server
+      fi
+      ;;
     process)
       if [ "$TARGET" = "all" ] || [ "$TARGET" = "server" ]; then
         show_server_process
@@ -457,7 +501,7 @@ prompt_primary_action() {
   local indent="$2"
   local choice=""
   while true; do
-    echo "${indent}Select action: [1] show [2] restart [3] start [4] stop [0] exit (default: show)" >&2
+    echo "${indent}Select action: [1] show [2] restart [3] start [4] stop [5] deploy [0] exit (default: show)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -471,6 +515,7 @@ prompt_primary_action() {
       2|restart) printf -v "$result_var" "%s" "restart"; return 0 ;;
       3|start) printf -v "$result_var" "%s" "start"; return 0 ;;
       4|stop) printf -v "$result_var" "%s" "stop"; return 0 ;;
+      5|deploy) printf -v "$result_var" "%s" "deploy"; return 0 ;;
       0|exit|quit) printf -v "$result_var" "%s" "exit"; return 0 ;;
       *) echo "${indent}Invalid action, try again." >&2 ;;
     esac
@@ -573,6 +618,15 @@ interactive_menu() {
       ;;
     restart|start)
       ACTION="$primary"
+      if ! prompt_target TARGET "$INDENT_L2"; then
+        return 1
+      fi
+      if ! prompt_model MODEL "$INDENT_L3"; then
+        return 1
+      fi
+      ;;
+    deploy)
+      ACTION="deploy"
       if ! prompt_target TARGET "$INDENT_L2"; then
         return 1
       fi
