@@ -87,12 +87,84 @@ export class HistoryModule {
         return Array.from(app.elements.messages.children).map(msg => {
             const isUser = msg.classList.contains('message') && msg.classList.contains('user');
             const textElement = msg.querySelector('.message-text');
-            return {
+            const attachments = this.extractMessageAttachments(msg);
+            const entry = {
                 role: isUser ? 'user' : 'assistant',
                 content: textElement ? textElement.textContent : '',
                 html: textElement ? textElement.innerHTML : ''
             };
-        }).filter(m => m.content);
+            if (attachments.length) {
+                entry.attachments = attachments;
+            }
+            return entry;
+        }).filter(m => m.content || (Array.isArray(m.attachments) && m.attachments.length));
+    }
+
+    parseAttachmentPayloads(value) {
+        if (!value) return [];
+        let payloads = value;
+        if (typeof value === 'string') {
+            try {
+                payloads = JSON.parse(value);
+            } catch (error) {
+                console.warn('解析附件失败：', error);
+                return [];
+            }
+        }
+        if (!Array.isArray(payloads)) return [];
+        const normalized = [];
+        for (const item of payloads) {
+            if (!item || typeof item !== 'object') continue;
+            const fileId = item.fileId || item.file_id || item.id || '';
+            const filename = item.filename || item.name || '';
+            const contentType = item.contentType || item.content_type || item.mime_type || '';
+            let size = item.size;
+            if (typeof size !== 'number') {
+                const parsed = Number(size);
+                size = Number.isNaN(parsed) ? null : parsed;
+            }
+            if (!fileId && !filename) continue;
+            normalized.push({ fileId, filename, contentType, size });
+        }
+        return normalized;
+    }
+
+    extractMessageAttachments(messageElement) {
+        if (!messageElement) return [];
+        const datasetValue = messageElement.dataset?.attachments;
+        if (datasetValue) {
+            const parsed = this.parseAttachmentPayloads(datasetValue);
+            if (parsed.length) return parsed;
+        }
+
+        const list = messageElement.querySelector('.message-attachments');
+        if (!list) return [];
+
+        const listValue = list.dataset?.attachments;
+        if (listValue) {
+            const parsed = this.parseAttachmentPayloads(listValue);
+            if (parsed.length) return parsed;
+        }
+
+        const items = Array.from(list.querySelectorAll('.message-attachment'));
+        if (!items.length) return [];
+        const payloads = [];
+        items.forEach(item => {
+            const fileId = item.getAttribute('data-file-id') || '';
+            const filename = item.getAttribute('data-filename')
+                || item.querySelector('.message-attachment-name')?.textContent?.trim()
+                || '';
+            const contentType = item.getAttribute('data-content-type') || '';
+            const sizeValue = item.getAttribute('data-size');
+            let size = null;
+            if (sizeValue) {
+                const parsed = Number(sizeValue);
+                size = Number.isNaN(parsed) ? null : parsed;
+            }
+            if (!fileId && !filename) return;
+            payloads.push({ fileId, filename, contentType, size });
+        });
+        return payloads;
     }
 
     buildChatTitle(messages, fallback) {
@@ -373,6 +445,10 @@ export class HistoryModule {
         chat.messages.forEach(msg => {
             const messageElement = app.ui.createMessageElement(msg.role);
             const textElement = messageElement.querySelector('.message-text');
+
+            if (Array.isArray(msg.attachments) && msg.attachments.length) {
+                app.ui.appendMessageAttachments(messageElement, msg.attachments, { sessionId: chat.sessionId });
+            }
 
             if (msg.html) {
                 textElement.innerHTML = msg.html;

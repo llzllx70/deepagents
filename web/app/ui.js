@@ -758,29 +758,62 @@ export class UiModule {
         return payloads;
     }
 
-    getAttachmentDownloadUrl(fileId, filename) {
+    getAttachmentDownloadUrl(fileId, filename, sessionIdOverride = null) {
         const app = this.app;
-        if (!app.sessionId || !fileId || !filename) return null;
-        const relativePath = `${app.sessionId}/uploads/${fileId}_${filename}`;
+        const sessionId = sessionIdOverride || app.sessionId;
+        if (!sessionId || !fileId || !filename) return null;
+        const relativePath = `${sessionId}/uploads/${fileId}_${filename}`;
         return app.utils.getDownloadUrl(relativePath);
     }
 
-    appendMessageAttachments(messageElement, attachments) {
+    appendMessageAttachments(messageElement, attachments, { sessionId = null } = {}) {
         const app = this.app;
         if (!messageElement || !attachments || attachments.length === 0) return;
         const content = messageElement.querySelector('.message-content');
         if (!content) return;
 
+        const normalized = attachments.map((attachment) => {
+            if (!attachment || typeof attachment !== 'object') return null;
+            const fileId = attachment.fileId || attachment.file_id || attachment.id || '';
+            const filename = attachment.filename || attachment.name || '';
+            const contentType = attachment.contentType || attachment.content_type || attachment.mime_type || '';
+            let size = attachment.size;
+            if (typeof size !== 'number') {
+                const parsed = Number(size);
+                size = Number.isNaN(parsed) ? null : parsed;
+            }
+            if (!fileId && !filename) return null;
+            return { fileId, filename, contentType, size };
+        }).filter(Boolean);
+
+        if (normalized.length === 0) return;
+
+        const serialized = JSON.stringify(normalized);
+        messageElement.dataset.attachments = serialized;
+
         const list = document.createElement('div');
         list.className = 'message-attachments';
+        list.dataset.attachments = serialized;
 
-        attachments.forEach((attachment) => {
+        normalized.forEach((attachment) => {
             const filename = attachment.filename || '未命名文件';
-            const fileUrl = this.getAttachmentDownloadUrl(attachment.fileId, filename);
+            const fileUrl = this.getAttachmentDownloadUrl(attachment.fileId, filename, sessionId);
             const isImage = this.isImageAttachment(attachment.contentType, filename);
 
             const item = document.createElement('div');
             item.className = 'message-attachment';
+            if (attachment.fileId) {
+                item.setAttribute('data-file-id', attachment.fileId);
+            }
+            if (attachment.filename) {
+                item.setAttribute('data-filename', attachment.filename);
+            }
+            if (attachment.contentType) {
+                item.setAttribute('data-content-type', attachment.contentType);
+            }
+            if (typeof attachment.size === 'number') {
+                item.setAttribute('data-size', String(attachment.size));
+            }
 
             const visual = document.createElement('div');
             visual.className = 'message-attachment-visual';
