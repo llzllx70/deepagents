@@ -20,6 +20,7 @@ from .config import WORKSPACE_DIR, logger
 from .agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
 from deepagents_cli.file_ops import FileOpTracker
+from deepagents_cli.skills.load import list_skills
 from deepagents_cli.tools import fetch_url, http_request, web_search
 from .browser_bridge import BrowserBridge
 from .browser_tools import build_browser_tools
@@ -67,6 +68,59 @@ def _format_stream_input_for_log(value: object) -> str:
     return f"{type(value).__name__}({value!r})"
 
 
+def _parse_tool_payload(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _describe_model(model: Any) -> str:
+    if isinstance(model, str):
+        return model
+    for attr in ("model_name", "model", "model_id", "name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return model.__class__.__name__
+
+
+def _describe_tool(tool: Any) -> str:
+    name = getattr(tool, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    name = getattr(tool, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    return tool.__class__.__name__
+
+
+def _list_skill_names(assistant_id: str) -> list[str]:
+    try:
+        user_skills_dir = settings.ensure_user_skills_dir(assistant_id)
+        project_skills_dir = settings.get_project_skills_dir()
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            project_skills_dir=project_skills_dir,
+        )
+    except Exception as exc:
+        logger.warning("Failed to list skills for logging: %s", exc)
+        return []
+    names: list[str] = []
+    for skill in skills:
+        name = getattr(skill, "name", None) or getattr(skill, "id", None)
+        if not name:
+            name = getattr(skill, "path", None)
+        if name:
+            names.append(str(name))
+        else:
+            names.append(str(skill))
+    return names
+
+
 @dataclass
 class RunRequest:
     run_id: str
@@ -101,6 +155,22 @@ class RunExecution:
 
 
 @dataclass
+class UploadedFile:
+    file_id: str
+    filename: str
+    content_type: str | None
+    size: int
+    host_path: Path
+    container_path: str
+    uploaded_at: float = field(default_factory=time.time)
+    extracted_text: str | None = None
+    extracted_text_truncated: bool = False
+    extracted_at: float | None = None
+    extracted_tool: str | None = None
+    extraction_error: str | None = None
+
+
+@dataclass
 class Session:
     session_id: str
     assistant_id: str
@@ -116,6 +186,91 @@ class Session:
     current_run: RunExecution | None = None
     current_task: asyncio.Task | None = None
     worker_task: asyncio.Task | None = None
+    uploaded_files: dict[str, UploadedFile] = field(default_factory=dict)
+    uploaded_files_by_path: dict[str, str] = field(default_factory=dict)
+
+    def register_uploaded_file(self, attachment: UploadedFile) -> None:
+        normalized_path = self._normalize_container_path(attachment.container_path)
+        attachment.container_path = normalized_path
+        self.uploaded_files[attachment.file_id] = attachment
+        self.uploaded_files_by_path[normalized_path] = attachment.file_id
+
+    def remove_uploaded_file(self, file_id: str) -> UploadedFile | None:
+        attachment = self.uploaded_files.pop(file_id, None)
+        if attachment is None:
+            return None
+        normalized_path = self._normalize_container_path(attachment.container_path)
+        self.uploaded_files_by_path.pop(normalized_path, None)
+        return attachment
+
+    def _normalize_container_path(self, path: str) -> str:
+        workdir = getattr(self.sandbox_backend, "workdir", "/workspace")
+        candidate = os.path.normpath(path)
+        if not candidate.startswith("/"):
+            candidate = os.path.normpath(os.path.join(workdir, candidate))
+        return candidate
+
+    def _find_uploaded_file(self, container_path: str) -> UploadedFile | None:
+        normalized = self._normalize_container_path(container_path)
+        file_id = self.uploaded_files_by_path.get(normalized)
+        if not file_id:
+            return None
+        return self.uploaded_files.get(file_id)
+
+    def record_extracted_text(
+        self,
+        *,
+        container_path: str,
+        tool_name: str,
+        text: str | None,
+        truncated: bool | None = None,
+        error: str | None = None,
+    ) -> None:
+        attachment = self._find_uploaded_file(container_path)
+        if attachment is None:
+            return
+        attachment.extracted_tool = tool_name
+        attachment.extracted_at = time.time()
+        attachment.extraction_error = error
+        if text is None:
+            return
+        content, was_truncated = truncate_text(text, limit=50000)
+        attachment.extracted_text = content
+        attachment.extracted_text_truncated = was_truncated or bool(truncated)
+
+    def format_uploaded_files_context(self) -> str | None:
+        if not self.uploaded_files:
+            return None
+        lines = ["## 已上传文件"]
+        pending = False
+        for attachment in sorted(
+            self.uploaded_files.values(), key=lambda item: item.uploaded_at
+        ):
+            lines.append(f"### {attachment.filename}")
+            lines.append(f"路径: `{attachment.container_path}`")
+            if attachment.content_type:
+                lines.append(f"类型: {attachment.content_type}")
+            if attachment.extracted_text:
+                lines.append("内容:")
+                lines.append("```")
+                lines.append(attachment.extracted_text)
+                lines.append("```")
+                if attachment.extracted_text_truncated:
+                    lines.append("(内容已截断)")
+            else:
+                status = "待解析"
+                if attachment.extraction_error:
+                    status = f"解析失败：{attachment.extraction_error}"
+                lines.append(f"状态: {status}")
+                pending = True
+        if pending:
+            lines.append("")
+            lines.append("如需解析内容，请调用：")
+            lines.append("- 图片理解/解释/内容提取：`qwen_image_understand`")
+            lines.append("- 文本/pdf/docx/xlsx/xls：`extract_file_text`")
+            lines.append("如需文生图/生成图片，请调用：`qwen_image_generate`")
+            lines.append("解析结果会自动加入到本上下文中。")
+        return "\n".join(lines)
 
     async def shutdown(self) -> None:
         if self.current_run is not None:
@@ -218,6 +373,9 @@ class Session:
         )
 
         prompt_text, warnings = inject_file_context(run_request.user_input)
+        uploaded_context = self.format_uploaded_files_context()
+        if uploaded_context:
+            prompt_text = f"{prompt_text}\n\n{uploaded_context}"
         if self.browser_bridge and self.browser_bridge.is_connected():
             browser_context = self.browser_bridge.format_snapshot_for_prompt()
             if browser_context:
@@ -447,6 +605,26 @@ class Session:
                                     "meta": meta,
                                 }
                             )
+
+                        if tool_name in ("qwen_image_understand", "extract_file_text"):
+                            payload = _parse_tool_payload(tool_full_content)
+                            if payload:
+                                container_path = payload.get("image_path") or payload.get("file_path")
+                                if isinstance(container_path, str) and container_path:
+                                    success = payload.get("success", True)
+                                    error = payload.get("error") if not success else None
+                                    text = payload.get("text")
+                                    if text is not None and not isinstance(text, str):
+                                        text = str(text)
+                                    truncated_flag = payload.get("truncated")
+                                    truncated = truncated_flag if isinstance(truncated_flag, bool) else None
+                                    self.record_extracted_text(
+                                        container_path=container_path,
+                                        tool_name=tool_name,
+                                        text=text if success or text else None,
+                                        truncated=truncated,
+                                        error=error,
+                                    )
 
                         preview_limit = 400
                         logger.info(
@@ -683,6 +861,15 @@ class SessionManager:
             sandbox=sandbox_backend,
             sandbox_type="docker",
             auto_approve=False,
+        )
+        tool_names = [_describe_tool(tool) for tool in tools]
+        skill_names = _list_skill_names(assistant_id or "agent")
+        logger.info(
+            "Agent bindings: session_id=%s model=%s tools=%s skills=%s",
+            session_id,
+            _describe_model(model),
+            tool_names,
+            skill_names,
         )
         session = Session(
             session_id=session_id,

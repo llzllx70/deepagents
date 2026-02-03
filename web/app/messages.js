@@ -496,7 +496,8 @@ export class MessageModule {
             state.messageElement = assistantMessage;
             state.chatId = app.activeChatId;
         }
-        app.history.saveCurrentChat({ status: 'queued', runId, title: input });
+        const title = app.history.summarizeTitleFromText(input);
+        app.history.saveCurrentChat({ status: 'queued', runId, title });
         app.network.send({
             type: 'run',
             input: input,

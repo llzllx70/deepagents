@@ -10,6 +10,12 @@ USERS: dict[str, str] = {
     "xh2": "xh2",
     "xh3": "xh3",
     "xh4": "xh4",
+    "xh5": "xh5",
+    "xh6": "xh6",
+    "xh7": "xh7",
+    "xh8": "xh8",
+    "xh9": "xh9",
+    "xh10": "xh10",
 }
 
 

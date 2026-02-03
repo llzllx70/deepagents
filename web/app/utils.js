@@ -114,8 +114,8 @@ export class UtilsModule {
             execute: '执行命令',
             ls: '查看目录',
             pdf_to_word: '转换文件格式',
-            qwen_image_understand: '查看图片',
-            qwen_image_generate: '生成图片',
+            qwen_image_understand: '图片理解',
+            qwen_image_generate: '文生图',
         };
         const title = displayTitle || titleMap[name] || name || 'tool';
         let content = displayContent;

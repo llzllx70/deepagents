@@ -53,3 +53,18 @@ class LoginResponse(BaseModel):
 
 class UserConfigPayload(BaseModel):
     auto_approve: bool | None = None
+
+
+class AttachmentUploadItem(BaseModel):
+    file_id: str
+    filename: str
+    content_type: str | None = None
+    size: int
+    container_path: str
+    status: str
+    error: str | None = None
+
+
+class AttachmentUploadResponse(BaseModel):
+    session_id: str
+    files: list[AttachmentUploadItem]

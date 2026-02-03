@@ -6,6 +6,7 @@ export class UiModule {
         /** @type {DeepAgentsClient} */
         this.app = app;
         this.pendingDeleteChatId = null;
+        this.attachmentItems = new Map();
     }
 
     async init() {
@@ -47,6 +48,10 @@ export class UiModule {
 
             userInput: document.getElementById('userInput'),
             sendBtn: document.getElementById('sendBtn'),
+            attachBtn: document.getElementById('attachBtn'),
+            attachInput: document.getElementById('attachInput'),
+            attachmentPreview: document.getElementById('attachmentPreview'),
+            inputWrapper: document.querySelector('.input-wrapper'),
 
             interruptModal: document.getElementById('interruptModal'),
             interruptModalBody: document.getElementById('interruptModalBody'),
@@ -127,6 +132,32 @@ export class UiModule {
             }
         });
 
+        if (app.elements.attachBtn && app.elements.attachInput) {
+            app.elements.attachBtn.addEventListener('click', () => {
+                if (!app.auth.isAuthenticated()) {
+                    app.auth.setLoginStatus('请先登录', 'error');
+                    return;
+                }
+                app.elements.attachInput.click();
+            });
+            app.elements.attachInput.addEventListener('change', async (event) => {
+                const files = Array.from(event.target.files || []);
+                if (!files.length) return;
+                await this.handleAttachmentUpload(files);
+                event.target.value = '';
+            });
+        }
+
+        if (app.elements.attachmentPreview) {
+            app.elements.attachmentPreview.addEventListener('click', (event) => {
+                const button = event.target.closest('.attachment-remove');
+                if (!button) return;
+                const fileId = button.getAttribute('data-file-id');
+                if (!fileId) return;
+                this.handleAttachmentRemove(fileId);
+            });
+        }
+
         document.querySelectorAll('.example-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const prompt = btn.getAttribute('data-prompt');
@@ -184,6 +215,7 @@ export class UiModule {
             if (window.innerWidth > 768) {
                 app.elements.sidebar.classList.remove('open');
             }
+            this.updateAttachmentLayout();
         });
 
         document.addEventListener('keydown', (e) => {
@@ -529,7 +561,189 @@ export class UiModule {
                 app.elements.userInput.placeholder = app.defaultInputPlaceholder || '请输入需要我为您完成的任务或想要咨询的问题，Ctrl+Enter键发送';
             }
         }
+        if (app.elements.attachBtn) {
+            app.elements.attachBtn.disabled = !isLoggedIn;
+        }
         this.updateSendButton();
+    }
+
+    async handleAttachmentUpload(files) {
+        const app = this.app;
+        if (!files.length) return;
+        if (!app.auth.isAuthenticated()) {
+            app.auth.setLoginStatus('请先登录', 'error');
+            return;
+        }
+        if (app.elements.attachBtn) {
+            app.elements.attachBtn.disabled = true;
+        }
+        try {
+            await app.network.ensureSession();
+            const result = await app.network.uploadAttachments(files);
+            const uploaded = result?.files || [];
+            const success = uploaded.filter(item => item.status === 'ok');
+            const failed = uploaded.filter(item => item.status !== 'ok');
+            if (success.length) {
+                const names = success.map(item => item.filename).join('，');
+                app.ui.addLogMessage('info', `附件上传成功：${names}`);
+            }
+            uploaded.forEach((item, index) => {
+                if (item.status !== 'ok') return;
+                const sourceFile = files[index];
+                this.addAttachmentPreview({
+                    fileId: item.file_id,
+                    filename: item.filename,
+                    contentType: item.content_type || sourceFile?.type || '',
+                    size: item.size,
+                    file: sourceFile || null,
+                });
+            });
+            if (failed.length) {
+                failed.forEach(item => {
+                    const msg = item.error || '上传失败';
+                    app.ui.addLogMessage('error', `附件上传失败：${item.filename || '未知文件'}（${msg}）`);
+                });
+            }
+        } catch (error) {
+            app.ui.addLogMessage('error', `附件上传失败：${error.message || error}`);
+        } finally {
+            if (app.elements.attachBtn) {
+                app.elements.attachBtn.disabled = false;
+            }
+        }
+    }
+
+    isImageAttachment(contentType, filename) {
+        if (contentType && contentType.startsWith('image/')) return true;
+        const lowerName = (filename || '').toLowerCase();
+        return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif', '.tiff', '.tif'].some(ext => lowerName.endsWith(ext));
+    }
+
+    addAttachmentPreview({ fileId, filename, contentType, size, file }) {
+        const app = this.app;
+        if (!app.elements.attachmentPreview || !fileId) return;
+        if (this.attachmentItems.has(fileId)) return;
+
+        const item = document.createElement('div');
+        item.className = 'attachment-item';
+        item.setAttribute('data-file-id', fileId);
+        item.setAttribute('data-filename', filename || '');
+
+        const visual = document.createElement('div');
+        visual.className = 'attachment-visual';
+
+        let previewUrl = null;
+        const isImage = this.isImageAttachment(contentType, filename);
+        if (isImage && file instanceof File) {
+            previewUrl = URL.createObjectURL(file);
+            const img = document.createElement('img');
+            img.className = 'attachment-thumb';
+            img.src = previewUrl;
+            img.alt = filename || 'image';
+            visual.appendChild(img);
+        } else {
+            const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            icon.setAttribute('viewBox', '0 0 24 24');
+            icon.setAttribute('fill', 'none');
+            icon.setAttribute('stroke', 'currentColor');
+            icon.setAttribute('stroke-width', '2');
+            icon.setAttribute('stroke-linecap', 'round');
+            icon.setAttribute('stroke-linejoin', 'round');
+            icon.classList.add('attachment-file-icon');
+            icon.innerHTML = `
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+            `;
+            visual.appendChild(icon);
+        }
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'attachment-remove';
+        removeBtn.setAttribute('data-file-id', fileId);
+        removeBtn.setAttribute('aria-label', '删除附件');
+        removeBtn.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        `;
+
+        const meta = document.createElement('div');
+        meta.className = 'attachment-meta';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'attachment-name';
+        nameEl.textContent = filename || '未命名文件';
+        meta.appendChild(nameEl);
+
+        const sizeLabel = app.utils.formatFileSize(size);
+        if (sizeLabel) {
+            const sizeEl = document.createElement('div');
+            sizeEl.className = 'attachment-size';
+            sizeEl.textContent = sizeLabel;
+            meta.appendChild(sizeEl);
+        }
+
+        item.appendChild(visual);
+        item.appendChild(meta);
+        item.appendChild(removeBtn);
+        app.elements.attachmentPreview.appendChild(item);
+
+        this.attachmentItems.set(fileId, { element: item, previewUrl, filename: filename || '' });
+        this.updateAttachmentLayout();
+    }
+
+    async handleAttachmentRemove(fileId) {
+        const app = this.app;
+        const record = this.attachmentItems.get(fileId);
+        if (!record) return;
+        const removeBtn = record.element.querySelector('.attachment-remove');
+        if (removeBtn) removeBtn.disabled = true;
+        try {
+            await app.network.deleteAttachment(fileId);
+            this.removeAttachmentPreview(fileId);
+            if (record.filename) {
+                app.ui.addLogMessage('info', `附件已删除：${record.filename}`);
+            }
+        } catch (error) {
+            if (removeBtn) removeBtn.disabled = false;
+            app.ui.addLogMessage('error', `附件删除失败：${error.message || error}`);
+        }
+    }
+
+    removeAttachmentPreview(fileId) {
+        const record = this.attachmentItems.get(fileId);
+        if (!record) return;
+        if (record.previewUrl) {
+            URL.revokeObjectURL(record.previewUrl);
+        }
+        record.element.remove();
+        this.attachmentItems.delete(fileId);
+        this.updateAttachmentLayout();
+    }
+
+    clearAttachmentPreviews() {
+        for (const fileId of Array.from(this.attachmentItems.keys())) {
+            this.removeAttachmentPreview(fileId);
+        }
+        this.updateAttachmentLayout();
+    }
+
+    updateAttachmentLayout() {
+        const app = this.app;
+        const preview = app.elements.attachmentPreview;
+        const textarea = app.elements.userInput;
+        const inputWrapper = app.elements.inputWrapper;
+        if (!preview || !textarea || !inputWrapper) return;
+        const hasAttachments = preview.children.length > 0;
+        if (!hasAttachments) {
+            inputWrapper.style.removeProperty('--input-padding-top');
+            return;
+        }
+        const basePadding = 18;
+        const spacing = 8;
+        const previewHeight = preview.offsetHeight || 0;
+        inputWrapper.style.setProperty('--input-padding-top', `${basePadding + previewHeight + spacing}px`);
     }
 
     isViewOnlyMode() {
@@ -544,6 +758,7 @@ export class UiModule {
         app.currentAssistantSegmentText = '';
         app.currentToolCalls.clear();
         app.todoState = null;
+        this.clearAttachmentPreviews();
     }
 
     scrollToBottom() {

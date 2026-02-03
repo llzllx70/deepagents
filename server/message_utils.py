@@ -19,8 +19,9 @@ TOOL_TITLE_MAP: dict[str, str] = {
     "execute": "执行命令",
     "ls": "查看目录",
     "pdf_to_word": "转换文件格式",
-    "qwen_image_understand": "查看图片",
-    "qwen_image_generate": "生成图片",
+    "extract_file_text": "解析文件",
+    "qwen_image_understand": "图片理解",
+    "qwen_image_generate": "文生图",
     "browser_request_snapshot": "浏览器快照",
     "browser_action": "浏览器操作",
 }
@@ -293,6 +294,8 @@ def format_tool_display(
         content = _first_arg(parsed_args, ["description"])
     elif name == "pdf_to_word":
         content = _first_arg(parsed_args, ["output_path", "output", "out_path", "pdf_path"])
+    elif name == "extract_file_text":
+        content = _first_arg(parsed_args, ["file_path", "path"])
     elif name == "qwen_image_understand":
         content = _first_arg(parsed_args, ["image_path", "path"])
     elif name == "qwen_image_generate":

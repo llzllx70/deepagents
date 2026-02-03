@@ -70,6 +70,56 @@ export class NetworkModule {
         }
     }
 
+    async uploadAttachments(files) {
+        const app = this.app;
+        if (!app.auth.isAuthenticated()) {
+            app.auth.setLoginStatus('请先登录', 'error');
+            throw new Error('未登录');
+        }
+        if (!files || files.length === 0) {
+            throw new Error('未选择文件');
+        }
+        const sessionId = await this.ensureSession();
+        const formData = new FormData();
+        files.forEach(file => {
+            formData.append('files', file, file.name);
+        });
+        const response = await app.auth.authFetch(
+            `${app.serverUrl}/sessions/${sessionId}/attachments`,
+            {
+                method: 'POST',
+                body: formData
+            }
+        );
+        if (!response.ok) {
+            throw new Error(`附件上传失败：${response.statusText}`);
+        }
+        return await response.json();
+    }
+
+    async deleteAttachment(fileId) {
+        const app = this.app;
+        if (!app.auth.isAuthenticated()) {
+            app.auth.setLoginStatus('请先登录', 'error');
+            throw new Error('未登录');
+        }
+        if (!fileId) {
+            throw new Error('缺少附件ID');
+        }
+        const sessionId = app.sessionId;
+        if (!sessionId) {
+            throw new Error('会话未建立');
+        }
+        const response = await app.auth.authFetch(
+            `${app.serverUrl}/sessions/${sessionId}/attachments/${encodeURIComponent(fileId)}`,
+            { method: 'DELETE' }
+        );
+        if (!response.ok) {
+            throw new Error(`删除附件失败：${response.statusText}`);
+        }
+        return await response.json();
+    }
+
     handleMissingSession() {
         const app = this.app;
         app.ui.addLogMessage('warning', '当前会话已失效，请重新发送消息以创建新会话。');

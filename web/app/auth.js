@@ -75,6 +75,7 @@ export class AuthModule {
             app.elements.userInput.disabled = true;
             app.elements.userInput.placeholder = '请先登录';
         }
+        if (app.elements.attachBtn) app.elements.attachBtn.disabled = true;
         if (app.elements.sendBtn) app.elements.sendBtn.disabled = true;
         if (app.elements.newChatBtn) app.elements.newChatBtn.disabled = true;
         if (app.elements.autoApproveToggle) {
@@ -96,6 +97,7 @@ export class AuthModule {
             app.elements.userInput.disabled = false;
             app.elements.userInput.placeholder = app.defaultInputPlaceholder || '';
         }
+        if (app.elements.attachBtn) app.elements.attachBtn.disabled = false;
         if (app.elements.newChatBtn) app.elements.newChatBtn.disabled = false;
         if (app.elements.autoApproveToggle) {
             app.elements.autoApproveToggle.disabled = false;

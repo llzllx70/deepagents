@@ -261,22 +261,28 @@ def build_qwen_tools(
     @tool(
         "qwen_image_understand",
         description=(
-            "Understand an image using Qwen image model inside the sandbox. "
+            "Use this tool to explain/describe/understand an existing image and extract its content. "
+            "Examples: image captioning, OCR, object recognition, scene understanding. "
+            "Do NOT use for text-to-image generation. "
             "Provide image_path (inside /workspace) and an optional prompt."
         ),
     )
     def qwen_image_understand(
         image_path: str,
-        prompt: str = "Describe the image in detail.",
+        prompt: str = "Describe the image in detail and extract any key text.",
         model: str | None = None,
     ) -> dict[str, Any]:
         selected_model = model or _default_qwen_understand_model()
-        return client.understand(image_path, prompt, selected_model)
+        result = client.understand(image_path, prompt, selected_model)
+        result["image_path"] = image_path
+        return result
 
     @tool(
         "qwen_image_generate",
         description=(
-            "Generate an image using Qwen image model inside the sandbox. "
+            "Use this tool to generate/create an image from text (text-to-image). "
+            "Examples: draw/illustrate a scene, create a poster, generate artwork. "
+            "Do NOT use for explaining or extracting content from an existing image. "
             "Provide prompt, optional output_path (inside /workspace), and size like '1024*1024'."
         ),
     )

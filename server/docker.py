@@ -51,6 +51,10 @@ class DockerSandboxBackend(BaseSandbox):
     def id(self) -> str:
         return self._container_id
 
+    @property
+    def workdir(self) -> str:
+        return self._workdir
+
     def execute(self, command: str) -> ExecuteResponse:
         args = [
             "docker",

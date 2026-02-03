@@ -97,9 +97,89 @@ export class HistoryModule {
 
     buildChatTitle(messages, fallback) {
         const base = fallback || messages[0]?.content || '新对话';
-        const trimmed = String(base).trim();
-        if (!trimmed) return '新对话';
-        return trimmed.length > 50 ? trimmed.slice(0, 50) + '…' : trimmed;
+        return this.summarizeTitleFromText(base);
+    }
+
+    summarizeTitleFromText(text) {
+        const cleaned = this.sanitizeTitleSource(text);
+        if (!cleaned) return '新对话';
+
+        const action = this.extractActionVerb(cleaned);
+        const phrase = this.extractActionObject(cleaned, action);
+        const keywords = this.extractKeywords(cleaned);
+
+        let summary = '';
+        if (action && phrase) {
+            summary = `${action}：${phrase}`;
+        } else if (action && keywords.length) {
+            summary = `${action}：${keywords.join('、')}`;
+        } else if (keywords.length) {
+            summary = keywords.join('、');
+        } else {
+            summary = cleaned;
+        }
+
+        summary = summary.replace(/\s+/g, ' ').trim();
+        if (!summary) return '新对话';
+        return summary.length > 50 ? summary.slice(0, 50) + '…' : summary;
+    }
+
+    sanitizeTitleSource(text) {
+        if (!text) return '';
+        let value = String(text);
+        value = value.replace(/```[\s\S]*?```/g, ' ');
+        value = value.replace(/`[^`]*`/g, ' ');
+        value = value.replace(/\!\[[^\]]*\]\([^)]+\)/g, ' ');
+        value = value.replace(/\[[^\]]+\]\([^)]+\)/g, ' ');
+        value = value.replace(/https?:\/\/\S+/g, ' ');
+        value = value.replace(/[\r\n]+/g, ' ');
+        value = value.replace(/\s+/g, ' ').trim();
+        return value;
+    }
+
+    extractActionVerb(text) {
+        const verbs = [
+            '修复', '优化', '实现', '增加', '删除', '调整', '配置', '编写', '生成',
+            '分析', '总结', '对比', '翻译', '设计', '搭建', '规划', '整理', '重构',
+            '升级', '迁移', '排查', '调试', '解释', '说明', '提取', '转换', '改造'
+        ];
+        for (const verb of verbs) {
+            if (text.includes(verb)) return verb;
+        }
+        return '';
+    }
+
+    extractActionObject(text, action) {
+        if (!action) return '';
+        const pattern = new RegExp(`${action}([^。！？!?\\n]{2,40})`);
+        const match = text.match(pattern);
+        if (!match) return '';
+        return match[1].replace(/^\s*(一下|一下子|一些|一下吧|一下子)/, '').trim();
+    }
+
+    extractKeywords(text) {
+        const stopwords = new Set([
+            '请', '帮我', '帮忙', '麻烦', '需要', '如何', '怎么', '一下', '一下子',
+            '可以', '能否', '是否', '帮', '我', '你', '我们', '他们', '这个', '那个',
+            '进行', '完成', '处理', '实现', '方案', '问题', '功能', '内容', '情况',
+            '目前', '现在', '如果', '因为', '所以', '请问', '谢谢', '谢谢你'
+        ]);
+        const tokens = [];
+        const cjk = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+        const latin = text.toLowerCase().match(/[a-z0-9][a-z0-9_-]{2,}/g) || [];
+        for (const token of [...cjk, ...latin]) {
+            if (stopwords.has(token)) continue;
+            tokens.push(token);
+        }
+        if (!tokens.length) return [];
+        const counts = new Map();
+        tokens.forEach(token => {
+            counts.set(token, (counts.get(token) || 0) + 1);
+        });
+        return Array.from(counts.entries())
+            .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+            .slice(0, 4)
+            .map(([token]) => token);
     }
 
     findChatIndex({ id, runId }) {

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import shlex
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import WORKSPACE_DIR, client_logger, logger
+from .config import DATA_DIR, LOG_DIR, ROOT, WORKSPACE_DIR, client_logger, logger
 from .docker_pool import DockerPoolConfig, DockerSandboxPool
 from .models import (
     ClientLogRequest,
@@ -18,12 +23,14 @@ from .models import (
     CreateSessionResponse,
     DeleteSessionResponse,
     HistoryPayload,
+    AttachmentUploadItem,
+    AttachmentUploadResponse,
     LoginRequest,
     LoginResponse,
     SessionStatePayload,
     UserConfigPayload,
 )
-from .sessions import RunRequest, Session, SessionManager
+from .sessions import RunRequest, Session, SessionManager, UploadedFile
 from .browser_bridge import BrowserBridge
 from .storage import (
     read_session_owners,
@@ -40,11 +47,84 @@ from .auth import create_auth_token, delete_auth_token, get_user_for_token, veri
 docker_pool: DockerSandboxPool | None = None
 manager: SessionManager | None = None
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
+_TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".log",
+    ".ini",
+    ".cfg",
+}
+_DOC_EXTENSIONS = {".pdf", ".docx"}
+_EXCEL_EXTENSIONS = {".xlsx", ".xls"}
+_ALLOWED_EXTENSIONS = _IMAGE_EXTENSIONS | _TEXT_EXTENSIONS | _DOC_EXTENSIONS | _EXCEL_EXTENSIONS
+
+
+def _guess_extension(content_type: str | None) -> str | None:
+    if not content_type:
+        return None
+    content_type = content_type.lower()
+    if content_type.startswith("image/"):
+        return f".{content_type.split('/')[-1]}"
+    if content_type in ("application/pdf",):
+        return ".pdf"
+    if content_type in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ):
+        return ".docx"
+    if content_type in (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+    ):
+        return ".xlsx"
+    if content_type.startswith("text/"):
+        return ".txt"
+    return None
+
+
+def _is_allowed_upload(ext: str | None, content_type: str | None) -> bool:
+    if ext and ext.lower() in _ALLOWED_EXTENSIONS:
+        return True
+    if content_type and content_type.lower().startswith("image/"):
+        return True
+    if content_type and content_type.lower().startswith("text/"):
+        return True
+    if content_type and content_type.lower() == "application/pdf":
+        return True
+    return False
+
+
+def _format_runtime_environment() -> dict[str, str | None]:
+    return {
+        "python": sys.version.split()[0],
+        "executable": sys.executable,
+        "platform": platform.platform(),
+        "cwd": os.getcwd(),
+        "root": str(ROOT),
+        "workspace": str(WORKSPACE_DIR),
+        "data_dir": str(DATA_DIR),
+        "log_dir": str(LOG_DIR),
+        "project_skills_dir": os.environ.get("DEEPAGENTS_PROJECT_SKILLS_DIR"),
+        "user_skills_root": os.environ.get("DEEPAGENTS_USER_SKILLS_ROOT"),
+        "docker_image": os.environ.get("DEEPAGENTS_DOCKER_IMAGE"),
+    }
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global docker_pool, manager
     pool_config = DockerPoolConfig.from_env()
+    logger.info(
+        "Runtime environment: %s",
+        json.dumps(_format_runtime_environment(), ensure_ascii=False),
+    )
     logger.info("Lifespan startup: docker pool config=%s", pool_config)
     docker_pool = DockerSandboxPool(pool_config)
     await docker_pool.start()
@@ -181,6 +261,8 @@ async def delete_session(session_id: str, request: Request) -> DeleteSessionResp
     owner = await get_session_owner(session_id)
     if owner and owner != username:
         raise HTTPException(status_code=403, detail="Forbidden")
+    if owner is None:
+        await set_session_owner(session_id, username)
     session, synced = await manager.delete_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -190,6 +272,150 @@ async def delete_session(session_id: str, request: Request) -> DeleteSessionResp
         sandbox_id=session.sandbox_backend.id,
         synced=synced,
     )
+
+
+@app.post("/sessions/{session_id}/attachments", response_model=AttachmentUploadResponse)
+async def upload_attachments(
+    session_id: str,
+    request: Request,
+    files: list[UploadFile] = File(...),
+) -> AttachmentUploadResponse:
+    username = await require_user(request)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Session manager unavailable")
+    owner = await get_session_owner(session_id)
+    if owner and owner != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    session = await manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    responses: list[AttachmentUploadItem] = []
+    upload_dir = session.workspace_dir / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    container_root = getattr(session.sandbox_backend, "workdir", "/workspace").rstrip("/")
+
+    for upload in files:
+        filename = Path(upload.filename or "").name or "upload"
+        ext = Path(filename).suffix.lower()
+        if not ext:
+            guessed = _guess_extension(upload.content_type)
+            if guessed:
+                ext = guessed
+                filename = f"{filename}{guessed}"
+        if not _is_allowed_upload(ext, upload.content_type):
+            responses.append(
+                AttachmentUploadItem(
+                    file_id="",
+                    filename=filename,
+                    content_type=upload.content_type,
+                    size=0,
+                    container_path="",
+                    status="error",
+                    error="Unsupported file type",
+                )
+            )
+            await upload.close()
+            continue
+
+        content = await upload.read()
+        size = len(content)
+        file_id = uuid.uuid4().hex
+        unique_name = f"{file_id}_{filename}"
+        host_path = upload_dir / unique_name
+        try:
+            host_path.write_bytes(content)
+        except Exception as exc:
+            responses.append(
+                AttachmentUploadItem(
+                    file_id=file_id,
+                    filename=filename,
+                    content_type=upload.content_type,
+                    size=size,
+                    container_path="",
+                    status="error",
+                    error=f"Failed to save file: {exc}",
+                )
+            )
+            await upload.close()
+            continue
+
+        container_path = f"{container_root}/uploads/{unique_name}"
+        upload_results = session.sandbox_backend.upload_files([(container_path, content)])
+        if upload_results and upload_results[0].error:
+            responses.append(
+                AttachmentUploadItem(
+                    file_id=file_id,
+                    filename=filename,
+                    content_type=upload.content_type,
+                    size=size,
+                    container_path=container_path,
+                    status="error",
+                    error=f"Upload to sandbox failed: {upload_results[0].error}",
+                )
+            )
+            await upload.close()
+            continue
+
+        attachment = UploadedFile(
+            file_id=file_id,
+            filename=filename,
+            content_type=upload.content_type,
+            size=size,
+            host_path=host_path,
+            container_path=container_path,
+        )
+        session.register_uploaded_file(attachment)
+
+        responses.append(
+            AttachmentUploadItem(
+                file_id=file_id,
+                filename=filename,
+                content_type=upload.content_type,
+                size=size,
+                container_path=container_path,
+                status="ok",
+            )
+        )
+        await upload.close()
+
+    return AttachmentUploadResponse(session_id=session_id, files=responses)
+
+
+@app.delete("/sessions/{session_id}/attachments/{file_id}")
+async def delete_attachment(session_id: str, file_id: str, request: Request) -> dict[str, str]:
+    username = await require_user(request)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Session manager unavailable")
+    owner = await get_session_owner(session_id)
+    if owner and owner != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    session = await manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    attachment = session.remove_uploaded_file(file_id)
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    try:
+        if attachment.host_path.exists():
+            attachment.host_path.unlink()
+    except Exception as exc:
+        logger.warning("Failed to remove attachment file: %s (%s)", attachment.host_path, exc)
+
+    if attachment.container_path:
+        try:
+            quoted = shlex.quote(attachment.container_path)
+            result = session.sandbox_backend.execute(f"rm -f {quoted}")
+            if result.exit_code != 0:
+                logger.warning("Failed to remove attachment from sandbox: %s (%s)", attachment.container_path, result.output)
+        except Exception as exc:
+            logger.warning("Failed to remove attachment from sandbox: %s (%s)", attachment.container_path, exc)
+
+    return {"status": "ok"}
 
 
 @app.get("/history")
