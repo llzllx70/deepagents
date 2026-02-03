@@ -464,10 +464,17 @@ export class MessageModule {
         }
 
         const userMessage = app.ui.createMessageElement('user');
+        const attachments = app.ui.getAttachmentPayloads();
+        if (attachments.length) {
+            app.ui.appendMessageAttachments(userMessage, attachments);
+        }
         userMessage.querySelector('.message-text').textContent = input;
         app.elements.messages.appendChild(userMessage);
 
         app.elements.userInput.value = '';
+        if (attachments.length) {
+            app.ui.clearAttachmentPreviews();
+        }
         app.ui.adjustTextareaHeight();
         app.ui.updateSendButton();
 

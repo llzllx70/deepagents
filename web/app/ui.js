@@ -689,7 +689,13 @@ export class UiModule {
         item.appendChild(removeBtn);
         app.elements.attachmentPreview.appendChild(item);
 
-        this.attachmentItems.set(fileId, { element: item, previewUrl, filename: filename || '' });
+        this.attachmentItems.set(fileId, {
+            element: item,
+            previewUrl,
+            filename: filename || '',
+            contentType: contentType || '',
+            size: size || 0,
+        });
         this.updateAttachmentLayout();
     }
 
@@ -732,18 +738,120 @@ export class UiModule {
     updateAttachmentLayout() {
         const app = this.app;
         const preview = app.elements.attachmentPreview;
-        const textarea = app.elements.userInput;
         const inputWrapper = app.elements.inputWrapper;
-        if (!preview || !textarea || !inputWrapper) return;
+        if (!preview || !inputWrapper) return;
         const hasAttachments = preview.children.length > 0;
-        if (!hasAttachments) {
-            inputWrapper.style.removeProperty('--input-padding-top');
-            return;
+        inputWrapper.style.removeProperty('--input-padding-top');
+        inputWrapper.classList.toggle('has-attachments', hasAttachments);
+    }
+
+    getAttachmentPayloads() {
+        const payloads = [];
+        for (const [fileId, record] of this.attachmentItems.entries()) {
+            payloads.push({
+                fileId,
+                filename: record.filename,
+                contentType: record.contentType,
+                size: record.size,
+            });
         }
-        const basePadding = 18;
-        const spacing = 8;
-        const previewHeight = preview.offsetHeight || 0;
-        inputWrapper.style.setProperty('--input-padding-top', `${basePadding + previewHeight + spacing}px`);
+        return payloads;
+    }
+
+    getAttachmentDownloadUrl(fileId, filename) {
+        const app = this.app;
+        if (!app.sessionId || !fileId || !filename) return null;
+        const relativePath = `${app.sessionId}/uploads/${fileId}_${filename}`;
+        return app.utils.getDownloadUrl(relativePath);
+    }
+
+    appendMessageAttachments(messageElement, attachments) {
+        const app = this.app;
+        if (!messageElement || !attachments || attachments.length === 0) return;
+        const content = messageElement.querySelector('.message-content');
+        if (!content) return;
+
+        const list = document.createElement('div');
+        list.className = 'message-attachments';
+
+        attachments.forEach((attachment) => {
+            const filename = attachment.filename || '未命名文件';
+            const fileUrl = this.getAttachmentDownloadUrl(attachment.fileId, filename);
+            const isImage = this.isImageAttachment(attachment.contentType, filename);
+
+            const item = document.createElement('div');
+            item.className = 'message-attachment';
+
+            const visual = document.createElement('div');
+            visual.className = 'message-attachment-visual';
+
+            if (isImage && fileUrl) {
+                const img = document.createElement('img');
+                img.className = 'message-attachment-thumb';
+                img.src = fileUrl;
+                img.alt = filename;
+                if (fileUrl) {
+                    const link = document.createElement('a');
+                    link.href = fileUrl;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.appendChild(img);
+                    visual.appendChild(link);
+                } else {
+                    visual.appendChild(img);
+                }
+            } else {
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.setAttribute('viewBox', '0 0 24 24');
+                icon.setAttribute('fill', 'none');
+                icon.setAttribute('stroke', 'currentColor');
+                icon.setAttribute('stroke-width', '2');
+                icon.setAttribute('stroke-linecap', 'round');
+                icon.setAttribute('stroke-linejoin', 'round');
+                icon.classList.add('message-attachment-icon');
+                icon.innerHTML = `
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                `;
+                visual.appendChild(icon);
+            }
+
+            const meta = document.createElement('div');
+            meta.className = 'message-attachment-meta';
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'message-attachment-name';
+            if (fileUrl) {
+                const link = document.createElement('a');
+                link.href = fileUrl;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = filename;
+                nameEl.appendChild(link);
+            } else {
+                nameEl.textContent = filename;
+            }
+            meta.appendChild(nameEl);
+
+            const sizeLabel = app.utils.formatFileSize(attachment.size);
+            if (sizeLabel) {
+                const sizeEl = document.createElement('div');
+                sizeEl.className = 'message-attachment-size';
+                sizeEl.textContent = sizeLabel;
+                meta.appendChild(sizeEl);
+            }
+
+            item.appendChild(visual);
+            item.appendChild(meta);
+            list.appendChild(item);
+        });
+
+        const text = content.querySelector('.message-text');
+        if (text) {
+            content.insertBefore(list, text);
+        } else {
+            content.appendChild(list);
+        }
     }
 
     isViewOnlyMode() {
