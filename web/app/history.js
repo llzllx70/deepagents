@@ -20,7 +20,7 @@ export class HistoryModule {
         if (!chat || typeof chat !== 'object') return null;
         const rawTaskId = chat.taskId || chat.id || chat.runId || String(chat.timestamp || Date.now());
         const taskId = this.normalizeTaskId(rawTaskId);
-        const messages = Array.isArray(chat.messages) ? chat.messages : [];
+        const messages = this.sanitizeHistoryMessages(Array.isArray(chat.messages) ? chat.messages : []);
         const timestamp = typeof chat.timestamp === 'number' ? chat.timestamp : Date.now();
         const createdAt = typeof chat.createdAt === 'number'
             ? chat.createdAt
@@ -86,18 +86,58 @@ export class HistoryModule {
         const app = this.app;
         return Array.from(app.elements.messages.children).map(msg => {
             const isUser = msg.classList.contains('message') && msg.classList.contains('user');
-            const textElement = msg.querySelector('.message-text');
+            const payload = this.getMessageTextPayload(msg);
             const attachments = this.extractMessageAttachments(msg);
             const entry = {
                 role: isUser ? 'user' : 'assistant',
-                content: textElement ? textElement.textContent : '',
-                html: textElement ? textElement.innerHTML : ''
+                content: payload.content,
+                html: payload.html
             };
             if (attachments.length) {
                 entry.attachments = attachments;
             }
             return entry;
-        }).filter(m => m.content || (Array.isArray(m.attachments) && m.attachments.length));
+        }).filter(m => this.isMeaningfulMessage(m));
+    }
+
+    getMessageTextPayload(messageElement) {
+        if (!messageElement) return { content: '', html: '' };
+        const textElement = messageElement.querySelector('.message-text');
+        if (!textElement) return { content: '', html: '' };
+        const clone = textElement.cloneNode(true);
+        clone.querySelectorAll('.thinking-indicator').forEach(node => node.remove());
+        return {
+            content: clone.textContent || '',
+            html: clone.innerHTML || ''
+        };
+    }
+
+    isMeaningfulMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        const content = String(message.content || '').trim();
+        const html = String(message.html || '').trim();
+        const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
+        return Boolean(content || html || hasAttachments);
+    }
+
+    isThinkingMessage(message) {
+        if (!message || message.role !== 'assistant') return false;
+        const content = String(message.content || '').trim();
+        const html = String(message.html || '').trim();
+        const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
+        if (hasAttachments) return false;
+        if (content && content !== '思考中') return false;
+        if (html && !html.includes('thinking-indicator') && !html.includes('thinking-text')) {
+            return content === '思考中';
+        }
+        return content === '思考中' || html.includes('thinking-indicator') || html.includes('thinking-text');
+    }
+
+    sanitizeHistoryMessages(messages) {
+        if (!Array.isArray(messages)) return [];
+        const hasRealAssistant = messages.some(msg => msg?.role === 'assistant' && !this.isThinkingMessage(msg) && this.isMeaningfulMessage(msg));
+        if (!hasRealAssistant) return messages;
+        return messages.filter(msg => !(msg?.role === 'assistant' && this.isThinkingMessage(msg)));
     }
 
     parseAttachmentPayloads(value) {

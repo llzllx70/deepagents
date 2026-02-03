@@ -429,9 +429,12 @@ export class UiModule {
     getMessagePayloadFromElement(messageElement) {
         if (!messageElement) return { content: '', html: '' };
         const textElement = messageElement.querySelector('.message-text');
+        if (!textElement) return { content: '', html: '' };
+        const clone = textElement.cloneNode(true);
+        clone.querySelectorAll('.thinking-indicator').forEach(node => node.remove());
         return {
-            content: textElement ? textElement.textContent : '',
-            html: textElement ? textElement.innerHTML : ''
+            content: clone.textContent || '',
+            html: clone.innerHTML || ''
         };
     }
 
@@ -446,9 +449,12 @@ export class UiModule {
 
         if (state.messageElement) {
             const payload = this.getMessagePayloadFromElement(state.messageElement);
-            if (payload.content || payload.html) {
+            const hasContent = Boolean((payload.content || '').trim() || (payload.html || '').trim());
+            if (hasContent) {
                 const last = messages[messages.length - 1];
-                if (last && last.role === 'assistant' && !last.content && !last.html) {
+                if (last && last.role === 'assistant' && app.history.isThinkingMessage(last)) {
+                    messages[messages.length - 1] = { role: 'assistant', ...payload };
+                } else if (last && last.role === 'assistant' && !last.content && !last.html) {
                     messages[messages.length - 1] = { role: 'assistant', ...payload };
                 } else {
                     messages.push({ role: 'assistant', ...payload });
