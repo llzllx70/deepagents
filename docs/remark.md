@@ -433,3 +433,21 @@ web中打开172.16.2.4 中运行时，连接的服务端为何是172.16.2.49, �
 
 删除config/model.yml 中关于 langchain_project 的配置，修改为按照不同的会话进行配置，将其值修改为sessionid，既不同的会话有不同的日记轨迹
 
+» Select action: [1] show [2] restart-server [3] start-server [4] stop-server [5] deploy [6] update-web [0] exit (default: show)
+
+» » Select show type: [1] process [2] log (default: process)
+
+» » » Select target: [1] server [2] web [3] all (default: server)
+1
+【Server Process】
+  pid=2627915 cmd=python -m server.deepagents_server
+  pid=2740924 cmd=python -m server.deepagents_server
+
+一级任务只保留
+
+» Select action: [1] show [2] restart-server [3] update-web [4] update-all [5] deploy [0] exit (default: show)
+
+update-all: 先 restart-server，再 update-web
+
+选择deploy时可具体选择server还是web, 如果是server需要先stop再start，避免起多个
+

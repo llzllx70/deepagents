@@ -16,16 +16,17 @@ MODEL_CONFIG_FILE="${ROOT_DIR}/config/model.yml"
 SCENE_CONFIG_FILE="${ROOT_DIR}/config/llm-scene.yml"
 
 usage() {
-  echo "Usage: $0 [start|stop|restart|process|log|update-web|deploy] [all|server|web] [main-model]" >&2
+  echo "Usage: $0 [start|stop|restart|process|log|update-web|update-all|deploy] [all|server|web] [main-model]" >&2
   echo "start/stop/restart are server-only (web has no start/restart)." >&2
   echo "update-web copies web/ to WEB_DEPLOY_DIR (target=web or all)." >&2
+  echo "update-all restarts server first, then updates web." >&2
   echo "deploy updates web and restarts server; model is needed only for server targets." >&2
   echo "Main model defaults to the 'main' entry in config/llm-scene.yml" >&2
 }
 
 validate_action() {
   case "$ACTION" in
-    start|stop|restart|process|log|update-web|deploy) ;;
+    start|stop|restart|process|log|update-web|update-all|deploy) ;;
     *)
       usage
       exit 1
@@ -258,12 +259,10 @@ set_model_env() {
   local api_key=""
   local base_url=""
   local model_name=""
-  local langchain_project=""
 
   api_key="$(model_config_value "$MODEL" "api_key")"
   base_url="$(model_config_value "$MODEL" "base_url")"
   model_name="$(model_config_value "$MODEL" "model")"
-  langchain_project="$(model_config_value "$MODEL" "langchain_project")"
 
   if [ -z "$api_key" ] || [ -z "$base_url" ] || [ -z "$model_name" ]; then
     echo "Missing model config for $MODEL in $MODEL_CONFIG_FILE" >&2
@@ -273,7 +272,6 @@ set_model_env() {
   export OPENAI_API_KEY="$api_key"
   export OPENAI_BASE_URL="$base_url"
   export OPENAI_MODEL="$model_name"
-  export LANGCHAIN_PROJECT="$langchain_project"
 }
 
 ensure_logs() {
@@ -444,7 +442,7 @@ do_stop() {
 
 action_requires_model() {
   case "$ACTION" in
-    start|restart|deploy)
+    start|restart|update-all|deploy)
       if [ "$TARGET" = "server" ] || [ "$TARGET" = "all" ]; then
         return 0
       fi
@@ -472,6 +470,9 @@ validate_target_for_action() {
       if [ "$TARGET" = "all" ]; then
         TARGET="web"
       fi
+      ;;
+    update-all)
+      TARGET="all"
       ;;
   esac
 }
@@ -504,6 +505,11 @@ do_action() {
       if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
         update_web
       fi
+      ;;
+    update-all)
+      do_stop
+      do_start
+      update_web
       ;;
     deploy)
       if [ "$TARGET" = "all" ] || [ "$TARGET" = "web" ]; then
@@ -546,7 +552,7 @@ prompt_primary_action() {
   local indent="$2"
   local choice=""
   while true; do
-    echo "${indent}Select action: [1] show [2] restart-server [3] start-server [4] stop-server [5] deploy [6] update-web [0] exit (default: show)" >&2
+    echo "${indent}Select action: [1] show [2] restart-server [3] update-web [4] update-all [5] deploy [0] exit (default: show)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -557,11 +563,10 @@ prompt_primary_action() {
     fi
     case "${choice:-1}" in
       1|show) printf -v "$result_var" "%s" "show"; return 0 ;;
-      2|restart) printf -v "$result_var" "%s" "restart"; return 0 ;;
-      3|start) printf -v "$result_var" "%s" "start"; return 0 ;;
-      4|stop) printf -v "$result_var" "%s" "stop"; return 0 ;;
+      2|restart|restart-server) printf -v "$result_var" "%s" "restart"; return 0 ;;
+      3|update-web) printf -v "$result_var" "%s" "update-web"; return 0 ;;
+      4|update-all) printf -v "$result_var" "%s" "update-all"; return 0 ;;
       5|deploy) printf -v "$result_var" "%s" "deploy"; return 0 ;;
-      6|update-web) printf -v "$result_var" "%s" "update-web"; return 0 ;;
       0|exit|quit) printf -v "$result_var" "%s" "exit"; return 0 ;;
       *) echo "${indent}Invalid action, try again." >&2 ;;
     esac
@@ -608,6 +613,28 @@ prompt_target() {
       1|server) printf -v "$result_var" "%s" "server"; return 0 ;;
       2|web) printf -v "$result_var" "%s" "web"; return 0 ;;
       3|all) printf -v "$result_var" "%s" "all"; return 0 ;;
+      *) echo "${indent}Invalid target, try again." >&2 ;;
+    esac
+  done
+}
+
+prompt_deploy_target() {
+  local result_var="$1"
+  local indent="$2"
+  local choice=""
+  while true; do
+    echo "${indent}Select deploy target: [1] server [2] web (default: server)" >&2
+    if ! read_with_interrupt choice; then
+      return 1
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [ "${INTERRUPTED:-0}" -eq 1 ]; then
+      INTERRUPTED=0
+      return 1
+    fi
+    case "${choice:-1}" in
+      1|server) printf -v "$result_var" "%s" "server"; return 0 ;;
+      2|web) printf -v "$result_var" "%s" "web"; return 0 ;;
       *) echo "${indent}Invalid target, try again." >&2 ;;
     esac
   done
@@ -662,8 +689,8 @@ interactive_menu() {
       fi
       MODEL=""
       ;;
-    restart|start)
-      ACTION="$primary"
+    restart)
+      ACTION="restart"
       TARGET="server"
       if ! prompt_model MODEL "$INDENT_L3"; then
         return 1
@@ -671,7 +698,7 @@ interactive_menu() {
       ;;
     deploy)
       ACTION="deploy"
-      if ! prompt_target TARGET "$INDENT_L2"; then
+      if ! prompt_deploy_target TARGET "$INDENT_L2"; then
         return 1
       fi
       if [ "$TARGET" = "server" ] || [ "$TARGET" = "all" ]; then
@@ -687,10 +714,12 @@ interactive_menu() {
       TARGET="web"
       MODEL=""
       ;;
-    stop)
-      ACTION="stop"
-      TARGET="server"
-      MODEL=""
+    update-all)
+      ACTION="update-all"
+      TARGET="all"
+      if ! prompt_model MODEL "$INDENT_L3"; then
+        return 1
+      fi
       ;;
   esac
   return 0
@@ -733,6 +762,7 @@ if [ "$#" -gt 0 ]; then
     case "$ACTION" in
       start|stop|restart) TARGET="server" ;;
       update-web) TARGET="web" ;;
+      update-all) TARGET="all" ;;
       *) TARGET="all" ;;
     esac
   fi
