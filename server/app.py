@@ -15,10 +15,9 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import DATA_DIR, LOG_DIR, ROOT, WORKSPACE_DIR, client_logger, logger
+from .config import DATA_DIR, LOG_DIR, ROOT, WORKSPACE_DIR, logger
 from .docker_pool import DockerPoolConfig, DockerSandboxPool
 from .models import (
-    ClientLogRequest,
     CreateSessionRequest,
     CreateSessionResponse,
     DeleteSessionResponse,
@@ -447,22 +446,6 @@ async def save_session_state(payload: SessionStatePayload, request: Request) -> 
         data["timestamp"] = time.time()
     data.pop("client_id", None)
     await write_user_session_state(username, data)
-    return {"status": "ok"}
-
-
-@app.post("/client_logs")
-async def client_logs(req: ClientLogRequest, request: Request) -> dict[str, str]:
-    username = await get_user_for_token(extract_auth_token(request))
-    payload = {
-        "event": req.event,
-        "level": req.level or "info",
-        "session_id": req.session_id,
-        "ts": req.ts or time.time(),
-        "detail": req.detail or {},
-    }
-    if username:
-        payload["user"] = username
-    client_logger.info(json.dumps(payload, ensure_ascii=False))
     return {"status": "ok"}
 
 

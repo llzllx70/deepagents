@@ -21,14 +21,6 @@ class DeleteSessionResponse(BaseModel):
     synced: bool
 
 
-class ClientLogRequest(BaseModel):
-    event: str
-    detail: dict[str, Any] | None = None
-    level: str | None = None
-    session_id: str | None = None
-    ts: float | None = None
-
-
 class HistoryPayload(BaseModel):
     history: list[dict[str, Any]]
 

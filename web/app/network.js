@@ -434,32 +434,21 @@ export class NetworkModule {
 
     logClient(event, detail = {}, level = 'info', { useBeacon = false } = {}) {
         const app = this.app;
-        if (!app.serverUrl) return;
-        const payload = {
-            event,
-            detail,
-            level,
-            session_id: app.sessionId || null,
-            ts: Date.now() / 1000
-        };
-        const url = `${app.serverUrl}/client_logs`;
-        const body = JSON.stringify(payload);
-        if (useBeacon && navigator.sendBeacon) {
-            try {
-                navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-                return;
-            } catch (error) {
-                console.warn('client log beacon failed:', error);
-            }
+        const ts = Date.now();
+        const sessionId = app.sessionId || null;
+        const tsLabel = new Date(ts).toISOString();
+        const levelKey = typeof level === 'string' ? level.toLowerCase() : 'info';
+        const logFn = typeof console[levelKey] === 'function' ? console[levelKey].bind(console) : console.log.bind(console);
+        void useBeacon;
+
+        if (typeof console.groupCollapsed === 'function') {
+            console.groupCollapsed(`[client:${levelKey}] ${event} @ ${tsLabel}`);
+            logFn('session_id:', sessionId);
+            logFn('detail:', detail);
+            console.groupEnd();
+            return;
         }
-        const headers = app.auth.authHeaders({ 'Content-Type': 'application/json' });
-        fetch(url, {
-            method: 'POST',
-            headers,
-            body,
-            keepalive: true
-        }).catch(error => {
-            console.warn('client log failed:', error);
-        });
+
+        logFn(`[client:${levelKey}] ${event}`, { session_id: sessionId, ts: tsLabel, detail });
     }
 }

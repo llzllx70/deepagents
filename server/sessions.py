@@ -518,31 +518,46 @@ class Session:
         displayed_tool_ids: set[str] = set()
         message_buffer = ""
         message_buffer_id: str | None = None
+        emitted_message_ids: set[str] = set()
+        last_emitted_message: str | None = None
+        streamed_message_ids: set[str] = set()
+        last_streamed_message: str | None = None
+        streamed_message_pending = False
+        delta_emitted = False
         logged_message_ids: set[str] = set()
         last_logged_message: str | None = None
 
-        async def emit_full_ai_message(text: str, message_id: str | None) -> None:
+        async def log_full_ai_message(text: str, message_id: str | None) -> None:
             nonlocal last_logged_message
             if not text:
                 return
-            should_log = True
+            if message_id and message_id in logged_message_ids:
+                return
+            if last_logged_message == text:
+                return
             if message_id:
-                if message_id in logged_message_ids:
-                    should_log = False
-                else:
-                    logged_message_ids.add(message_id)
+                logged_message_ids.add(message_id)
+            last_logged_message = text
+            logger.info(
+                "LLM message: session_id=%s run_id=%s text=%s",
+                self.session_id,
+                run_request.run_id,
+                truncate_for_log(text),
+            )
+
+        async def emit_full_ai_message(text: str, message_id: str | None) -> None:
+            nonlocal last_emitted_message
+            if not text:
+                return
+            if message_id:
+                if message_id in emitted_message_ids:
+                    return
+                emitted_message_ids.add(message_id)
             else:
-                if last_logged_message == text:
-                    should_log = False
-                else:
-                    last_logged_message = text
-            if should_log:
-                logger.info(
-                    "LLM message: session_id=%s run_id=%s text=%s",
-                    self.session_id,
-                    run_request.run_id,
-                    truncate_for_log(text),
-                )
+                if last_emitted_message == text:
+                    return
+            last_emitted_message = text
+            await log_full_ai_message(text, message_id)
             await self.broadcast(
                 {
                     "type": "assistant.message",
@@ -552,11 +567,13 @@ class Session:
             )
 
         async def flush_message_buffer() -> None:
-            nonlocal message_buffer, message_buffer_id
+            nonlocal message_buffer, message_buffer_id, last_streamed_message, streamed_message_pending
             if not message_buffer:
                 message_buffer_id = None
                 return
-            await emit_full_ai_message(message_buffer, message_buffer_id)
+            last_streamed_message = message_buffer
+            streamed_message_pending = True
+            await log_full_ai_message(message_buffer, message_buffer_id)
             message_buffer = ""
             message_buffer_id = None
 
@@ -640,6 +657,9 @@ class Session:
                             is_chunk = _is_message_chunk(message)
                             if text:
                                 if is_chunk:
+                                    streamed_message_pending = False
+                                    if message_id:
+                                        streamed_message_ids.add(message_id)
                                     if message_buffer_id is None:
                                         message_buffer_id = message_id
                                     elif message_id and message_buffer_id and message_id != message_buffer_id:
@@ -653,6 +673,7 @@ class Session:
                                             "text": text,
                                         }
                                     )
+                                    delta_emitted = True
                                 else:
                                     if message_buffer:
                                         if message_buffer_id and message_id and message_buffer_id != message_id:
@@ -662,7 +683,22 @@ class Session:
                                             message_buffer_id = None
                                         else:
                                             await flush_message_buffer()
-                                    await emit_full_ai_message(text, message_id)
+                                    is_duplicate_stream = False
+                                    if message_id and message_id in streamed_message_ids:
+                                        is_duplicate_stream = True
+                                    elif streamed_message_pending and last_streamed_message and (
+                                        text == last_streamed_message
+                                        or text.startswith(last_streamed_message)
+                                        or last_streamed_message.startswith(text)
+                                    ):
+                                        is_duplicate_stream = True
+                                    streamed_message_pending = False
+                                    if is_duplicate_stream:
+                                        await log_full_ai_message(text, message_id)
+                                    elif delta_emitted:
+                                        await log_full_ai_message(text, message_id)
+                                    else:
+                                        await emit_full_ai_message(text, message_id)
                             if is_chunk and _is_message_final(message, _metadata):
                                 await flush_message_buffer()
     
@@ -841,6 +877,7 @@ class Session:
                                         "text": text_content,
                                     }
                                 )
+                                delta_emitted = True
                             continue
     
                         for block in message.content_blocks:
@@ -861,6 +898,7 @@ class Session:
                                             "text": text,
                                         }
                                     )
+                                    delta_emitted = True
                             elif block_type in ("tool_call_chunk", "tool_call"):
                                 await handle_tool_call_block(
                                     block,

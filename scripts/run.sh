@@ -407,9 +407,6 @@ follow_logs_all() {
   if [ -f logs/server.log ]; then
     files+=("logs/server.log")
   fi
-  if [ -f logs/web.log ]; then
-    files+=("logs/web.log")
-  fi
   print_header "Logs Follow"
   if [ "${#files[@]}" -gt 0 ]; then
     echo "Press Ctrl-C to return to the menu."
@@ -535,7 +532,7 @@ do_action() {
       elif [ "$TARGET" = "server" ]; then
         follow_log_file "Server Log" "logs/server.log"
       elif [ "$TARGET" = "web" ]; then
-        follow_log_file "Web Log" "logs/web.log"
+        echo "Web logs are now printed in the browser console."
       fi
       ;;
   esac

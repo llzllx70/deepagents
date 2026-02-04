@@ -34,15 +34,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("deepagents_server")
-client_logger = logging.getLogger("deepagents.web")
-client_logger.setLevel(logging.INFO)
-client_logger.propagate = False
-if not any(isinstance(handler, logging.FileHandler) for handler in client_logger.handlers):
-    _client_handler = logging.FileHandler(LOG_DIR / "web.log", encoding="utf-8")
-    _client_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d - %(message)s")
-    )
-    client_logger.addHandler(_client_handler)
 
 os.environ.setdefault("DEEPAGENTS_PROJECT_SKILLS_DIR", str(ROOT / ".deepagents" / "skills"))
 os.environ.setdefault("DEEPAGENTS_USER_SKILLS_ROOT", str(settings.user_deepagents_dir))

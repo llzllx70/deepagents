@@ -236,7 +236,7 @@ ${listen_block}    server_name ${SERVER_NAMES};
         try_files \$uri =404;
     }
 
-    location ~ ^/(login|logout|me|sessions|history|session_state|user_config|client_logs|files)(/|$) {
+    location ~ ^/(login|logout|me|sessions|history|session_state|user_config|files)(/|$) {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
