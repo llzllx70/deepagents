@@ -121,6 +121,9 @@ export class NetworkModule {
 
     handleMissingSession() {
         const app = this.app;
+        const activeChatId = app.activeChatId;
+        const activeChat = activeChatId ? app.chatHistory.find(chat => chat.id === activeChatId) : null;
+        const preservedStatus = activeChat?.status || app.currentRunStatus || null;
         app.ui.addLogMessage('warning', '当前会话已失效，请重新发送消息以创建新会话。');
         app.sessionId = null;
         app.wsUrl = null;
@@ -132,8 +135,8 @@ export class NetworkModule {
         app.currentRunStatus = null;
         app.ui.updateCancelButton(false);
         app.ui.updateSendButton();
-        if (app.activeChatId) {
-            app.history.upsertChatRecord({ id: app.activeChatId, sessionId: null, status: 'failed' });
+        if (activeChatId) {
+            app.history.upsertChatRecord({ id: activeChatId, sessionId: null, status: preservedStatus });
         }
     }
 

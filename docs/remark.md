@@ -451,3 +451,6 @@ update-all: 先 restart-server，再 update-web
 
 选择deploy时可具体选择server还是web, 如果是server需要先stop再start，避免起多个
 
+
+有bug：
+当前任务完成后，在历史记录中显示为成功，但如果后端重启后，再登陆进去，原任务会显示为失败，需要更改为，成功与失败只与此任务是否完成有关，重启退出等操作不改变任务的状态。
