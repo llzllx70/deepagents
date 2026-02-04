@@ -264,22 +264,29 @@ export class UiModule {
 
     bindHistoryExpandableEntries(container) {
         if (!container) return;
-        const bindToggle = (headerSelector, wrapperSelector, bodySelector) => {
-            container.querySelectorAll(headerSelector).forEach((header) => {
-                if (header.dataset.expandBound === '1') return;
-                header.dataset.expandBound = '1';
-                header.addEventListener('click', (event) => {
+        if (container.dataset.expandDelegateBound === '1') return;
+        container.dataset.expandDelegateBound = '1';
+        // Use event delegation so history entries work even after HTML serialization.
+        container.addEventListener('click', (event) => {
+            const toolHeader = event.target.closest('.tool-call-header');
+            if (toolHeader && container.contains(toolHeader)) {
+                const wrapper = toolHeader.closest('.tool-call');
+                if (wrapper && wrapper.querySelector('.tool-call-body')) {
                     event.stopPropagation();
-                    const wrapper = header.closest(wrapperSelector);
-                    if (!wrapper) return;
-                    if (bodySelector && !wrapper.querySelector(bodySelector)) return;
                     wrapper.classList.toggle('expanded');
-                });
-            });
-        };
+                }
+                return;
+            }
 
-        bindToggle('.tool-call-header', '.tool-call', '.tool-call-body');
-        bindToggle('.file-operation-header', '.file-operation', '.file-operation-body');
+            const fileHeader = event.target.closest('.file-operation-header');
+            if (fileHeader && container.contains(fileHeader)) {
+                const wrapper = fileHeader.closest('.file-operation');
+                if (wrapper && wrapper.querySelector('.file-operation-body')) {
+                    event.stopPropagation();
+                    wrapper.classList.toggle('expanded');
+                }
+            }
+        });
     }
 
     showDeleteConfirmModal(chatId) {
@@ -1026,7 +1033,8 @@ export class UiModule {
                 </div>
             `;
 
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (event) => {
+                event.stopPropagation();
                 toolElement.classList.toggle('expanded');
             });
 
@@ -1115,7 +1123,8 @@ export class UiModule {
             </div>
         `;
 
-        header.addEventListener('click', () => {
+        header.addEventListener('click', (event) => {
+            event.stopPropagation();
             toolElement.classList.toggle('expanded');
         });
 
@@ -1230,7 +1239,8 @@ export class UiModule {
 
             fileElement.appendChild(body);
 
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (event) => {
+                event.stopPropagation();
                 fileElement.classList.toggle('expanded');
             });
         }
@@ -1474,7 +1484,8 @@ export class UiModule {
 
             fileElement.appendChild(body);
 
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (event) => {
+                event.stopPropagation();
                 fileElement.classList.toggle('expanded');
             });
         }
