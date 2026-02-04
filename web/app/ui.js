@@ -262,6 +262,26 @@ export class UiModule {
         });
     }
 
+    bindHistoryExpandableEntries(container) {
+        if (!container) return;
+        const bindToggle = (headerSelector, wrapperSelector, bodySelector) => {
+            container.querySelectorAll(headerSelector).forEach((header) => {
+                if (header.dataset.expandBound === '1') return;
+                header.dataset.expandBound = '1';
+                header.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const wrapper = header.closest(wrapperSelector);
+                    if (!wrapper) return;
+                    if (bodySelector && !wrapper.querySelector(bodySelector)) return;
+                    wrapper.classList.toggle('expanded');
+                });
+            });
+        };
+
+        bindToggle('.tool-call-header', '.tool-call', '.tool-call-body');
+        bindToggle('.file-operation-header', '.file-operation', '.file-operation-body');
+    }
+
     showDeleteConfirmModal(chatId) {
         this.pendingDeleteChatId = chatId;
         this.app.elements.deleteConfirmModal?.classList.add('active');

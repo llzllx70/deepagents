@@ -539,6 +539,7 @@ export class HistoryModule {
             }
             app.elements.messages.appendChild(messageElement);
         });
+        app.ui.bindHistoryExpandableEntries(app.elements.messages);
         if (chat.sessionId) {
             app.network.setSessionState({ sessionId: chat.sessionId, chatId: chat.id, hasMessages: chat.messages.length > 0 });
         }

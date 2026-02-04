@@ -546,7 +546,7 @@ prompt_primary_action() {
   local indent="$2"
   local choice=""
   while true; do
-    echo "${indent}Select action: [1] show [2] restart-server [3] start-server [4] stop-server [5] deploy [0] exit (default: show)" >&2
+    echo "${indent}Select action: [1] show [2] restart-server [3] start-server [4] stop-server [5] deploy [6] update-web [0] exit (default: show)" >&2
     if ! read_with_interrupt choice; then
       return 1
     fi
@@ -561,6 +561,7 @@ prompt_primary_action() {
       3|start) printf -v "$result_var" "%s" "start"; return 0 ;;
       4|stop) printf -v "$result_var" "%s" "stop"; return 0 ;;
       5|deploy) printf -v "$result_var" "%s" "deploy"; return 0 ;;
+      6|update-web) printf -v "$result_var" "%s" "update-web"; return 0 ;;
       0|exit|quit) printf -v "$result_var" "%s" "exit"; return 0 ;;
       *) echo "${indent}Invalid action, try again." >&2 ;;
     esac
@@ -680,6 +681,11 @@ interactive_menu() {
       else
         MODEL=""
       fi
+      ;;
+    update-web)
+      ACTION="update-web"
+      TARGET="web"
+      MODEL=""
       ;;
     stop)
       ACTION="stop"
