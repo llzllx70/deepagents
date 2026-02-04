@@ -273,7 +273,7 @@ _make_model_to_tools_edge -> Send('tools')
 
 爬虫和浏览器自动化是两个需求，前者侧重获取数据，后者侧重在特定操作，完成任务
 
-# 20250130
+# 20260130
 
 1. https://www.zhipin.com/hangzhou/?seoRefer=index 的反爬，playwright会自动打开blank，genspark 也一样，导致反复打开
 2. manus使用用户端chrome能够打开，可能使用了不同的技术，比如客户端插件。
@@ -410,5 +410,25 @@ context 中如何呈现：完整文本还是摘要/分块？
 ```
 
 J18R5S81SEJAX34H
+
+# 20260204
+
+1. 日志中不要流式打印, 只需要在收到完整的包时，全量打印，如下面的流式日志要改进
+2026-02-03 22:57:42,964 INFO deepagents_server sessions.py:494 - LLM message: session_id=4dae9bf869594ed99cf3fddf05dbcad2 run_id=ml6q2p89h3l3df4q0c text=让我
+2026-02-03 22:57:42,964 INFO deepagents_server sessions.py:494 - LLM message: session_id=4dae9bf869594ed99cf3fddf05dbcad2 run_id=ml6q2p89h3l3df4q0c text=检查
+2026-02-03 22:57:42,965 INFO deepagents_server sessions.py:494 - LLM message: session_id=4dae9bf869594ed99cf3fddf05dbcad2 run_id=ml6q2p89h3l3df4q0c text=文件
+2026-02-03 22:57:43,202 INFO deepagents_server sessions.py:494 - LLM message: session_id=4dae9bf869594ed99cf3fddf05dbcad2 run_id=ml6q2p89h3l3df4q0c text=状态
+
+2. 时间信息显示优化
+
+data/users/xxx 目录下chat_history.json 中 createdAt 和 timestamp 分别是什么含义？
+建议用更明显的key表示，时间戳换成可读的时间字符串
+
+
+web中打开172.16.2.4 中运行时，连接的服务端为何是172.16.2.49, 应该连接本机
+-- 主要是vsproject自动添加ports forward，将2.4转到2.49上, 需要删除
+
+历史记录中信息条目，点击时无法展开，
+
 
 

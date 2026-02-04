@@ -15,25 +15,50 @@ export class HistoryModule {
         return `task_${value}`;
     }
 
+    coerceDate(value) {
+        if (value instanceof Date) return value;
+        if (typeof value === 'number' && Number.isFinite(value)) return new Date(value);
+        if (typeof value === 'string' && value.trim()) {
+            const parsed = Date.parse(value);
+            if (!Number.isNaN(parsed)) return new Date(parsed);
+        }
+        return null;
+    }
+
+    formatTimestamp(value) {
+        const date = value instanceof Date ? value : this.coerceDate(value);
+        if (!date) return null;
+        return date.toISOString();
+    }
+
     normalizeHistoryEntry(chat) {
         const app = this.app;
         if (!chat || typeof chat !== 'object') return null;
-        const rawTaskId = chat.taskId || chat.id || chat.runId || String(chat.timestamp || Date.now());
+        const updatedAtSource = chat.updatedAt ?? chat.updated_at ?? chat.timestamp ?? chat.createdAt ?? chat.created_at;
+        const updatedAtDate = this.coerceDate(updatedAtSource) || new Date();
+        const createdAtDate = this.coerceDate(chat.createdAt ?? chat.created_at) || updatedAtDate;
+        const rawTaskId = chat.taskId || chat.id || chat.runId || String(updatedAtDate.getTime());
         const taskId = this.normalizeTaskId(rawTaskId);
         const messages = this.sanitizeHistoryMessages(Array.isArray(chat.messages) ? chat.messages : []);
-        const timestamp = typeof chat.timestamp === 'number' ? chat.timestamp : Date.now();
-        const createdAt = typeof chat.createdAt === 'number'
-            ? chat.createdAt
-            : (typeof chat.timestamp === 'number' ? chat.timestamp : Date.now());
+        const createdAt = this.formatTimestamp(createdAtDate) || new Date().toISOString();
+        const updatedAt = this.formatTimestamp(updatedAtDate) || createdAt;
+        const {
+            timestamp: _timestamp,
+            createdAt: _createdAt,
+            updatedAt: _updatedAt,
+            created_at: _created_at,
+            updated_at: _updated_at,
+            ...rest
+        } = chat;
         return {
-            ...chat,
+            ...rest,
             id: taskId,
             taskId,
             runId: chat.runId || null,
             sessionId: chat.sessionId || null,
             status: chat.status || null,
             createdAt,
-            timestamp,
+            updatedAt,
             messages,
         };
     }
@@ -321,8 +346,9 @@ export class HistoryModule {
 
     upsertChatRecord(chat, { promote = false } = {}) {
         const app = this.app;
-        const now = Date.now();
-        const normalizedId = this.normalizeTaskId(chat.id || chat.taskId || chat.runId || now);
+        const now = new Date();
+        const nowIso = this.formatTimestamp(now) || new Date().toISOString();
+        const normalizedId = this.normalizeTaskId(chat.id || chat.taskId || chat.runId || now.getTime());
         const index = this.findChatIndex({ id: normalizedId, runId: chat.runId });
         const existing = index >= 0 ? app.chatHistory[index] : null;
         const hasSessionId = Object.prototype.hasOwnProperty.call(chat, 'sessionId');
@@ -330,16 +356,32 @@ export class HistoryModule {
             ? chat.messages
             : (existing?.messages || []);
         const nextTitle = chat.title || existing?.title || this.buildChatTitle(nextMessages, null);
+        const base = existing ? { ...existing } : {};
+        delete base.timestamp;
+        delete base.updatedAt;
+        delete base.updated_at;
+        delete base.createdAt;
+        delete base.created_at;
+        const incoming = { ...chat };
+        delete incoming.timestamp;
+        delete incoming.updatedAt;
+        delete incoming.updated_at;
+        delete incoming.createdAt;
+        delete incoming.created_at;
+        const createdAtDate = this.coerceDate(existing?.createdAt ?? existing?.created_at)
+            || this.coerceDate(chat.createdAt ?? chat.created_at)
+            || now;
+        const createdAt = this.formatTimestamp(createdAtDate) || nowIso;
         const next = {
-            ...(existing || {}),
-            ...chat,
+            ...base,
+            ...incoming,
             id: normalizedId,
             taskId: normalizedId,
             runId: chat.runId || existing?.runId || null,
             sessionId: hasSessionId ? chat.sessionId : (existing?.sessionId || null),
             status: chat.status || existing?.status || null,
-            createdAt: existing?.createdAt || chat.createdAt || now,
-            timestamp: now,
+            createdAt,
+            updatedAt: nowIso,
             title: nextTitle,
             messages: nextMessages,
         };

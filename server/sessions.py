@@ -98,6 +98,41 @@ def _describe_tool(tool: Any) -> str:
     return tool.__class__.__name__
 
 
+def _is_message_chunk(message: Any) -> bool:
+    return message.__class__.__name__.endswith("Chunk")
+
+
+def _extract_message_id(message: Any, metadata: Any) -> str | None:
+    for attr in ("id", "message_id", "messageId"):
+        value = getattr(message, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(metadata, dict):
+        for key in ("id", "message_id", "messageId"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _is_message_final(message: Any, metadata: Any) -> bool:
+    if not _is_message_chunk(message):
+        return True
+    for container in (
+        getattr(message, "response_metadata", None),
+        getattr(message, "additional_kwargs", None),
+        metadata,
+    ):
+        if isinstance(container, dict):
+            if container.get("final") is True or container.get("is_final") is True:
+                return True
+            finish_reason = container.get("finish_reason")
+            stop_reason = container.get("stop_reason")
+            if finish_reason is not None or stop_reason is not None:
+                return True
+    return False
+
+
 def _list_skill_names(assistant_id: str) -> list[str]:
     try:
         user_skills_dir = settings.ensure_user_skills_dir(assistant_id)
@@ -371,6 +406,12 @@ class Session:
         await self.broadcast(
             {"type": "run.started", "run_id": run_request.run_id, "session_id": self.session_id}
         )
+        logger.info(
+            "User input: session_id=%s run_id=%s text=%s",
+            self.session_id,
+            run_request.run_id,
+            truncate_for_log(run_request.user_input),
+        )
 
         prompt_text, warnings = inject_file_context(run_request.user_input)
         uploaded_context = self.format_uploaded_files_context()
@@ -414,6 +455,49 @@ class Session:
         file_op_tracker = FileOpTracker(assistant_id=self.assistant_id, backend=self.backend)
         tool_call_buffers: dict[str | int, dict[str, Any]] = {}
         displayed_tool_ids: set[str] = set()
+        message_buffer = ""
+        message_buffer_id: str | None = None
+        logged_message_ids: set[str] = set()
+        last_logged_message: str | None = None
+
+        async def emit_full_ai_message(text: str, message_id: str | None) -> None:
+            nonlocal last_logged_message
+            if not text:
+                return
+            should_log = True
+            if message_id:
+                if message_id in logged_message_ids:
+                    should_log = False
+                else:
+                    logged_message_ids.add(message_id)
+            else:
+                if last_logged_message == text:
+                    should_log = False
+                else:
+                    last_logged_message = text
+            if should_log:
+                logger.info(
+                    "LLM message: session_id=%s run_id=%s text=%s",
+                    self.session_id,
+                    run_request.run_id,
+                    truncate_for_log(text),
+                )
+            await self.broadcast(
+                {
+                    "type": "assistant.message",
+                    "run_id": run_request.run_id,
+                    "text": text,
+                }
+            )
+
+        async def flush_message_buffer() -> None:
+            nonlocal message_buffer, message_buffer_id
+            if not message_buffer:
+                message_buffer_id = None
+                return
+            await emit_full_ai_message(message_buffer, message_buffer_id)
+            message_buffer = ""
+            message_buffer_id = None
 
         try:
             while True:
@@ -490,20 +574,35 @@ class Session:
 
                     if isinstance(message, AIMessage):
                         text = normalize_text_content(message.content)
+                        message_id = _extract_message_id(message, _metadata)
+                        is_chunk = _is_message_chunk(message)
                         if text:
-                            logger.info(
-                                "LLM message: session_id=%s run_id=%s text=%s",
-                                self.session_id,
-                                run_request.run_id,
-                                truncate_for_log(text),
-                            )
-                            await self.broadcast(
-                                {
-                                    "type": "assistant.message",
-                                    "run_id": run_request.run_id,
-                                    "text": text,
-                                }
-                            )
+                            if is_chunk:
+                                if message_buffer_id is None:
+                                    message_buffer_id = message_id
+                                elif message_id and message_buffer_id and message_id != message_buffer_id:
+                                    await flush_message_buffer()
+                                    message_buffer_id = message_id
+                                message_buffer += text
+                                await self.broadcast(
+                                    {
+                                        "type": "assistant.delta",
+                                        "run_id": run_request.run_id,
+                                        "text": text,
+                                    }
+                                )
+                            else:
+                                if message_buffer:
+                                    if message_buffer_id and message_id and message_buffer_id != message_id:
+                                        await flush_message_buffer()
+                                    elif text.startswith(message_buffer) or message_buffer.startswith(text):
+                                        message_buffer = ""
+                                        message_buffer_id = None
+                                    else:
+                                        await flush_message_buffer()
+                                await emit_full_ai_message(text, message_id)
+                        if is_chunk and _is_message_final(message, _metadata):
+                            await flush_message_buffer()
 
                         for tool_call in extract_tool_calls(message):
                             if isinstance(tool_call, dict):
@@ -667,7 +766,7 @@ class Session:
                     if not hasattr(message, "content_blocks"):
                         text_content = getattr(message, "content", None)
                         if isinstance(text_content, str) and text_content:
-                            logger.info(
+                            logger.debug(
                                 "LLM delta: session_id=%s run_id=%s delta_len=%s",
                                 self.session_id,
                                 run_request.run_id,
@@ -687,7 +786,7 @@ class Session:
                         if block_type == "text":
                             text = block.get("text", "")
                             if text:
-                                logger.info(
+                                logger.debug(
                                     "LLM delta: session_id=%s run_id=%s delta_len=%s",
                                     self.session_id,
                                     run_request.run_id,
@@ -757,6 +856,8 @@ class Session:
                     stream_input = Command(resume=hitl_response)
                     continue
 
+                if message_buffer:
+                    await flush_message_buffer()
                 break
 
             self.run_status[run_request.run_id] = "completed"
