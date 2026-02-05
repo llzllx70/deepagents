@@ -43,6 +43,7 @@ from .message_utils import (
 from .tool_stream import emit_tool_call_started, handle_tool_call_block
 from .qwen_tools import build_qwen_tools
 from .sandbox_tools import build_sandbox_tools
+from .mcp_tools import get_mcp_tools
 from .tool_call_args import pop_tool_call_args
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
@@ -1234,6 +1235,15 @@ class SessionManager:
             logger.info("web_search tool added, total tools: %s", [t.__name__ for t in tools])
         else:
             logger.warning("Tavily API key not configured, web_search disabled")
+
+        try:
+            mcp_tools = await get_mcp_tools()
+        except Exception as exc:
+            logger.warning("Failed to load MCP tools: %s", exc)
+            mcp_tools = []
+        if mcp_tools:
+            tools.extend(mcp_tools)
+            logger.info("MCP tools added: %s", [_describe_tool(t) for t in mcp_tools])
 
         session_state = SessionState(auto_approve=auto_approve)
         browser_bridge = BrowserBridge(session_id=session_id)
