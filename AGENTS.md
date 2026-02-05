@@ -1,36 +1,37 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `libs/deepagents/`: core Python package (agent runtime, backends, middleware).
-- `libs/deepagents-cli/`: CLI package, including integrations and UI.
-- `libs/*/tests/`: unit and integration tests (`test_*.py`).
-- `skills/`: built-in skill definitions and scripts; `.deepagents/skills` symlinks here.
-- `scripts/`: repo-level helper scripts.
+- `server/`: Python backend (FastAPI/Uvicorn app, auth, sessions, tool middleware, sandboxes).
+- `web/`: Static web client (HTML/CSS/JS, no build step). See `web/README.md`.
+- `skills/`: Codex skill packages and reference assets.
+- `scripts/`: Utility scripts (e.g., Docker helpers, document conversion, report generation).
+- `test/`: Pytest-based integration tests.
+- `config/`: Runtime configs such as `model.yml` and `deepagents.yml`.
+- `data/`: Server state and user history (written at runtime).
 
 ## Build, Test, and Development Commands
-- `make -C libs/deepagents lint` / `make -C libs/deepagents format`: run Ruff formatting/linting for core package.
-- `make -C libs/deepagents test` / `make -C libs/deepagents integration_test`: run unit/integration tests with coverage.
-- `make -C libs/deepagents-cli lint` / `make -C libs/deepagents-cli format`: format and lint CLI code.
-- `make -C libs/deepagents-cli test` / `make -C libs/deepagents-cli test_integration`: run CLI tests.
-- `make -C libs/deepagents-cli run`: run the CLI from source via `uvx`.
+- `python -m server.deepagents_server`: Run the API server on port 8000 (Uvicorn). 
+- `python3 -m http.server 8080` (from `web/`): Serve the web client locally.
+- `npm install`: Install Node dependencies (used by `create_presentation.js`).
+- `npm run build`: Run `node create_presentation.js` (generates the presentation defined by `package.json`).
+- `pip install -r requirements.txt`: Install Python dependencies for server/tools/tests.
 
 ## Coding Style & Naming Conventions
-- Python uses Ruff formatting and linting; prefer running `uv run ruff format`/`ruff check` via the Makefiles.
-- Line length: 150 in `libs/deepagents`, 100 in `libs/deepagents-cli` (see `pyproject.toml` in each package).
-- Type checking is strict (`mypy`), so keep type hints accurate and avoid implicit `Any`.
-- Tests follow `test_*.py` naming inside `tests/` folders.
+- Python and JS/CSS use 4-space indentation in existing files.
+- Prefer explicit typing and small, single-purpose modules (see `server/`).
+- Filenames follow snake_case for Python, kebab-case or plain names for web assets.
+- No repo-wide formatter config is committed; follow local patterns and avoid reformatting unrelated code. `black` is in `requirements.txt` if you need it.
 
 ## Testing Guidelines
-- Framework: `pytest` with coverage enabled in `libs/deepagents` (`--cov=deepagents`).
-- Unit tests live in `libs/deepagents/tests/unit_tests` and `libs/deepagents-cli/tests/unit_tests`.
-- Integration tests live in `libs/deepagents/tests/integration_tests` and `libs/deepagents-cli/tests/integration_tests`.
-- Prefer adding a focused test near the module being changed.
+- Tests live in `test/` and follow `test_*.py` naming.
+- Run all tests with `pytest`.
+- Some tests are integration-heavy and may skip unless env vars are set (e.g., Playwright or API keys in `test/test_playwright_*` and `test/test_qwen_image.py`).
 
 ## Commit & Pull Request Guidelines
-- History shows a mix of simple imperative messages (`add`, `modify`) and Conventional Commit prefixes (`feat:`, `chore:`). Prefer conventional prefixes when possible.
-- Keep the subject short and action-oriented; add context in the body if needed.
-- PRs should include a brief summary, testing notes (commands run), and screenshots only when UI changes apply.
+- Recent commit history uses very short, generic messages (e.g., `modify`), so no formal convention is enforced.
+- Prefer imperative, scoped messages when possible (e.g., `server: fix session cleanup`).
+- No PR template is present; include a clear summary, steps to validate, and screenshots/GIFs for UI changes.
 
-## Configuration & Agent Notes
-- Optional tools in examples require environment variables like `TAVILY_API_KEY`; document new env vars in relevant READMEs.
-- Project skills are loaded from `.deepagents/skills` (symlinked to `skills/`), so updates here affect local agent behavior.
+## Security & Configuration Tips
+- Keep secrets out of git; use environment variables and `config/` files as intended.
+- Server writes user history under `data/`; avoid committing runtime artifacts.
