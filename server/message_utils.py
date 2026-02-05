@@ -89,10 +89,48 @@ def normalize_text_content(content: Any) -> str:
     return str(content)
 
 
+def _try_parse_json(text: str) -> Any | None:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        stripped = text.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            inner = stripped.strip("`").strip()
+            if inner.lower().startswith("json"):
+                inner = inner[4:].strip()
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                pass
+        if "{" in stripped and "}" in stripped:
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start < end:
+                snippet = stripped[start : end + 1]
+                try:
+                    return json.loads(snippet)
+                except json.JSONDecodeError:
+                    pass
+        if "[" in stripped and "]" in stripped:
+            start = stripped.find("[")
+            end = stripped.rfind("]")
+            if start < end:
+                snippet = stripped[start : end + 1]
+                try:
+                    return json.loads(snippet)
+                except json.JSONDecodeError:
+                    pass
+        return None
+
+
 def parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
     if raw_args is None:
         return None
     if isinstance(raw_args, dict):
+        if len(raw_args) == 1:
+            wrapper_key = next(iter(raw_args.keys()))
+            if wrapper_key in ("input", "arguments", "parameters", "params"):
+                return parse_tool_args(raw_args.get(wrapper_key))
         parsed = raw_args
         normalized_target = normalize_browser_target(parsed.get("target"))
         if normalized_target is not None:
@@ -102,10 +140,15 @@ def parse_tool_args(raw_args: Any) -> dict[str, Any] | None:
     if isinstance(raw_args, str):
         if not raw_args:
             return None
-        try:
-            parsed = json.loads(raw_args)
-        except json.JSONDecodeError:
+        parsed = _try_parse_json(raw_args)
+        if parsed is None:
             return None
+        if isinstance(parsed, str):
+            nested = parsed.strip()
+            if nested.startswith(("{", "[")):
+                nested_parsed = _try_parse_json(nested)
+                if nested_parsed is not None:
+                    parsed = nested_parsed
         if isinstance(parsed, dict):
             normalized_target = normalize_browser_target(parsed.get("target"))
             if normalized_target is not None:

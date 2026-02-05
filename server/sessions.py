@@ -21,7 +21,7 @@ from .config import WORKSPACE_DIR, logger
 
 from .agent import create_cli_agent
 from deepagents_cli.config import SessionState, create_model, settings
-from deepagents_cli.file_ops import FileOpTracker
+from deepagents_cli.file_ops import FileOpTracker, format_display_path
 from deepagents_cli.skills.load import list_skills
 from deepagents_cli.tools import fetch_url, http_request, web_search
 from .browser_bridge import BrowserBridge
@@ -43,12 +43,14 @@ from .message_utils import (
 from .tool_stream import emit_tool_call_started, handle_tool_call_block
 from .qwen_tools import build_qwen_tools
 from .sandbox_tools import build_sandbox_tools
+from .tool_call_args import pop_tool_call_args
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 _LANGSMITH_ENV_LOCK: asyncio.Lock | None = None
 _LANGSMITH_TRACING_CONTEXT: Any | None = None
 _LANGSMITH_CONTEXT_RESOLVED = False
+DEBUG_TOOL_CALLS = os.getenv("DEEPAGENTS_DEBUG_TOOL_CALLS") == "1"
 
 
 def _resolve_langsmith_tracing_context() -> Any | None:
@@ -192,6 +194,83 @@ def _describe_tool(tool: Any) -> str:
     if isinstance(name, str) and name:
         return name
     return tool.__class__.__name__
+
+
+def _preview_raw_args(value: Any, limit: int = 300) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            text = str(value)
+    if len(text) > limit:
+        return text[:limit] + "...(truncated)"
+    return text
+
+
+def _preview_json(value: Any, limit: int = 600) -> str:
+    if value is None:
+        return ""
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        text = str(value)
+    if len(text) > limit:
+        return text[:limit] + "...(truncated)"
+    return text
+
+
+def _extract_tool_call_fields(tool_call: dict[str, Any]) -> tuple[str | None, Any, str | None, int | None]:
+    tool_name = tool_call.get("name") or tool_call.get("tool_name")
+    raw_args = tool_call.get("args")
+    if raw_args in (None, "", {}):
+        for key in ("arguments", "input", "parameters", "params"):
+            if key in tool_call:
+                raw_args = tool_call.get(key)
+                break
+
+    func = tool_call.get("function")
+    if tool_name is None and isinstance(func, dict):
+        tool_name = func.get("name")
+    if raw_args in (None, "", {}) and isinstance(func, dict):
+        for key in ("arguments", "input", "parameters", "params"):
+            if key in func:
+                raw_args = func.get(key)
+                break
+
+    tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id") or tool_call.get("call_id")
+    tool_call_index = tool_call.get("index") or tool_call.get("tool_call_index")
+    return tool_name, raw_args, tool_call_id, tool_call_index
+
+
+def _fallback_tool_call_id(tool_name: str, tool_call: dict[str, Any]) -> str | None:
+    index = tool_call.get("index")
+    if index is None:
+        return None
+    return f"{tool_name}:{index}"
+
+
+def _should_buffer_tool_args(raw_args: Any, parsed_args: dict[str, Any] | None) -> bool:
+    if parsed_args is None:
+        return isinstance(raw_args, str)
+    if not isinstance(raw_args, str):
+        return False
+    if set(parsed_args.keys()) != {"value"}:
+        return False
+    value = parsed_args.get("value")
+    if not isinstance(value, str):
+        return False
+    raw = raw_args.strip()
+    if raw.startswith('"'):
+        return True
+    if any(ch in value for ch in "{}[]"):
+        stripped = value.strip()
+        if not ((stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))):
+            return True
+    return False
 
 
 def _is_message_chunk(message: Any) -> bool:
@@ -545,7 +624,11 @@ class Session:
 
         config = {
             "configurable": {"thread_id": self.session_state.thread_id},
-            "metadata": {"assistant_id": self.assistant_id},
+            "metadata": {
+                "assistant_id": self.assistant_id,
+                "session_id": self.session_id,
+                "run_id": run_request.run_id,
+            },
         }
 
         file_op_tracker = FileOpTracker(assistant_id=self.assistant_id, backend=self.backend)
@@ -739,25 +822,75 @@ class Session:
     
                             for tool_call in extract_tool_calls(message):
                                 if isinstance(tool_call, dict):
-                                    tool_name = tool_call.get("name")
-                                    tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id")
-                                    raw_args = tool_call.get("args")
-                                    if tool_name is None and isinstance(tool_call.get("function"), dict):
-                                        tool_name = tool_call["function"].get("name")
-                                        raw_args = raw_args or tool_call["function"].get("arguments")
+                                    tool_name, raw_args, tool_call_id, tool_call_index = _extract_tool_call_fields(tool_call)
                                     if not tool_name:
                                         continue
+                                    if tool_call_id is None and tool_call_index is not None:
+                                        tool_call_id = _fallback_tool_call_id(str(tool_name), tool_call)
                                     parsed_args = parse_tool_args(raw_args)
-                                    if parsed_args is None:
-                                        if isinstance(raw_args, str) and tool_call_id:
-                                            await handle_tool_call_block(
-                                                {"name": tool_name, "args": raw_args, "id": tool_call_id},
-                                                tool_call_buffers,
-                                                displayed_tool_ids,
-                                                file_op_tracker,
+                                    if parsed_args in (None, {}) and raw_args not in (None, "", {}):
+                                        logger.info(
+                                            "Tool call raw args incomplete: session_id=%s run_id=%s tool=%s tool_call_id=%s raw_args=%s",
+                                            self.session_id,
+                                            run_request.run_id,
+                                            tool_name,
+                                            tool_call_id,
+                                            _preview_raw_args(raw_args),
+                                        )
+                                    if parsed_args == {} and tool_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
+                                        additional = getattr(message, "additional_kwargs", None)
+                                        response_metadata = getattr(message, "response_metadata", None)
+                                        logger.info(
+                                            "Tool call missing args: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s additional=%s response_metadata=%s",
+                                            self.session_id,
+                                            run_request.run_id,
+                                            tool_name,
+                                            tool_call_id,
+                                            _preview_json(tool_call),
+                                            _preview_json(additional),
+                                            _preview_json(response_metadata),
+                                        )
+                                    if DEBUG_TOOL_CALLS and parsed_args in (None, {}):
+                                        logger.info(
+                                            "Tool call payload: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s",
+                                            self.session_id,
+                                            run_request.run_id,
+                                            tool_name,
+                                            tool_call_id,
+                                            _preview_json(tool_call),
+                                        )
+                                        additional = getattr(message, "additional_kwargs", None)
+                                        if isinstance(additional, dict) and additional:
+                                            logger.info(
+                                                "Tool call additional_kwargs: session_id=%s run_id=%s keys=%s payload=%s",
+                                                self.session_id,
                                                 run_request.run_id,
-                                                self,
+                                                list(additional.keys()),
+                                                _preview_json(additional),
                                             )
+                                        response_metadata = getattr(message, "response_metadata", None)
+                                        if isinstance(response_metadata, dict) and response_metadata:
+                                            logger.info(
+                                                "Tool call response_metadata: session_id=%s run_id=%s keys=%s payload=%s",
+                                                self.session_id,
+                                                run_request.run_id,
+                                                list(response_metadata.keys()),
+                                                _preview_json(response_metadata),
+                                            )
+                                    if _should_buffer_tool_args(raw_args, parsed_args):
+                                        await handle_tool_call_block(
+                                            {
+                                                "name": tool_name,
+                                                "args": raw_args,
+                                                "id": tool_call_id,
+                                                "index": tool_call_index,
+                                            },
+                                            tool_call_buffers,
+                                            displayed_tool_ids,
+                                            file_op_tracker,
+                                            run_request.run_id,
+                                            self,
+                                        )
                                         continue
                                     await emit_tool_call_started(
                                         session=self,
@@ -784,6 +917,16 @@ class Session:
                             content_blocks = getattr(message, "content_blocks", None)
                             if isinstance(content_blocks, list) and content_blocks:
                                 for block in content_blocks:
+                                    if DEBUG_TOOL_CALLS and isinstance(block, dict):
+                                        block_type = block.get("type")
+                                        if block_type in ("tool_call_chunk", "tool_call"):
+                                            logger.info(
+                                                "Tool call content_block: session_id=%s run_id=%s type=%s payload=%s",
+                                                self.session_id,
+                                                run_request.run_id,
+                                                block_type,
+                                                _preview_json(block),
+                                            )
                                     block_type = block.get("type")
                                     if block_type in ("tool_call_chunk", "tool_call"):
                                         await handle_tool_call_block(
@@ -800,9 +943,30 @@ class Session:
                             tool_name = getattr(message, "name", "") or "tool"
                             tool_status = getattr(message, "status", "success")
                             tool_full_content = normalize_text_content(message.content)
+                            tool_call_id = getattr(message, "tool_call_id", None)
+                            tool_call_payload = pop_tool_call_args(
+                                self.session_id,
+                                tool_call_id,
+                                thread_id=self.session_state.thread_id,
+                            )
+                            args_from_store = None
+                            if isinstance(tool_call_payload, dict):
+                                args_from_store = tool_call_payload.get("args")
+                            if tool_call_id and isinstance(args_from_store, dict) and args_from_store:
+                                file_op_tracker.update_args(tool_call_id, args_from_store)
+                                active_record = file_op_tracker.active.get(tool_call_id)
+                                if active_record and active_record.tool_name == "read_file":
+                                    path_str = args_from_store.get("file_path") or args_from_store.get("path")
+                                    if isinstance(path_str, str) and path_str:
+                                        active_record.display_path = format_display_path(path_str)
                             record = file_op_tracker.complete_with_message(message)
     
-                            if record is not None:
+                            tool_call_args: dict[str, Any] | None = None
+                            if isinstance(args_from_store, dict) and args_from_store:
+                                tool_call_args = args_from_store
+                            if tool_call_args is None and record is not None:
+                                if isinstance(record.args, dict) and record.args:
+                                    tool_call_args = record.args
                                 content = ""
                                 content_preview = ""
                                 content_truncated = False
@@ -866,7 +1030,7 @@ class Session:
                                 tool_name,
                                 tool_status,
                             )
-                            display = format_tool_display(tool_name, None)
+                            display = format_tool_display(tool_name, tool_call_args)
                             await self.broadcast(
                                 {
                                     "type": "tool.call.ended",
@@ -874,6 +1038,7 @@ class Session:
                                     "tool_name": tool_name,
                                     "status": tool_status,
                                     "tool_call_id": getattr(message, "tool_call_id", None),
+                                    "args": tool_call_args,
                                     "content": tool_full_content,
                                     "content_preview": format_tool_content(tool_full_content, limit=preview_limit),
                                     "content_truncated": len(tool_full_content) > preview_limit,

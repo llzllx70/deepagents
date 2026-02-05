@@ -25,6 +25,7 @@ from deepagents_cli.config import COLORS, config, console, get_default_coding_in
 from deepagents_cli.shell import ShellMiddleware
 
 from .skills_middleware import SkillsMiddleware
+from .tool_args_middleware import ToolCallArgsMiddleware
 
 
 _PROVIDER_TO_WORKING_DIR: dict[str, str] = {
@@ -515,6 +516,9 @@ def create_cli_agent(
 
         # Note: Shell middleware not used in sandbox mode
         # File operations and execute tool are provided by the sandbox backend
+
+    # Capture tool call arguments at execution time (useful for providers missing args in streams)
+    agent_middleware.append(ToolCallArgsMiddleware())
 
     # Get or use custom system prompt
     if system_prompt is None:

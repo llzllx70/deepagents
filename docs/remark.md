@@ -463,4 +463,19 @@ update-all: 先 restart-server，再 update-web
 
 对应修改
 
+去掉web端回传日志到server的方式，web端直接在console 中打印
+server去掉接收web日志的相关代码，接口是client_logs
 
+
+你需要分析server 和 config, web 目录，
+使用kimi-k2.5，客户端接收到命令参数不全，如图所示,请修改此问题，要求如下：
+1. 分析原因，使用glm-4.7 和 qwen3-coder-plus都是好的，但是使用kimi-k2.5有此问题
+2. 写测试函数，修改完成后，调用测试函数，查看server端发出的消息是否正确
+3. 要求一次性改对，直到测试函数验证通过
+
+要求web显示的完整的信息，不是现在这样：
+{
+  "value": "}{"
+}
+
+可接合web目录一起定位原因，同时可结合日志分析

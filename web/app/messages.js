@@ -245,7 +245,7 @@ export class MessageModule {
 
     handleToolCallEnded(data) {
         const app = this.app;
-        const { tool_name, status, tool_call_id, content_preview, content, display_title, display_content } = data;
+        const { tool_name, status, tool_call_id, content_preview, content, display_title, display_content, args } = data;
         const toolContent = typeof content === 'string' && content.length ? content : content_preview;
         const runId = data.run_id || app.currentRunId || 'default';
         const state = app.ui.getRunState(runId);
@@ -275,6 +275,17 @@ export class MessageModule {
         if (statusElement) {
             statusElement.className = `tool-status ${status}`;
             statusElement.textContent = app.utils.formatToolStatus(status);
+        }
+
+        if (args && Object.keys(args).length) {
+            app.ui.updateToolCallElement(toolElement, {
+                name: tool_name || 'tool',
+                args,
+                status: status || 'success',
+                todoState: state?.todoState || null,
+                displayTitle: display_title,
+                displayContent: display_content,
+            });
         }
 
         if (toolContent) {

@@ -5,7 +5,7 @@ import os
 from typing import Any, TYPE_CHECKING
 
 from .config import logger
-from .message_utils import format_tool_display
+from .message_utils import format_tool_display, parse_tool_args
 
 if TYPE_CHECKING:
     from deepagents_cli.file_ops import FileOpTracker
@@ -26,6 +26,18 @@ def _preview_args(value: Any, limit: int = 200) -> str:
     if len(text) > limit:
         return text[:limit] + "...(truncated)"
     return text
+
+
+def _merge_stream_text(current: str | None, incoming: str) -> str:
+    if not current:
+        return incoming
+    if incoming == current:
+        return current
+    if incoming.startswith(current):
+        return incoming
+    if current.startswith(incoming):
+        return current
+    return current + incoming
 
 
 def _log_write_file_debug(tool_name: str, args: Any, tool_call_id: str | None) -> None:
@@ -73,6 +85,14 @@ async def emit_tool_call_started(
         tool_call_id,
         args,
     )
+    if not args and tool_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
+        logger.info(
+            "Tool call started with empty args: session_id=%s run_id=%s tool=%s tool_call_id=%s",
+            session.session_id,
+            run_id,
+            tool_name,
+            tool_call_id,
+        )
     display = format_tool_display(tool_name, args)
     await session.broadcast(
         {
@@ -95,10 +115,24 @@ async def handle_tool_call_block(
     run_id: str,
     session: "Session",
 ) -> None:
-    chunk_name = block.get("name")
+    chunk_name = block.get("name") or block.get("tool_name")
     chunk_args = block.get("args")
-    chunk_id = block.get("id")
-    chunk_index = block.get("index")
+    if chunk_args in (None, "", {}):
+        for key in ("arguments", "input", "parameters", "params"):
+            if key in block:
+                chunk_args = block.get(key)
+                break
+    if chunk_name is None and isinstance(block.get("function"), dict):
+        function_block = block.get("function", {})
+        chunk_name = function_block.get("name") or chunk_name
+        if chunk_args in (None, "", {}):
+            for key in ("arguments", "input", "parameters", "params"):
+                if key in function_block:
+                    chunk_args = function_block.get(key)
+                    break
+
+    chunk_id = block.get("id") or block.get("tool_call_id") or block.get("call_id")
+    chunk_index = block.get("index") or block.get("tool_call_index")
 
     if DEBUG_TOOL_CALLS:
         logger.info(
@@ -132,31 +166,50 @@ async def handle_tool_call_block(
         buffer["args_parts"] = []
     elif isinstance(chunk_args, str):
         if chunk_args:
-            parts: list[str] = buffer.setdefault("args_parts", [])
-            if not parts or chunk_args != parts[-1]:
-                parts.append(chunk_args)
-            buffer["args"] = "".join(parts)
+            current = buffer.get("args")
+            if isinstance(current, str):
+                buffer["args"] = _merge_stream_text(current, chunk_args)
+            else:
+                buffer["args"] = chunk_args
     elif chunk_args is not None:
         buffer["args"] = chunk_args
 
     buffer_name = buffer.get("name")
     buffer_id = buffer.get("id")
+    if buffer_id is None and buffer_name is not None and chunk_index is not None:
+        buffer_id = f"{buffer_name}:{chunk_index}"
+        buffer["id"] = buffer_id
     if buffer_name is None:
         return
 
-    parsed_args = buffer.get("args")
-    if isinstance(parsed_args, str):
-        if not parsed_args:
+    parsed_args = parse_tool_args(buffer.get("args"))
+    if parsed_args in (None, {}):
+        if buffer_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
+            logger.info(
+                "Tool call args missing: run_id=%s name=%s id=%s args_preview=%s block=%s",
+                run_id,
+                buffer_name,
+                buffer_id,
+                _preview_args(buffer.get("args")),
+                _preview_args(block),
+            )
+        if DEBUG_TOOL_CALLS:
+            logger.info(
+                "Tool call args incomplete: run_id=%s name=%s id=%s args_preview=%s",
+                run_id,
+                buffer_name,
+                buffer_id,
+                _preview_args(buffer.get("args")),
+            )
+            logger.info(
+                "Tool call block payload: run_id=%s name=%s id=%s block=%s",
+                run_id,
+                buffer_name,
+                buffer_id,
+                _preview_args(block),
+            )
+        if parsed_args is None:
             return
-        try:
-            parsed_args = json.loads(parsed_args)
-        except json.JSONDecodeError:
-            return
-    elif parsed_args is None:
-        return
-
-    if not isinstance(parsed_args, dict):
-        parsed_args = {"value": parsed_args}
 
     if buffer_id is not None:
         if buffer_id not in displayed_tool_ids:
