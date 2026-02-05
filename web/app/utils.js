@@ -521,36 +521,70 @@ export class UtilsModule {
             return parts.length ? parts[parts.length - 1] : '文件下载';
         };
 
+        const splitTrailingEmphasis = (match, offset, fullText) => {
+            if (!match || typeof offset !== 'number' || !fullText) {
+                return { text: match, emphasis: '' };
+            }
+            const end = offset + match.length;
+            const after = fullText[end] || '';
+            const isBoundary = !after || /[\s)"'<>.,，。！？；：）】」』》]/.test(after);
+            if (!isBoundary) return { text: match, emphasis: '' };
+            const prefix = (len) => fullText.slice(Math.max(0, offset - len), offset);
+            if (match.endsWith('**') && prefix(2) === '**') {
+                return { text: match.slice(0, -2), emphasis: '**' };
+            }
+            if (match.endsWith('__') && prefix(2) === '__') {
+                return { text: match.slice(0, -2), emphasis: '__' };
+            }
+            if (match.endsWith('*') && prefix(1) === '*') {
+                return { text: match.slice(0, -1), emphasis: '*' };
+            }
+            if (match.endsWith('_') && prefix(1) === '_') {
+                return { text: match.slice(0, -1), emphasis: '_' };
+            }
+            return { text: match, emphasis: '' };
+        };
+
         const linkBlocks = [];
         const linkPlaceholderPrefix = '__LINK_BLOCK__';
         const downloadPattern = /下载[:：]\s*\/files\/[^\s'"<>),，。！？；：）】」』》]+/g;
-        processed = processed.replace(downloadPattern, (match) => {
-            const rawPath = match.replace(/^下载[:：]\s*/, '');
+        processed = processed.replace(downloadPattern, (match, ...rest) => {
+            const original = match;
+            const offset = rest[rest.length - 2];
+            const fullText = rest[rest.length - 1];
+            const { text: cleaned, emphasis } = splitTrailingEmphasis(match, offset, fullText);
+            const rawPath = cleaned.replace(/^下载[:：]\s*/, '');
             const relative = this.getFilesRelativePath(rawPath);
             if (!relative) return match;
             const normalized = this.normalizeDownloadRelativePath(relative);
-            if (!normalized) return match;
+            if (!normalized) return original;
             const url = `${app.serverUrl}/files/${this.encodePathSegments(normalized)}`;
             const label = `下载：${getFileLabel(rawPath)}`;
             const token = `${linkPlaceholderPrefix}${linkBlocks.length}__`;
-            linkBlocks.push(`[${label}](${url})`);
+            linkBlocks.push(`[${label}](${url})${emphasis}`);
             return token;
         });
 
         const urlPattern = /https?:\/\/[^\s'"<>),，。！？；：）】」』》]+/g;
-        processed = processed.replace(urlPattern, (match) => {
-            const url = this.getDownloadUrl(match) || match;
+        processed = processed.replace(urlPattern, (match, ...rest) => {
+            const offset = rest[rest.length - 2];
+            const fullText = rest[rest.length - 1];
+            const { text: cleaned, emphasis } = splitTrailingEmphasis(match, offset, fullText);
+            const url = this.getDownloadUrl(cleaned) || cleaned;
             if (!url.includes('/files/')) return match;
-            const label = `下载：${getFileLabel(match)}`;
-            return `[${label}](${url})`;
+            const label = `下载：${getFileLabel(cleaned)}`;
+            return `[${label}](${url})${emphasis}`;
         });
 
         const pathPattern = /(?:[A-Za-z]:)?[\\/][^\s'"<>),，。！？；：）】」』》]+?workspace[\\/][^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|workspace\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|\.\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+|[^\s'"<>),，。！？；：）】」』》]+\/[^\s'"<>),，。！？；：）】」』》]+\.[A-Za-z0-9]+/g;
-        processed = processed.replace(pathPattern, (match) => {
-            const url = this.getDownloadUrl(match);
+        processed = processed.replace(pathPattern, (match, ...rest) => {
+            const offset = rest[rest.length - 2];
+            const fullText = rest[rest.length - 1];
+            const { text: cleaned, emphasis } = splitTrailingEmphasis(match, offset, fullText);
+            const url = this.getDownloadUrl(cleaned);
             if (!url) return match;
-            const label = `下载：${getFileLabel(match)}`;
-            return `[${label}](${url})`;
+            const label = `下载：${getFileLabel(cleaned)}`;
+            return `[${label}](${url})${emphasis}`;
         });
 
         codeBlocks.forEach((block, index) => {
