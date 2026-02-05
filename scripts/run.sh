@@ -16,8 +16,8 @@ MODEL_CONFIG_FILE="${ROOT_DIR}/config/model.yml"
 SCENE_CONFIG_FILE="${ROOT_DIR}/config/llm-scene.yml"
 
 usage() {
-  echo "Usage: $0 [start|stop|restart|process|log|update-web|update-all|deploy] [all|server|web] [main-model]" >&2
-  echo "start/stop/restart are server-only (web has no start/restart)." >&2
+  echo "Usage: $0 [start|stop|stop-server|restart|process|log|update-web|update-all|deploy] [all|server|web] [main-model]" >&2
+  echo "start/stop/stop-server/restart are server-only (web has no start/restart)." >&2
   echo "update-web copies web/ to WEB_DEPLOY_DIR (target=web or all)." >&2
   echo "update-all restarts server first, then updates web." >&2
   echo "deploy updates web and restarts server; model is needed only for server targets." >&2
@@ -26,7 +26,7 @@ usage() {
 
 validate_action() {
   case "$ACTION" in
-    start|stop|restart|process|log|update-web|update-all|deploy) ;;
+    start|stop|stop-server|restart|process|log|update-web|update-all|deploy) ;;
     *)
       usage
       exit 1
@@ -450,7 +450,7 @@ action_requires_model() {
 
 validate_target_for_action() {
   case "$ACTION" in
-    start|stop|restart)
+    start|stop|stop-server|restart)
       if [ "$TARGET" = "web" ]; then
         usage
         exit 1
@@ -491,7 +491,7 @@ do_action() {
     start)
       do_start
       ;;
-    stop)
+    stop|stop-server)
       do_stop
       ;;
     restart)
@@ -757,7 +757,7 @@ if [ "$#" -gt 0 ]; then
   MODEL="${3:-}"
   if [ -z "$TARGET" ]; then
     case "$ACTION" in
-      start|stop|restart) TARGET="server" ;;
+      start|stop|stop-server|restart) TARGET="server" ;;
       update-web) TARGET="web" ;;
       update-all) TARGET="all" ;;
       *) TARGET="all" ;;
