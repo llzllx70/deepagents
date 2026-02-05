@@ -107,7 +107,7 @@ export_env_config() {
 apply_env_defaults() {
   case "$ENV_NAME" in
     dev)
-      SERVER_NAMES="${SERVER_NAMES:-172.16.2.4}"
+      SERVER_NAMES="${SERVER_NAMES:-127.0.0.1 172.16.2.4}"
       LISTEN_PORTS="${LISTEN_PORTS:-8080}"
       WEB_ROOT="${WEB_ROOT:-/opt/deepagents}"
       WEB_DEPLOY_DIR="${WEB_DEPLOY_DIR:-$WEB_ROOT}"

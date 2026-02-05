@@ -149,6 +149,41 @@ def _describe_model(model: Any) -> str:
     return model.__class__.__name__
 
 
+def _configure_kimi_thinking(model: Any) -> None:
+    model_name = None
+    for attr in ("model_name", "model", "model_id", "name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            model_name = value
+            break
+    if not model_name or not model_name.lower().startswith("kimi"):
+        return
+
+    if not hasattr(model, "extra_body"):
+        return
+
+    raw_mode = os.getenv("DEEPAGENTS_KIMI_THINKING")
+    if raw_mode is None:
+        desired_mode = "disabled"
+    else:
+        desired_mode = raw_mode.strip().lower()
+        if desired_mode in ("auto", "default", ""):
+            return
+
+    if desired_mode in ("disabled", "off", "false", "0", "instant"):
+        thinking_value = {"type": "disabled"}
+    elif desired_mode in ("enabled", "on", "true", "1", "thinking"):
+        thinking_value = {"type": "enabled"}
+    else:
+        return
+
+    extra_body = getattr(model, "extra_body", None)
+    if not isinstance(extra_body, dict):
+        extra_body = {}
+    extra_body = {**extra_body, "thinking": thinking_value}
+    model.extra_body = extra_body
+
+
 def _describe_tool(tool: Any) -> str:
     name = getattr(tool, "name", None)
     if isinstance(name, str) and name:
@@ -1022,6 +1057,7 @@ class SessionManager:
         session_workspace_dir = WORKSPACE_DIR / session_id
         session_workspace_dir.mkdir(parents=True, exist_ok=True)
         model = create_model()
+        _configure_kimi_thinking(model)
         tools = [http_request, fetch_url]
         logger.info(
             "settings.has_tavily = %s, tavily_api_key = %s...",
