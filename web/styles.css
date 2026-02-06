@@ -262,13 +262,43 @@ body {
     text-transform: uppercase;
     letter-spacing: 1.5px;
     color: var(--accent);
-    margin-bottom: 12px;
+    margin-bottom: 0;
     font-weight: 600;
     text-shadow: 0 0 10px rgba(99, 189, 255, 0.3);
 }
 
 [data-theme="light"] .sidebar-section h3 {
     text-shadow: none;
+}
+
+.history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.history-clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.history-clear-btn:hover {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.history-clear-btn svg {
+    width: 16px;
+    height: 16px;
 }
 
 .history-list {
@@ -336,27 +366,6 @@ body {
     justify-content: center;
     color: var(--text-muted);
     flex-shrink: 0;
-}
-
-.history-item-icon.status-success {
-    color: var(--success);
-    filter: drop-shadow(0 0 4px var(--success));
-}
-
-.history-item-icon.status-failed {
-    color: var(--error);
-    filter: drop-shadow(0 0 4px var(--error));
-}
-
-.history-item-icon.status-running {
-    color: var(--info);
-    filter: drop-shadow(0 0 4px var(--info));
-}
-
-[data-theme="light"] .history-item-icon.status-success,
-[data-theme="light"] .history-item-icon.status-failed,
-[data-theme="light"] .history-item-icon.status-running {
-    filter: none;
 }
 
 .history-item-status {
@@ -1155,9 +1164,9 @@ body {
 
 .tool-call-header {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 10px;
-    padding: 14px 16px;
+    padding: 9px 16px;
     background: var(--accent-light);
     border-bottom: 1px solid var(--border-color);
     cursor: pointer;
@@ -1258,6 +1267,120 @@ body {
 
 .tool-call.expanded .tool-call-body {
     display: block;
+}
+
+/* Task hierarchy styles - Simplified list style */
+.tool-call.task-item {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+    margin: 4px 0;
+}
+
+.tool-call.task-item .tool-call-header {
+    background: transparent;
+    border: none;
+    border-bottom: none;
+    padding: 8px 12px 8px 0;
+    gap: 8px;
+}
+
+.tool-call.task-item .tool-call-header:hover {
+    background: rgba(99, 189, 255, 0.05);
+    border-radius: var(--radius-sm);
+}
+
+.tool-call.task-item > .tool-call-header > .tool-status {
+    display: none;
+}
+
+.tool-call.task-item > .tool-call-header > .tool-title > .tool-summary {
+    display: none;
+}
+
+/* Show status and summary for tools inside task-children */
+.task-children .tool-call .tool-status {
+    display: inline-block;
+}
+
+.task-children .tool-call .tool-summary {
+    display: inline;
+}
+
+.tool-call.task-item .tool-title {
+    flex: 1;
+}
+
+.tool-call.task-item .tool-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.tool-call.task-item .task-icon {
+    color: var(--text-muted);
+    width: 16px;
+    height: 16px;
+}
+
+.tool-call.task-item .tool-chevron {
+    color: var(--text-muted);
+    width: 14px;
+    height: 14px;
+    transition: transform 0.2s ease;
+}
+
+.tool-call.task-item.expanded .tool-chevron {
+    transform: rotate(90deg);
+}
+
+.tool-call.task-item .tool-call-body {
+    padding: 0;
+    background: transparent;
+}
+
+.task-children {
+    padding: 4px 0 4px 24px;
+    margin: 0;
+    border-left: none;
+}
+
+.task-children .tool-call {
+    margin: 4px 0;
+    margin-left: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.task-children .tool-call .tool-chevron {
+    transition: transform 0.2s ease;
+}
+
+.task-children .tool-call.expanded .tool-chevron {
+    transform: rotate(180deg);
+}
+
+.task-children .tool-call .tool-call-body {
+    padding: 12px;
+    background: var(--bg-secondary);
+}
+
+.task-children .tool-call:hover {
+    border-color: var(--border-light);
+}
+
+.task-children .tool-call .tool-call-header {
+    padding: 10px 12px;
+}
+
+.task-children .tool-call:first-child {
+    margin-top: 0;
+}
+
+.task-children .tool-call:last-child {
+    margin-bottom: 0;
 }
 
 .tool-args {
@@ -1690,6 +1813,170 @@ body {
     color: var(--text-muted);
 }
 
+/* ==================== Task Drawer ==================== */
+.task-drawer {
+    display: none;
+    max-width: 1000px;
+    margin: 0 auto 12px;
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(99, 189, 255, 0.03) 100%);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    position: relative;
+}
+
+.task-drawer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.6;
+}
+
+[data-theme="dark"] .task-drawer {
+    background: linear-gradient(135deg, rgba(10, 15, 26, 0.9) 0%, rgba(99, 189, 255, 0.05) 100%);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.task-drawer.visible {
+    display: block;
+}
+
+.task-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+    background: transparent;
+}
+
+.task-drawer-header:hover {
+    background: rgba(99, 189, 255, 0.08);
+}
+
+.task-drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.3px;
+}
+
+.task-drawer-title svg {
+    color: var(--accent);
+    filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+.task-drawer-badge {
+    display: none;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: linear-gradient(135deg, var(--accent) 0%, #4fc3f7 100%);
+    color: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(99, 189, 255, 0.3);
+}
+
+[data-theme="dark"] .task-drawer-badge {
+    box-shadow: 0 2px 12px rgba(99, 189, 255, 0.4), 0 0 20px rgba(99, 189, 255, 0.2);
+}
+
+.task-drawer-badge.visible {
+    display: inline-block;
+}
+
+.task-drawer-chevron {
+    color: var(--accent);
+    transition: transform 0.3s ease;
+}
+
+.task-drawer.expanded .task-drawer-chevron {
+    transform: rotate(180deg);
+}
+
+.task-drawer-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    border-top: 1px solid transparent;
+    background: rgba(99, 189, 255, 0.02);
+}
+
+.task-drawer.expanded .task-drawer-content {
+    max-height: 300px;
+    overflow-y: auto;
+    border-top-color: rgba(99, 189, 255, 0.15);
+}
+
+.task-drawer-items {
+    padding: 12px 16px 16px;
+}
+
+.task-drawer-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.task-drawer-item:last-child {
+    margin-bottom: 0;
+}
+
+.task-drawer-item:hover {
+    border-color: rgba(99, 189, 255, 0.2);
+    background: rgba(99, 189, 255, 0.05);
+}
+
+.task-drawer-item-checkbox {
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+    accent-color: var(--accent);
+    cursor: default;
+}
+
+.task-drawer-item-text {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.task-drawer-item.completed {
+    opacity: 0.7;
+}
+
+.task-drawer-item.completed .task-drawer-item-text {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+.task-drawer-item.in-progress {
+    border-color: rgba(99, 189, 255, 0.3);
+    background: rgba(99, 189, 255, 0.08);
+    box-shadow: 0 0 12px rgba(99, 189, 255, 0.1);
+}
+
+.task-drawer-item.in-progress .task-drawer-item-text {
+    color: var(--accent);
+    font-weight: 500;
+}
+
 /* ==================== Input Area - No top border, button inside ==================== */
 .input-area {
     padding: 24px 24px 28px;
@@ -1701,6 +1988,8 @@ body {
     background: linear-gradient(180deg, transparent 0%, var(--bg-primary) 30%);
 }
 
+/* Old input-wrapper styles - commented out, replaced by new styles at bottom */
+/*
 .input-wrapper {
     display: flex;
     align-items: stretch;
@@ -1717,7 +2006,7 @@ body {
     background: var(--bg-input);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
-    padding: var(--input-padding-top) 70px 18px 70px;
+    padding: var(--input-padding-top) 70px 50px 56px;
     color: var(--text-primary);
     font-size: 15px;
     font-family: inherit;
@@ -1750,51 +2039,56 @@ body {
 .input-wrapper textarea::placeholder {
     color: var(--text-muted);
 }
+*/
 
 .attach-input {
     display: none;
 }
 
+/* Old attach-btn styles - commented out
 .attach-btn {
     position: absolute;
-    left: 12px;
-    bottom: 12px;
-    width: 40px;
-    height: 40px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    color: var(--text-secondary);
+    left: 18px;
+    bottom: 18px;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
-    box-shadow: var(--shadow-sm);
+    box-shadow: none;
+    z-index: 2;
 }
+*/
 
+/* Old attach-btn hover and attachment styles - commented out, replaced by new styles at bottom
 .attach-btn:hover {
-    transform: translateY(-1px);
-    color: var(--text-primary);
-    border-color: var(--accent);
-    box-shadow: 0 0 12px rgba(99, 189, 255, 0.25);
+    color: var(--accent);
+    transform: scale(1.1);
 }
 
 .attach-btn:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
-    box-shadow: none;
+    opacity: 0.4;
 }
 
 .attachment-preview {
-    position: relative;
-    width: 100%;
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 12px;
     margin: 0;
-    padding: 0 12px;
+    padding: 0;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     max-width: none;
+    z-index: 2;
 }
 
 .attachment-preview:empty {
@@ -1806,13 +2100,22 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 26px 6px 8px;
-    background: var(--bg-tertiary);
+    padding: 8px 28px 8px 10px;
+    background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     color: var(--text-primary);
     box-shadow: var(--shadow-sm);
-    max-width: 260px;
+    max-width: 220px;
+    min-width: 140px;
+}
+
+.attachment-item.uploading {
+    border-color: var(--accent-border);
+}
+
+.attachment-item.upload-failed {
+    border-color: var(--error);
 }
 
 .attachment-visual {
@@ -1847,6 +2150,26 @@ body {
     color: var(--text-secondary);
 }
 
+.file-icon-pdf {
+    color: #e53935;
+}
+
+.file-icon-ppt {
+    color: #ff6d00;
+}
+
+.file-icon-word {
+    color: #1976d2;
+}
+
+.file-icon-excel {
+    color: #43a047;
+}
+
+.file-icon-txt {
+    color: var(--text-muted);
+}
+
 .attachment-meta {
     display: flex;
     flex-direction: column;
@@ -1866,6 +2189,31 @@ body {
 .attachment-size {
     font-size: 11px;
     color: var(--text-muted);
+}
+
+.attachment-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.attachment-status.uploading {
+    color: var(--accent);
+}
+
+.attachment-status.upload-failed {
+    color: var(--error);
+}
+
+.attachment-status .upload-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
 }
 
 .attachment-remove {
@@ -1899,7 +2247,10 @@ body {
     box-shadow: none;
     transform: none;
 }
+*/
+/* End of old attachment and send-btn styles */
 
+/* Old send-btn and input-footer styles are now replaced by new styles at bottom
 .send-btn {
     position: absolute;
     right: 12px;
@@ -1984,6 +2335,7 @@ body {
     color: var(--text-muted);
     letter-spacing: 0.3px;
 }
+*/
 
 /* ==================== Modal ==================== */
 .modal {
@@ -2597,4 +2949,872 @@ body {
 /* Theme transition */
 * {
     transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* ==================== New Input Area Styles (Redesigned) ==================== */
+
+/* Attachment Preview Wrapper - Horizontal scrollable container */
+.attachment-preview-wrapper {
+    display: none;
+    position: relative;
+    max-width: 1000px;
+    margin: 0 auto 12px;
+    padding: 0;
+}
+
+.attachment-preview-wrapper.has-attachments {
+    display: block;
+}
+
+.attachment-preview {
+    position: relative;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 4px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-color) transparent;
+    left: auto;
+    right: auto;
+    top: auto;
+    margin: 0;
+    max-width: none;
+    z-index: auto;
+}
+
+.attachment-preview::-webkit-scrollbar {
+    height: 6px;
+}
+
+.attachment-preview::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.attachment-preview::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.attachment-preview:empty {
+    display: none;
+}
+
+/* Scroll button for attachments */
+.attachment-scroll-btn {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s ease;
+}
+
+.attachment-scroll-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.attachment-preview-wrapper.can-scroll .attachment-scroll-btn {
+    display: flex;
+}
+
+/* New Attachment Item Style - Card layout like the reference */
+.attachment-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 36px 12px 12px;
+    background: var(--bg-secondary);
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    box-shadow: none;
+    min-width: 180px;
+    max-width: 280px;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+.attachment-item:hover {
+    background: var(--bg-hover);
+}
+
+.attachment-item.uploading {
+    opacity: 0.8;
+}
+
+.attachment-item.upload-failed {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* File type icon container - Larger and colored */
+.attachment-visual {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Excel file icon background */
+.attachment-visual.file-excel {
+    background: rgba(67, 160, 71, 0.15);
+    border: 1px solid rgba(67, 160, 71, 0.3);
+}
+
+/* Word file icon background */
+.attachment-visual.file-word {
+    background: rgba(25, 118, 210, 0.15);
+    border: 1px solid rgba(25, 118, 210, 0.3);
+}
+
+/* PDF file icon background */
+.attachment-visual.file-pdf {
+    background: rgba(229, 57, 53, 0.15);
+    border: 1px solid rgba(229, 57, 53, 0.3);
+}
+
+/* Text file icon background */
+.attachment-visual.file-text {
+    background: rgba(148, 163, 184, 0.15);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* Image file icon background */
+.attachment-visual.file-image {
+    background: transparent;
+    border: 1px solid var(--border-color);
+}
+
+/* Default file icon background */
+.attachment-visual.file-default {
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid var(--border-color);
+}
+
+.attachment-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.attachment-file-icon {
+    width: 28px;
+    height: 28px;
+}
+
+.file-icon-pdf {
+    color: #e53935;
+}
+
+.file-icon-ppt {
+    color: #ff6d00;
+}
+
+.file-icon-word {
+    color: #1976d2;
+}
+
+.file-icon-excel {
+    color: #43a047;
+}
+
+.file-icon-txt {
+    color: var(--text-muted);
+}
+
+/* Attachment metadata */
+.attachment-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.attachment-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+    color: var(--text-primary);
+}
+
+.attachment-type-size {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.attachment-type-size .dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.attachment-size {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.attachment-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.attachment-status.uploading {
+    color: var(--accent);
+}
+
+.attachment-status.upload-failed {
+    color: var(--error);
+}
+
+.attachment-status .upload-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* Remove button */
+.attachment-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    z-index: 3;
+    opacity: 0;
+}
+
+.attachment-item:hover .attachment-remove {
+    opacity: 1;
+}
+
+.attachment-remove:hover {
+    background: var(--error);
+    color: white;
+}
+
+.attachment-remove:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+/* ==================== New Input Wrapper Styles ==================== */
+.input-wrapper {
+    display: flex;
+    flex-direction: column;
+    max-width: 1000px;
+    margin: 0 auto;
+    position: relative;
+    gap: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: all 0.3s ease;
+    box-shadow: var(--shadow-sm);
+}
+
+.input-wrapper:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-light);
+}
+
+[data-theme="dark"] .input-wrapper:focus-within {
+    box-shadow: 
+        0 0 0 4px var(--accent-light),
+        0 0 30px rgba(99, 189, 255, 0.15);
+}
+
+.input-wrapper textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 16px 16px 8px 16px;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    min-height: 48px;
+    max-height: 200px;
+    line-height: 1.5;
+    box-shadow: none;
+}
+
+.input-wrapper textarea:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.input-wrapper textarea::placeholder {
+    color: var(--text-muted);
+}
+
+/* Input Toolbar */
+.input-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: none;
+    background: transparent;
+}
+
+.toolbar-left,
+.toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.toolbar-btn {
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.toolbar-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.toolbar-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+/* Send button - Circular style */
+.send-btn {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+    border: none;
+    border-radius: 50%;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+    box-shadow: 0 0 15px rgba(99, 189, 255, 0.3);
+    position: relative;
+    right: auto;
+    bottom: auto;
+}
+
+[data-theme="light"] .send-btn {
+    box-shadow: var(--shadow-md);
+}
+
+.send-btn:hover:not(:disabled) {
+    transform: scale(1.05);
+    box-shadow: 0 0 25px rgba(99, 189, 255, 0.5);
+    filter: brightness(1.1);
+}
+
+.send-btn.stop {
+    background: linear-gradient(135deg, var(--error), #dc2626);
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+}
+
+.send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+/* Hide old input footer */
+.input-footer {
+    display: none;
+}
+
+/* Hide old attach button positioning */
+.attach-btn {
+    position: static;
+    left: auto;
+    bottom: auto;
+}
+
+/* ==================== Responsive Adjustments ==================== */
+@media (max-width: 768px) {
+    .attachment-item {
+        min-width: 160px;
+        max-width: 220px;
+        padding: 10px 32px 10px 10px;
+    }
+    
+    .attachment-visual {
+        width: 36px;
+        height: 36px;
+    }
+    
+    .attachment-file-icon {
+        width: 22px;
+        height: 22px;
+    }
+    
+    .attachment-name {
+        font-size: 12px;
+        max-width: 120px;
+    }
+    
+    .toolbar-btn {
+        width: 32px;
+        height: 32px;
+    }
+    
+    .send-btn {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+/* ==================== Tool Icon Colors ==================== */
+/* File processing tool icon - Orange */
+.tool-icon-file {
+    color: #f59e0b;
+}
+
+[data-theme="dark"] .tool-icon-file {
+    filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.4));
+}
+
+/* Web/Search tool icon - Blue */
+.tool-icon-web {
+    color: #3b82f6;
+}
+
+[data-theme="dark"] .tool-icon-web {
+    filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.4));
+}
+
+/* Code execution tool icon - Green */
+.tool-icon-code {
+    color: #10b981;
+}
+
+[data-theme="dark"] .tool-icon-code {
+    filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.4));
+}
+
+/* Image processing tool icon - Purple */
+.tool-icon-image {
+    color: #8b5cf6;
+}
+
+[data-theme="dark"] .tool-icon-image {
+    filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.4));
+}
+
+/* Task icon - Accent color */
+.tool-icon.task-icon {
+    color: var(--accent);
+}
+
+[data-theme="dark"] .tool-icon.task-icon {
+    filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+
+/* ==================== Right Sidebar - Tool Details ==================== */
+.tool-detail-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 480px;
+    max-width: 90vw;
+    height: 100vh;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border-color);
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+.tool-detail-sidebar.open {
+    transform: translateX(0);
+}
+
+/* 侧边栏打开时，主内容区域左移居中 */
+.main-content {
+    transition: margin-right 0.3s ease;
+}
+
+.tool-detail-sidebar.open ~ .main-content,
+body:has(.tool-detail-sidebar.open) .main-content {
+    margin-right: 480px;
+}
+
+.tool-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-primary);
+}
+
+.tool-detail-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.tool-detail-close {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.tool-detail-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.tool-detail-content {
+    flex: 1;
+    overflow-y: hidden;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tool-detail-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 100px;
+    max-height: calc(50vh - 60px);
+}
+
+.tool-detail-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.tool-detail-section-content {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 60px;
+}
+
+/* ==================== Tool Call Styles - No Border, Improved Hover ==================== */
+.tool-call {
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-md);
+    margin: 8px 0;
+    overflow: hidden;
+}
+
+.tool-call-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-radius: var(--radius-sm);
+    background: transparent;
+}
+
+.tool-call-header:hover {
+    background: var(--accent-light);
+}
+
+[data-theme="dark"] .tool-call-header:hover {
+    background: rgba(99, 189, 255, 0.08);
+}
+
+.tool-call .tool-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.tool-call .tool-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tool-call .tool-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.tool-call .tool-summary {
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tool-call .tool-status {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+}
+
+.tool-call .tool-status.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+}
+
+.tool-call .tool-status.pending {
+    background: rgba(99, 189, 255, 0.15);
+    color: var(--accent);
+}
+
+.tool-call .tool-status.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
+}
+
+/* Hide chevron for non-task tools at top level (detail shown in sidebar) */
+.message-text > .tool-call:not(.task-item) .tool-chevron {
+    display: none;
+}
+
+/* Hide tool-call-body for non-task tools at top level */
+.message-text > .tool-call:not(.task-item) .tool-call-body {
+    display: none;
+}
+
+/* Show chevron and body for tools inside task-children */
+.task-children .tool-call .tool-chevron {
+    display: block;
+}
+
+.task-children .tool-call .tool-call-body {
+    display: none;
+}
+
+.task-children .tool-call.expanded .tool-call-body {
+    display: block;
+}
+
+/* ==================== File Link Cards in AI Response ==================== */
+.message-file-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.file-link-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    color: inherit;
+    min-width: 180px;
+    max-width: 280px;
+}
+
+.file-link-card:hover {
+    background: var(--bg-hover);
+    transform: translateY(-1px);
+}
+
+[data-theme="dark"] .file-link-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.file-link-card .file-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.file-link-card .file-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.file-link-card .file-icon.pdf {
+    background: rgba(229, 57, 53, 0.15);
+    color: #e53935;
+}
+
+.file-link-card .file-icon.word {
+    background: rgba(25, 118, 210, 0.15);
+    color: #1976d2;
+}
+
+.file-link-card .file-icon.excel {
+    background: rgba(67, 160, 71, 0.15);
+    color: #43a047;
+}
+
+.file-link-card .file-icon.image {
+    background: rgba(139, 92, 246, 0.15);
+    color: #8b5cf6;
+}
+
+.file-link-card .file-icon.default {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.file-link-card .file-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.file-link-card .file-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-link-card .file-type {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* ==================== History Item Icon Update ==================== */
+.history-item-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.history-item-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.history-item-icon path {
+    fill: var(--text-muted);
+}
+
+.history-item.active .history-item-icon path {
+    fill: var(--accent);
+}
+
+@media (max-width: 768px) {
+    .tool-detail-sidebar {
+        width: 100%;
+        max-width: 100%;
+    }
+}
+
+/* ==================== Hide File Operation Messages ==================== */
+.file-operation {
+    display: none !important;
+}
+
+/* ==================== Responsive for Right Sidebar ==================== */
+@media (max-width: 1200px) {
+    body:has(.tool-detail-sidebar.open) .main-content {
+        margin-right: 400px;
+    }
+    
+    .tool-detail-sidebar {
+        width: 400px;
+    }
+}
+
+@media (max-width: 768px) {
+    body:has(.tool-detail-sidebar.open) .main-content {
+        margin-right: 0;
+    }
 }

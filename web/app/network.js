@@ -124,7 +124,8 @@ export class NetworkModule {
         const activeChatId = app.activeChatId;
         const activeChat = activeChatId ? app.chatHistory.find(chat => chat.id === activeChatId) : null;
         const preservedStatus = activeChat?.status || app.currentRunStatus || null;
-        app.ui.addLogMessage('warning', '当前会话已失效，请重新发送消息以创建新会话。');
+        // 不再显示会话失效警告，静默处理
+        // app.ui.addLogMessage('warning', '当前会话已失效，请重新发送消息以创建新会话。');
         app.sessionId = null;
         app.wsUrl = null;
         app.pendingRunStatusId = null;

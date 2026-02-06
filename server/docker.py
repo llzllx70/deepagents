@@ -12,6 +12,7 @@ from deepagents.backends.protocol import (
     FileDownloadResponse,
     FileOperationError,
     FileUploadResponse,
+    WriteResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
 
@@ -83,6 +84,26 @@ class DockerSandboxBackend(BaseSandbox):
 
         output = _combine_output(result.stdout, result.stderr)
         return ExecuteResponse(output=output, exit_code=result.returncode)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Write file content using docker cp to avoid oversized exec args."""
+        # Match FilesystemBackend semantics: refuse to overwrite existing files.
+        check = self.execute(f"test -e {shlex.quote(file_path)}")
+        if check.exit_code == 0:
+            return WriteResult(
+                error=(
+                    f"Cannot write to {file_path} because it already exists. "
+                    "Read and then make an edit, or write to a new path."
+                )
+            )
+        if check.exit_code not in (1,):
+            msg = check.output.strip() or "Unknown error checking file existence."
+            return WriteResult(error=f"Error writing file '{file_path}': {msg}")
+
+        response = self.upload_files([(file_path, content.encode("utf-8"))])[0]
+        if response.error:
+            return WriteResult(error=f"Error writing file '{file_path}': {response.error}")
+        return WriteResult(path=file_path, files_update=None)
 
     def pause(self) -> None:
         self._set_pause_state(paused=True)

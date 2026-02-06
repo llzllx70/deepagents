@@ -18,7 +18,72 @@ export class UiModule {
         const navType = navEntry?.type || 'navigate';
         const action = navType === 'reload' ? 'refresh' : 'load';
         app.network.logClient('page_load', { url: window.location.href, navType, action });
-        app.auth.applyLoggedOutState();
+        
+        // 尝试恢复登录状态（24小时内有效）
+        const restored = await this.tryRestoreAuth();
+        if (!restored) {
+            app.auth.applyLoggedOutState();
+        }
+    }
+    
+    /**
+     * 尝试恢复登录状态
+     * @returns {Promise<boolean>} 是否成功恢复
+     */
+    async tryRestoreAuth() {
+        const app = this.app;
+        try {
+            const savedToken = localStorage.getItem('deepagents_auth_token');
+            const savedTimestamp = localStorage.getItem('deepagents_auth_timestamp');
+            
+            if (!savedToken || !savedTimestamp) {
+                return false;
+            }
+            
+            // 检查是否在24小时内
+            const loginTime = parseInt(savedTimestamp, 10);
+            const now = Date.now();
+            const twentyFourHours = 24 * 60 * 60 * 1000;
+            
+            if (now - loginTime > twentyFourHours) {
+                // 登录已过期，清除保存的状态
+                localStorage.removeItem('deepagents_auth_token');
+                localStorage.removeItem('deepagents_auth_timestamp');
+                localStorage.removeItem('deepagents_session_id');
+                localStorage.removeItem('deepagents_username');
+                return false;
+            }
+            
+            // 恢复登录状态
+            app.authToken = savedToken;
+            
+            // 恢复用户名
+            const savedUsername = localStorage.getItem('deepagents_username');
+            if (savedUsername) {
+                app.currentUser = savedUsername;
+            }
+            
+            app.auth.applyLoggedInState();
+            
+            // 显示登录成功提示
+            app.auth.setLoginStatus('登录成功', 'success');
+            
+            // 加载用户配置和历史记录
+            await app.auth.loadUserConfig();
+            await app.history.loadHistory();
+            app.history.renderHistory();
+            
+            // 默认显示新对话页面，不恢复之前的会话
+            app.ui.updateConnectionStatus('disconnected');
+            app.elements.chatTitle.textContent = '新对话';
+            app.elements.welcomeMessage.style.display = 'flex';
+            
+            app.network.logClient('auth_restored', { fromStorage: true, username: savedUsername });
+            return true;
+        } catch (error) {
+            console.error('恢复登录状态失败:', error);
+            return false;
+        }
     }
 
     cacheElements() {
@@ -28,6 +93,7 @@ export class UiModule {
             newChatBtn: document.getElementById('newChatBtn'),
             sessionList: document.getElementById('sessionList'),
             historyList: document.getElementById('historyList'),
+            historyClearBtn: document.getElementById('historyClearBtn'),
             autoApproveToggle: document.getElementById('autoApproveToggle'),
             connectionStatus: document.getElementById('connectionStatus'),
             loginForm: document.getElementById('loginForm'),
@@ -51,7 +117,15 @@ export class UiModule {
             attachBtn: document.getElementById('attachBtn'),
             attachInput: document.getElementById('attachInput'),
             attachmentPreview: document.getElementById('attachmentPreview'),
+            attachmentPreviewWrapper: document.getElementById('attachmentPreviewWrapper'),
+            attachmentScrollRight: document.getElementById('attachmentScrollRight'),
             inputWrapper: document.querySelector('.input-wrapper'),
+
+            // Task drawer
+            taskDrawer: document.getElementById('taskDrawer'),
+            taskDrawerHeader: document.getElementById('taskDrawerHeader'),
+            taskDrawerBadge: document.getElementById('taskDrawerBadge'),
+            taskDrawerContent: document.getElementById('taskDrawerContent'),
 
             interruptModal: document.getElementById('interruptModal'),
             interruptModalBody: document.getElementById('interruptModalBody'),
@@ -66,6 +140,12 @@ export class UiModule {
             
             // Theme toggle
             themeToggle: document.getElementById('themeToggle'),
+            
+            // Tool detail sidebar
+            toolDetailSidebar: document.getElementById('toolDetailSidebar'),
+            toolDetailTitle: document.getElementById('toolDetailTitle'),
+            toolDetailContent: document.getElementById('toolDetailContent'),
+            toolDetailClose: document.getElementById('toolDetailClose'),
         };
         app.defaultInputPlaceholder = app.elements.userInput?.getAttribute('placeholder') || '';
     }
@@ -99,6 +179,13 @@ export class UiModule {
             app.elements.logoutBtn.addEventListener('click', () => app.auth.handleLogout());
         }
         
+        // 清空历史记录按钮事件
+        if (app.elements.historyClearBtn) {
+            app.elements.historyClearBtn.addEventListener('click', () => {
+                this.showClearHistoryConfirmModal();
+            });
+        }
+        
         // Theme toggle event
         if (app.elements.themeToggle) {
             app.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
@@ -114,13 +201,27 @@ export class UiModule {
         });
 
         app.elements.userInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                if (app.isRunning) {
-                    app.messages.cancelRun();
-                } else {
-                    app.messages.sendMessage();
+            if (e.key === 'Enter') {
+                if (e.ctrlKey || e.metaKey) {
+                    // Ctrl+Enter or Cmd+Enter: insert newline
+                    e.preventDefault();
+                    const textarea = app.elements.userInput;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const value = textarea.value;
+                    textarea.value = value.substring(0, start) + '\n' + value.substring(end);
+                    textarea.selectionStart = textarea.selectionEnd = start + 1;
+                    this.adjustTextareaHeight();
+                } else if (!e.shiftKey) {
+                    // Enter only (without Shift): send message
+                    e.preventDefault();
+                    if (app.isRunning) {
+                        app.messages.cancelRun();
+                    } else {
+                        app.messages.sendMessage();
+                    }
                 }
+                // Shift+Enter: default behavior (newline)
             }
         });
 
@@ -152,9 +253,16 @@ export class UiModule {
             app.elements.attachmentPreview.addEventListener('click', (event) => {
                 const button = event.target.closest('.attachment-remove');
                 if (!button) return;
-                const fileId = button.getAttribute('data-file-id');
+                const fileId = button.getAttribute('data-file-id') || button.getAttribute('data-temp-id');
                 if (!fileId) return;
                 this.handleAttachmentRemove(fileId);
+            });
+        }
+
+        // Attachment scroll button
+        if (app.elements.attachmentScrollRight && app.elements.attachmentPreview) {
+            app.elements.attachmentScrollRight.addEventListener('click', () => {
+                app.elements.attachmentPreview.scrollBy({ left: 200, behavior: 'smooth' });
             });
         }
 
@@ -188,10 +296,21 @@ export class UiModule {
                 this.hideDeleteConfirmModal();
             });
 
-            app.elements.confirmDeleteBtn?.addEventListener('click', () => {
+            app.elements.confirmDeleteBtn?.addEventListener('click', async () => {
                 if (this.pendingDeleteChatId) {
-                    app.history.deleteChat(this.pendingDeleteChatId);
+                    if (this.pendingDeleteChatId === '__CLEAR_ALL__') {
+                        // 清空所有历史记录
+                        await app.history.clearAllHistory();
+                    } else {
+                        // 删除单条记录
+                        app.history.deleteChat(this.pendingDeleteChatId);
+                    }
                     this.hideDeleteConfirmModal();
+                    // 恢复默认文案
+                    const confirmText = app.elements.deleteConfirmModal?.querySelector('.confirm-text');
+                    if (confirmText) {
+                        confirmText.textContent = '确定要删除这条对话记录吗？此操作无法撤销。';
+                    }
                 }
             });
 
@@ -260,12 +379,42 @@ export class UiModule {
             e.preventDefault();
             window.open(href, '_blank', 'noopener,noreferrer');
         });
+
+        // Task drawer toggle
+        if (app.elements.taskDrawerHeader) {
+            app.elements.taskDrawerHeader.addEventListener('click', () => {
+                app.elements.taskDrawer?.classList.toggle('expanded');
+            });
+        }
+        
+        // Tool detail sidebar close
+        if (app.elements.toolDetailClose) {
+            app.elements.toolDetailClose.addEventListener('click', () => {
+                this.closeToolDetailSidebar();
+            });
+        }
+        
+        // 点击空白区域关闭右侧工具详情侧边栏
+        document.addEventListener('click', (e) => {
+            const sidebar = app.elements.toolDetailSidebar;
+            if (!sidebar || !sidebar.classList.contains('open')) return;
+            
+            // 如果点击的是侧边栏内部，不关闭
+            if (sidebar.contains(e.target)) return;
+            
+            // 如果点击的是工具卡片（用于打开侧边栏），不关闭
+            if (e.target.closest('.tool-call')) return;
+            
+            // 关闭侧边栏
+            this.closeToolDetailSidebar();
+        });
     }
 
     bindHistoryExpandableEntries(container) {
         if (!container) return;
         if (container.dataset.expandDelegateBound === '1') return;
         container.dataset.expandDelegateBound = '1';
+        const app = this.app;
         // Use event delegation so history entries work even after HTML serialization.
         container.addEventListener('click', (event) => {
             const toolHeader = event.target.closest('.tool-call-header');
@@ -273,7 +422,27 @@ export class UiModule {
                 const wrapper = toolHeader.closest('.tool-call');
                 if (wrapper && wrapper.querySelector('.tool-call-body')) {
                     event.stopPropagation();
-                    wrapper.classList.toggle('expanded');
+                    const isTask = wrapper.classList.contains('task-item');
+                    const isInsideTask = wrapper.closest('.task-children') !== null;
+                    
+                    // 获取工具信息
+                    const toolName = wrapper.querySelector('.tool-name')?.textContent || '工具详情';
+                    const argsContent = wrapper.querySelector('.tool-args-content')?.textContent || '{}';
+                    const resultContent = wrapper.querySelector('.tool-result-content')?.textContent || '';
+                    let args = {};
+                    try {
+                        args = JSON.parse(argsContent);
+                    } catch (e) {
+                        // ignore parse error
+                    }
+                    
+                    if (isTask) {
+                        // 任务列表工具仅展开/收起，不打开右侧边栏
+                        wrapper.classList.toggle('expanded');
+                    } else {
+                        // 非任务工具点击只在右侧边栏查看详情，不展开/收起
+                        this.openToolDetailSidebar(toolName, args, resultContent);
+                    }
                 }
                 return;
             }
@@ -297,6 +466,30 @@ export class UiModule {
     hideDeleteConfirmModal() {
         this.pendingDeleteChatId = null;
         this.app.elements.deleteConfirmModal?.classList.remove('active');
+        // 恢复默认文案
+        const confirmText = this.app.elements.deleteConfirmModal?.querySelector('.confirm-text');
+        if (confirmText) {
+            confirmText.textContent = '确定要删除这条对话记录吗？此操作无法撤销。';
+        }
+    }
+
+    showClearHistoryConfirmModal() {
+        const app = this.app;
+        if (app.chatHistory.length === 0) {
+            return;
+        }
+        // 复用删除确认模态框，但修改文案
+        const modal = app.elements.deleteConfirmModal;
+        if (!modal) return;
+        
+        const confirmText = modal.querySelector('.confirm-text');
+        if (confirmText) {
+            confirmText.textContent = `确定要清空所有 ${app.chatHistory.length} 条历史记录吗？此操作无法撤销。`;
+        }
+        
+        // 标记为清空模式
+        this.pendingDeleteChatId = '__CLEAR_ALL__';
+        modal.classList.add('active');
     }
 
     createMessageElement(type) {
@@ -390,7 +583,8 @@ export class UiModule {
                 assistantSegmentElement: null,
                 assistantSegmentText: '',
                 toolCalls: new Map(),
-                todoState: null
+                todoState: null,
+                currentTaskElement: null
             };
             app.runStates.set(runId, state);
         } else if (!state.chatId) {
@@ -515,6 +709,16 @@ export class UiModule {
         const state = app.runStates.get(runId);
         if (state && state.messageElement) {
             this.hideThinkingIndicator(state.messageElement);
+            
+            // 移除最后一条任务列表工具卡片（如果它是空的或仅有标题）
+            if (state.currentTaskElement && state.currentTaskElement.parentElement) {
+                const taskChildren = state.currentTaskElement.querySelector('.task-children');
+                const hasChildren = taskChildren && taskChildren.children.length > 0;
+                // 如果最后一个任务列表没有子工具，则移除它
+                if (!hasChildren) {
+                    state.currentTaskElement.remove();
+                }
+            }
         }
 
         // 关闭当前助手文本段落
@@ -610,40 +814,202 @@ export class UiModule {
         if (app.elements.attachBtn) {
             app.elements.attachBtn.disabled = true;
         }
+        
+        // 为每个文件创建上传中的预览卡片
+        const tempIds = [];
+        files.forEach((file, index) => {
+            const tempId = `temp_${Date.now()}_${index}`;
+            tempIds.push(tempId);
+            this.addUploadingPreview({
+                tempId,
+                filename: file.name,
+                contentType: file.type || '',
+                file: file,
+            });
+        });
+        
         try {
             await app.network.ensureSession();
             const result = await app.network.uploadAttachments(files);
             const uploaded = result?.files || [];
-            const success = uploaded.filter(item => item.status === 'ok');
-            const failed = uploaded.filter(item => item.status !== 'ok');
-            if (success.length) {
-                const names = success.map(item => item.filename).join('，');
-                app.ui.addLogMessage('info', `附件上传成功：${names}`);
-            }
+            
             uploaded.forEach((item, index) => {
-                if (item.status !== 'ok') return;
+                const tempId = tempIds[index];
                 const sourceFile = files[index];
-                this.addAttachmentPreview({
-                    fileId: item.file_id,
-                    filename: item.filename,
-                    contentType: item.content_type || sourceFile?.type || '',
-                    size: item.size,
-                    file: sourceFile || null,
-                });
+                
+                if (item.status === 'ok') {
+                    // 上传成功，更新卡片状态
+                    this.updateUploadPreviewSuccess({
+                        tempId,
+                        fileId: item.file_id,
+                        filename: item.filename,
+                        contentType: item.content_type || sourceFile?.type || '',
+                        size: item.size,
+                        file: sourceFile || null,
+                    });
+                } else {
+                    // 上传失败，更新卡片状态
+                    this.updateUploadPreviewFailed(tempId, item.error || '上传失败');
+                }
             });
-            if (failed.length) {
-                failed.forEach(item => {
-                    const msg = item.error || '上传失败';
-                    app.ui.addLogMessage('error', `附件上传失败：${item.filename || '未知文件'}（${msg}）`);
-                });
-            }
         } catch (error) {
-            app.ui.addLogMessage('error', `附件上传失败：${error.message || error}`);
+            // 所有文件上传失败
+            tempIds.forEach(tempId => {
+                this.updateUploadPreviewFailed(tempId, error.message || '上传失败');
+            });
         } finally {
             if (app.elements.attachBtn) {
                 app.elements.attachBtn.disabled = false;
             }
         }
+    }
+    
+    addUploadingPreview({ tempId, filename, contentType, file }) {
+        const app = this.app;
+        if (!app.elements.attachmentPreview) return;
+        
+        const item = document.createElement('div');
+        item.className = 'attachment-item uploading';
+        item.setAttribute('data-temp-id', tempId);
+        item.setAttribute('data-filename', filename || '');
+        
+        const visual = document.createElement('div');
+        visual.className = 'attachment-visual ' + this.getFileTypeClass(filename, contentType);
+        
+        let previewUrl = null;
+        const isImage = this.isImageAttachment(contentType, filename);
+        if (isImage && file instanceof File) {
+            previewUrl = URL.createObjectURL(file);
+            visual.classList.add('file-image');
+            const img = document.createElement('img');
+            img.className = 'attachment-thumb';
+            img.src = previewUrl;
+            img.alt = filename || 'image';
+            visual.appendChild(img);
+        } else {
+            const iconHtml = this.getFileTypeIcon(filename, contentType);
+            visual.innerHTML = iconHtml;
+        }
+        
+        const meta = document.createElement('div');
+        meta.className = 'attachment-meta';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'attachment-name';
+        nameEl.textContent = filename || '未命名文件';
+        meta.appendChild(nameEl);
+        
+        const statusEl = document.createElement('div');
+        statusEl.className = 'attachment-status uploading';
+        statusEl.innerHTML = '<span class="upload-spinner"></span><span>上传中...</span>';
+        meta.appendChild(statusEl);
+        
+        item.appendChild(visual);
+        item.appendChild(meta);
+        app.elements.attachmentPreview.appendChild(item);
+        
+        // 存储临时预览信息
+        this.attachmentItems.set(tempId, {
+            element: item,
+            previewUrl,
+            filename: filename || '',
+            contentType: contentType || '',
+            size: 0,
+            isUploading: true,
+        });
+        this.updateAttachmentLayout();
+    }
+    
+    updateUploadPreviewSuccess({ tempId, fileId, filename, contentType, size, file }) {
+        const app = this.app;
+        const record = this.attachmentItems.get(tempId);
+        if (!record) return;
+        
+        const item = record.element;
+        item.classList.remove('uploading');
+        item.removeAttribute('data-temp-id');
+        item.setAttribute('data-file-id', fileId);
+        item.setAttribute('data-filename', filename || '');
+        
+        // 更新状态显示为文件类型和大小
+        const statusEl = item.querySelector('.attachment-status');
+        if (statusEl) {
+            statusEl.classList.remove('uploading');
+            const fileTypeLabel = this.getFileTypeLabel(filename, contentType);
+            const sizeLabel = app.utils.formatFileSize(size);
+            
+            if (fileTypeLabel && sizeLabel) {
+                statusEl.className = 'attachment-type-size';
+                statusEl.innerHTML = `<span>${fileTypeLabel}</span><span class="dot"></span><span>${sizeLabel}</span>`;
+            } else if (fileTypeLabel) {
+                statusEl.className = 'attachment-type-size';
+                statusEl.innerHTML = `<span>${fileTypeLabel}</span>`;
+            } else if (sizeLabel) {
+                statusEl.className = 'attachment-size';
+                statusEl.textContent = sizeLabel;
+            } else {
+                statusEl.remove();
+            }
+        }
+        
+        // 添加删除按钮
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'attachment-remove';
+        removeBtn.setAttribute('data-file-id', fileId);
+        removeBtn.setAttribute('aria-label', '删除附件');
+        removeBtn.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        `;
+        item.appendChild(removeBtn);
+        
+        // 更新记录
+        this.attachmentItems.delete(tempId);
+        this.attachmentItems.set(fileId, {
+            element: item,
+            previewUrl: record.previewUrl,
+            filename: filename || '',
+            contentType: contentType || '',
+            size: size || 0,
+            isUploading: false,
+        });
+    }
+    
+    updateUploadPreviewFailed(tempId, errorMsg) {
+        const record = this.attachmentItems.get(tempId);
+        if (!record) return;
+        
+        const item = record.element;
+        item.classList.remove('uploading');
+        item.classList.add('upload-failed');
+        
+        // 更新状态显示为失败信息
+        const statusEl = item.querySelector('.attachment-status');
+        if (statusEl) {
+            statusEl.classList.remove('uploading');
+            statusEl.classList.add('upload-failed');
+            statusEl.innerHTML = '上传失败';
+        }
+        
+        // 添加删除按钮（用于移除失败的卡片）
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'attachment-remove';
+        removeBtn.setAttribute('data-temp-id', tempId);
+        removeBtn.setAttribute('aria-label', '移除');
+        removeBtn.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        `;
+        item.appendChild(removeBtn);
+        
+        // 更新记录状态
+        record.isUploading = false;
+        record.uploadFailed = true;
     }
 
     isImageAttachment(contentType, filename) {
@@ -663,7 +1029,7 @@ export class UiModule {
         item.setAttribute('data-filename', filename || '');
 
         const visual = document.createElement('div');
-        visual.className = 'attachment-visual';
+        visual.className = 'attachment-visual ' + this.getFileTypeClass(filename, contentType);
 
         let previewUrl = null;
         const isImage = this.isImageAttachment(contentType, filename);
@@ -675,19 +1041,8 @@ export class UiModule {
             img.alt = filename || 'image';
             visual.appendChild(img);
         } else {
-            const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            icon.setAttribute('viewBox', '0 0 24 24');
-            icon.setAttribute('fill', 'none');
-            icon.setAttribute('stroke', 'currentColor');
-            icon.setAttribute('stroke-width', '2');
-            icon.setAttribute('stroke-linecap', 'round');
-            icon.setAttribute('stroke-linejoin', 'round');
-            icon.classList.add('attachment-file-icon');
-            icon.innerHTML = `
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-            `;
-            visual.appendChild(icon);
+            const iconHtml = this.getFileTypeIcon(filename, contentType);
+            visual.innerHTML = iconHtml;
         }
 
         const removeBtn = document.createElement('button');
@@ -709,12 +1064,22 @@ export class UiModule {
         nameEl.textContent = filename || '未命名文件';
         meta.appendChild(nameEl);
 
+        // 显示文件类型和大小
+        const fileTypeLabel = this.getFileTypeLabel(filename, contentType);
         const sizeLabel = app.utils.formatFileSize(size);
-        if (sizeLabel) {
-            const sizeEl = document.createElement('div');
-            sizeEl.className = 'attachment-size';
-            sizeEl.textContent = sizeLabel;
-            meta.appendChild(sizeEl);
+        
+        if (fileTypeLabel || sizeLabel) {
+            const typeSizeEl = document.createElement('div');
+            typeSizeEl.className = 'attachment-type-size';
+            
+            if (fileTypeLabel && sizeLabel) {
+                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span><span class="dot"></span><span>${sizeLabel}</span>`;
+            } else if (fileTypeLabel) {
+                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span>`;
+            } else {
+                typeSizeEl.textContent = sizeLabel;
+            }
+            meta.appendChild(typeSizeEl);
         }
 
         item.appendChild(visual);
@@ -736,14 +1101,18 @@ export class UiModule {
         const app = this.app;
         const record = this.attachmentItems.get(fileId);
         if (!record) return;
+        
+        // 如果是上传失败的卡片（临时ID），直接移除
+        if (fileId.startsWith('temp_') || record.uploadFailed) {
+            this.removeAttachmentPreview(fileId);
+            return;
+        }
+        
         const removeBtn = record.element.querySelector('.attachment-remove');
         if (removeBtn) removeBtn.disabled = true;
         try {
             await app.network.deleteAttachment(fileId);
             this.removeAttachmentPreview(fileId);
-            if (record.filename) {
-                app.ui.addLogMessage('info', `附件已删除：${record.filename}`);
-            }
         } catch (error) {
             if (removeBtn) removeBtn.disabled = false;
             app.ui.addLogMessage('error', `附件删除失败：${error.message || error}`);
@@ -771,16 +1140,38 @@ export class UiModule {
     updateAttachmentLayout() {
         const app = this.app;
         const preview = app.elements.attachmentPreview;
+        const previewWrapper = app.elements.attachmentPreviewWrapper;
+        const scrollBtn = app.elements.attachmentScrollRight;
         const inputWrapper = app.elements.inputWrapper;
-        if (!preview || !inputWrapper) return;
+        
+        if (!preview) return;
+        
         const hasAttachments = preview.children.length > 0;
-        inputWrapper.style.removeProperty('--input-padding-top');
-        inputWrapper.classList.toggle('has-attachments', hasAttachments);
+        
+        // Update wrapper visibility
+        if (previewWrapper) {
+            previewWrapper.classList.toggle('has-attachments', hasAttachments);
+        }
+        
+        if (inputWrapper) {
+            inputWrapper.style.removeProperty('--input-padding-top');
+            inputWrapper.classList.toggle('has-attachments', hasAttachments);
+        }
+        
+        // Check if scrolling is needed and show/hide scroll button
+        if (previewWrapper && scrollBtn) {
+            const canScroll = preview.scrollWidth > preview.clientWidth;
+            previewWrapper.classList.toggle('can-scroll', canScroll);
+        }
     }
 
     getAttachmentPayloads() {
         const payloads = [];
         for (const [fileId, record] of this.attachmentItems.entries()) {
+            // 跳过上传中或上传失败的附件
+            if (record.isUploading || record.uploadFailed || fileId.startsWith('temp_')) {
+                continue;
+            }
             payloads.push({
                 fileId,
                 filename: record.filename,
@@ -933,6 +1324,7 @@ export class UiModule {
         app.currentToolCalls.clear();
         app.todoState = null;
         this.clearAttachmentPreviews();
+        this.clearTaskDrawer();
     }
 
     scrollToBottom() {
@@ -1006,10 +1398,9 @@ export class UiModule {
 
             const header = document.createElement('div');
             header.className = 'tool-call-header';
+            const iconSvg = this.getToolIconSvg(name, false);
             header.innerHTML = `
-                <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                </svg>
+                ${iconSvg}
                 <div class="tool-title">
                     <span class="tool-name">${app.utils.escapeHtml(name)}</span>
                     <span class="tool-summary"></span>
@@ -1073,6 +1464,68 @@ export class UiModule {
     }
 
     /**
+     * 根据工具名称获取对应的图标SVG
+     * @param {string} name - 工具名称
+     * @param {boolean} isTask - 是否为任务类型
+     * @returns {string} SVG图标HTML
+     */
+    getToolIconSvg(name, isTask = false) {
+        // 任务图标
+        if (isTask) {
+            return `<svg class="tool-icon task-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 11l3 3L22 4"></path>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+            </svg>`;
+        }
+
+        // 文件处理类工具
+        const fileTools = ['file', 'read_file', 'write_file', 'edit_file', 'create_file', 'delete_file', 'move_file', 'copy_file', 'list_files', 'file_operation'];
+        if (fileTools.some(t => name.toLowerCase().includes(t.toLowerCase()))) {
+            return `<svg class="tool-icon tool-icon-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>`;
+        }
+
+        // 网页搜索/浏览器类工具
+        const webTools = ['search', 'browse', 'browser', 'web', 'navigate', 'click', 'scroll', 'input', 'url', 'http', 'fetch', 'request'];
+        if (webTools.some(t => name.toLowerCase().includes(t.toLowerCase()))) {
+            return `<svg class="tool-icon tool-icon-web" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>`;
+        }
+
+        // 代码执行类工具
+        const codeTools = ['shell', 'exec', 'execute', 'run', 'code', 'script', 'command', 'terminal', 'python', 'node', 'bash'];
+        if (codeTools.some(t => name.toLowerCase().includes(t.toLowerCase()))) {
+            return `<svg class="tool-icon tool-icon-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+            </svg>`;
+        }
+
+        // 图片处理类工具
+        const imageTools = ['image', 'picture', 'photo', 'screenshot', 'vision', 'view', 'display', 'render', 'draw', 'canvas'];
+        if (imageTools.some(t => name.toLowerCase().includes(t.toLowerCase()))) {
+            return `<svg class="tool-icon tool-icon-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>`;
+        }
+
+        // 默认工具图标
+        return `<svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+        </svg>`;
+    }
+
+    /**
      * 创建工具调用元素
      * @param {Object} options - 工具调用选项
      * @param {string} options.name - 工具名称
@@ -1082,50 +1535,85 @@ export class UiModule {
      * @param {Object|null} options.todoState - TODO 状态
      * @param {string|null} options.displayTitle - 显示标题
      * @param {string|null} options.displayContent - 显示内容
+     * @param {HTMLElement|null} options.parentContainer - 父容器（用于层级展示）
      * @returns {HTMLElement} 创建的工具调用元素
      */
-    createToolCallElement({ name, args, id, status, todoState, displayTitle, displayContent }) {
+    createToolCallElement({ name, args, id, status, todoState, displayTitle, displayContent, parentContainer }) {
         const app = this.app;
+        // 任务列表工具包括 task 和 write_todos
+        const isTask = name === 'task' || name === 'write_todos';
+        
         const toolElement = document.createElement('div');
-        toolElement.className = 'tool-call';
+        // 任务默认收起，仅显示任务名称
+        toolElement.className = isTask ? 'tool-call task-item' : 'tool-call';
         if (id) {
             toolElement.setAttribute('data-tool-id', id);
         }
 
         const { title, content } = app.utils.formatToolDisplay(name, args, todoState, displayTitle, displayContent);
 
+        // 根据工具类型获取对应图标
+        const iconSvg = this.getToolIconSvg(name, isTask);
+
         const header = document.createElement('div');
         header.className = 'tool-call-header';
-        header.innerHTML = `
-            <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-            </svg>
-            <div class="tool-title">
-                <span class="tool-name">${app.utils.escapeHtml(title)}</span>
-                <span class="tool-summary">${app.utils.escapeHtml(content)}</span>
-            </div>
-            <span class="tool-status ${status || 'pending'}">${this.getStatusLabel(status)}</span>
-            <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-        `;
+        
+        // 任务列表使用简化的header，向右箭头表示可展开
+        if (isTask) {
+            header.innerHTML = `
+                <svg class="tool-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="9 6 15 12 9 18"></polyline>
+                </svg>
+                ${iconSvg}
+                <div class="tool-title">
+                    <span class="tool-name">${app.utils.escapeHtml(title)}</span>
+                </div>
+            `;
+        } else {
+            header.innerHTML = `
+                ${iconSvg}
+                <div class="tool-title">
+                    <span class="tool-name">${app.utils.escapeHtml(title)}</span>
+                    <span class="tool-summary">${app.utils.escapeHtml(content)}</span>
+                </div>
+                <span class="tool-status ${status || 'pending'}">${this.getStatusLabel(status)}</span>
+                <svg class="tool-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+            `;
+        }
 
         const body = document.createElement('div');
         body.className = 'tool-call-body';
-        body.innerHTML = `
-            <div class="tool-args">
-                <div class="tool-args-label">参数</div>
-                <div class="tool-args-content">${app.utils.escapeHtml(JSON.stringify(args, null, 2))}</div>
-            </div>
-            <div class="tool-result">
-                <div class="tool-result-label">结果</div>
-                <div class="tool-result-content">等待中...</div>
-            </div>
-        `;
+        
+        if (isTask) {
+            // 任务的body包含子工具容器
+            body.innerHTML = `
+                <div class="task-children"></div>
+            `;
+        } else {
+            body.innerHTML = `
+                <div class="tool-args">
+                    <div class="tool-args-label">参数</div>
+                    <div class="tool-args-content">${app.utils.escapeHtml(JSON.stringify(args, null, 2))}</div>
+                </div>
+                <div class="tool-result">
+                    <div class="tool-result-label">结果</div>
+                    <div class="tool-result-content">等待中...</div>
+                </div>
+            `;
+        }
 
         header.addEventListener('click', (event) => {
             event.stopPropagation();
-            toolElement.classList.toggle('expanded');
+            if (isTask) {
+                // 任务列表工具仅展开/收起，不打开右侧边栏
+                toolElement.classList.toggle('expanded');
+            } else {
+                // 非任务工具点击只在右侧边栏查看详情，不展开/收起
+                const resultContent = toolElement.querySelector('.tool-result-content')?.textContent || '';
+                this.openToolDetailSidebar(title, args, resultContent);
+            }
         });
 
         toolElement.appendChild(header);
@@ -1573,5 +2061,384 @@ export class UiModule {
         }
 
         return statusElement;
+    }
+
+    /**
+     * 更新任务抽屉内容
+     * @param {Array} todos - 任务列表
+     * @param {Array|null} prevTodos - 上一次的任务列表
+     */
+    updateTaskDrawer(todos, prevTodos = null) {
+        const app = this.app;
+        const drawer = app.elements.taskDrawer;
+        const content = app.elements.taskDrawerContent;
+        const badge = app.elements.taskDrawerBadge;
+        
+        if (!drawer || !content) return;
+        
+        if (!todos || !todos.length) {
+            drawer.classList.remove('visible');
+            return;
+        }
+        
+        // 显示抽屉
+        drawer.classList.add('visible');
+        
+        // 计算进度
+        const counts = app.utils.countTodosByStatus(todos);
+        const total = counts.pending + counts.in_progress + counts.completed;
+        
+        // 更新徽章
+        if (badge) {
+            badge.textContent = `${counts.completed}/${total}`;
+            badge.classList.add('visible');
+        }
+        
+        // 生成任务列表HTML
+        const itemsHtml = todos.map(todo => {
+            const statusClass = todo.status === 'completed' ? 'completed' : 
+                               (todo.status === 'in_progress' ? 'in-progress' : '');
+            const isChecked = todo.status === 'completed' ? 'checked' : '';
+            return `
+                <div class="task-drawer-item ${statusClass}">
+                    <input type="checkbox" class="task-drawer-item-checkbox" ${isChecked} disabled>
+                    <span class="task-drawer-item-text">${app.utils.escapeHtml(todo.content)}</span>
+                </div>
+            `;
+        }).join('');
+        
+        content.innerHTML = `<div class="task-drawer-items">${itemsHtml}</div>`;
+    }
+
+    /**
+     * 清空任务抽屉
+     */
+    clearTaskDrawer() {
+        const app = this.app;
+        const drawer = app.elements.taskDrawer;
+        const content = app.elements.taskDrawerContent;
+        const badge = app.elements.taskDrawerBadge;
+        
+        if (drawer) {
+            drawer.classList.remove('visible', 'expanded');
+        }
+        if (content) {
+            content.innerHTML = '';
+        }
+        if (badge) {
+            badge.classList.remove('visible');
+            badge.textContent = '';
+        }
+    }
+
+    /**
+     * 根据文件名和类型获取对应的图标
+     * @param {string} filename - 文件名
+     * @param {string} contentType - 文件MIME类型
+     * @returns {string} SVG图标HTML
+     */
+    getFileTypeIcon(filename, contentType) {
+        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
+        const type = (contentType || '').toLowerCase();
+        
+        // PDF文件
+        if (ext === 'pdf' || type === 'application/pdf') {
+            return `<svg class="attachment-file-icon file-icon-pdf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <text x="12" y="17" text-anchor="middle" font-size="6" font-weight="bold" fill="currentColor" stroke="none">PDF</text>
+            </svg>`;
+        }
+        
+        // PPT/PPTX文件
+        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
+            return `<svg class="attachment-file-icon file-icon-ppt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <text x="12" y="17" text-anchor="middle" font-size="5" font-weight="bold" fill="currentColor" stroke="none">PPT</text>
+            </svg>`;
+        }
+        
+        // Word文件
+        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
+            return `<svg class="attachment-file-icon file-icon-word" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <text x="12" y="17" text-anchor="middle" font-size="4.5" font-weight="bold" fill="currentColor" stroke="none">DOC</text>
+            </svg>`;
+        }
+        
+        // Excel文件
+        if (ext === 'xls' || ext === 'xlsx' || ext === 'csv' || type.includes('spreadsheet') || type.includes('excel')) {
+            return `<svg class="attachment-file-icon file-icon-excel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <text x="12" y="17" text-anchor="middle" font-size="5" font-weight="bold" fill="currentColor" stroke="none">XLS</text>
+            </svg>`;
+        }
+        
+        // TXT文件
+        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
+            return `<svg class="attachment-file-icon file-icon-txt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="8" y1="13" x2="16" y2="13"></line>
+                <line x1="8" y1="17" x2="14" y2="17"></line>
+            </svg>`;
+        }
+        
+        // 通用文件图标
+        return `<svg class="attachment-file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+        </svg>`;
+    }
+
+    /**
+     * 根据文件名和类型获取对应的CSS类名
+     * @param {string} filename - 文件名
+     * @param {string} contentType - 文件MIME类型
+     * @returns {string} CSS类名
+     */
+    getFileTypeClass(filename, contentType) {
+        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
+        const type = (contentType || '').toLowerCase();
+        
+        if (ext === 'pdf' || type === 'application/pdf') {
+            return 'file-pdf';
+        }
+        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
+            return 'file-ppt';
+        }
+        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
+            return 'file-word';
+        }
+        if (ext === 'xls' || ext === 'xlsx' || ext === 'csv' || type.includes('spreadsheet') || type.includes('excel')) {
+            return 'file-excel';
+        }
+        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
+            return 'file-text';
+        }
+        if (this.isImageAttachment(contentType, filename)) {
+            return 'file-image';
+        }
+        return 'file-default';
+    }
+
+    /**
+     * 根据文件名和类型获取文件类型标签
+     * @param {string} filename - 文件名
+     * @param {string} contentType - 文件MIME类型
+     * @returns {string} 文件类型标签
+     */
+    getFileTypeLabel(filename, contentType) {
+        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
+        const type = (contentType || '').toLowerCase();
+        
+        if (ext === 'pdf' || type === 'application/pdf') {
+            return 'PDF';
+        }
+        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
+            return '演示文稿';
+        }
+        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
+            return '文档';
+        }
+        if (ext === 'xls' || ext === 'xlsx' || type.includes('spreadsheet') || type.includes('excel')) {
+            return '电子表格';
+        }
+        if (ext === 'csv') {
+            return 'CSV';
+        }
+        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
+            return '文本';
+        }
+        if (ext === 'json' || ext === 'jsonl') {
+            return 'JSON';
+        }
+        if (ext === 'yaml' || ext === 'yml') {
+            return 'YAML';
+        }
+        if (ext === 'log') {
+            return '日志';
+        }
+        if (this.isImageAttachment(contentType, filename)) {
+            return '图片';
+        }
+        return '文件';
+    }
+    
+    /**
+     * 打开工具详情侧边栏
+     * @param {string} title - 工具名称
+     * @param {Object} args - 工具参数
+     * @param {string} result - 工具结果
+     */
+    openToolDetailSidebar(title, args, result) {
+        const app = this.app;
+        const sidebar = app.elements.toolDetailSidebar;
+        const titleEl = app.elements.toolDetailTitle;
+        const contentEl = app.elements.toolDetailContent;
+        
+        if (!sidebar || !contentEl) return;
+        
+        if (titleEl) {
+            titleEl.textContent = title || '工具详情';
+        }
+        
+        let html = '';
+        
+        // 参数部分
+        if (args && Object.keys(args).length > 0) {
+            html += `
+                <div class="tool-detail-section">
+                    <div class="tool-detail-section-title">参数</div>
+                    <div class="tool-detail-section-content">${app.utils.escapeHtml(JSON.stringify(args, null, 2))}</div>
+                </div>
+            `;
+        }
+        
+        // 结果部分
+        if (result) {
+            html += `
+                <div class="tool-detail-section">
+                    <div class="tool-detail-section-title">结果</div>
+                    <div class="tool-detail-section-content">${app.utils.escapeHtml(result)}</div>
+                </div>
+            `;
+        }
+        
+        contentEl.innerHTML = html || '<p style="color: var(--text-muted)">暂无详情</p>';
+        sidebar.classList.add('open');
+    }
+    
+    /**
+     * 关闭工具详情侧边栏
+     */
+    closeToolDetailSidebar() {
+        const sidebar = this.app.elements.toolDetailSidebar;
+        if (sidebar) {
+            sidebar.classList.remove('open');
+        }
+    }
+    
+    /**
+     * 解析AI回复中的文件链接
+     * @param {string} content - 消息内容
+     * @returns {Array} 文件链接数组
+     */
+    extractFileLinks(content) {
+        if (!content) return [];
+        
+        const fileLinks = [];
+        // 匹配常见文件链接模式
+        const patterns = [
+            // Markdown链接: [filename](url)
+            /\[([^\]]+)\]\((https?:\/\/[^)]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|zip|rar|png|jpg|jpeg|gif|svg))\)/gi,
+            // 纯 URL
+            /(https?:\/\/[^\s<>"]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|zip|rar|png|jpg|jpeg|gif|svg))/gi
+        ];
+        
+        // 匹配 Markdown 链接
+        const mdPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi;
+        let match;
+        while ((match = mdPattern.exec(content)) !== null) {
+            const filename = match[1];
+            const url = match[2];
+            // 检查是否是文件链接
+            if (this.isFileUrl(url)) {
+                fileLinks.push({ filename, url });
+            }
+        }
+        
+        return fileLinks;
+    }
+    
+    /**
+     * 检查URL是否是文件链接
+     * @param {string} url - URL
+     * @returns {boolean}
+     */
+    isFileUrl(url) {
+        if (!url) return false;
+        const fileExtensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'csv', 'json', 'zip', 'rar', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'mp3', 'mp4', 'wav'];
+        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
+        return fileExtensions.includes(ext);
+    }
+    
+    /**
+     * 根据URL获取文件类型图标类名
+     * @param {string} url - 文件URL
+     * @returns {string} 图标类名
+     */
+    getFileIconClass(url) {
+        if (!url) return 'default';
+        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
+        if (ext === 'pdf') return 'pdf';
+        if (['doc', 'docx'].includes(ext)) return 'word';
+        if (['xls', 'xlsx', 'csv'].includes(ext)) return 'excel';
+        if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) return 'image';
+        return 'default';
+    }
+    
+    /**
+     * 根据URL获取文件类型标签
+     * @param {string} url - 文件URL
+     * @returns {string} 文件类型标签
+     */
+    getFileTypeFromUrl(url) {
+        if (!url) return '文件';
+        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
+        const typeMap = {
+            'pdf': 'PDF',
+            'doc': 'Word',
+            'docx': 'Word',
+            'xls': 'Excel',
+            'xlsx': 'Excel',
+            'csv': 'CSV',
+            'ppt': 'PPT',
+            'pptx': 'PPT',
+            'txt': '文本',
+            'md': 'Markdown',
+            'json': 'JSON',
+            'png': '图片',
+            'jpg': '图片',
+            'jpeg': '图片',
+            'gif': '图片',
+            'svg': 'SVG',
+            'zip': '压缩包',
+            'rar': '压缩包'
+        };
+        return typeMap[ext] || '文件';
+    }
+    
+    /**
+     * 渲染文件链接卡片
+     * @param {Array} fileLinks - 文件链接数组
+     * @returns {string} HTML字符串
+     */
+    renderFileCards(fileLinks) {
+        if (!fileLinks || !fileLinks.length) return '';
+        
+        const cards = fileLinks.map(file => {
+            const iconClass = this.getFileIconClass(file.url);
+            const fileType = this.getFileTypeFromUrl(file.url);
+            return `
+                <a class="file-link-card" href="${this.app.utils.escapeHtml(file.url)}" target="_blank" rel="noopener noreferrer">
+                    <div class="file-icon ${iconClass}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                        </svg>
+                    </div>
+                    <div class="file-info">
+                        <div class="file-name">${this.app.utils.escapeHtml(file.filename)}</div>
+                        <div class="file-type">${fileType}</div>
+                    </div>
+                </a>
+            `;
+        }).join('');
+        
+        return `<div class="message-file-cards">${cards}</div>`;
     }
 }

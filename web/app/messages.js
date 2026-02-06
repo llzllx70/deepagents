@@ -117,7 +117,7 @@ export class MessageModule {
             app.history.updateChatStatus(runId, status);
         }
         if (status === 'cancelled' && app.pendingCancelLogElement && app.pendingCancelLogElement.isConnected) {
-            app.pendingCancelLogElement.textContent = `[${app.utils.formatLogLevel('info')}] 已取消`;
+            app.pendingCancelLogElement.textContent = `[${app.utils.formatLogLevel('info')}] 当前任务已停止`;
         }
         app.cancelRequested = false;
         app.pendingCancelLogElement = null;
@@ -155,7 +155,7 @@ export class MessageModule {
         const isActiveChatRun = app.ui.isRunActiveChat(runId);
         app.history.updateChatStatus(runId, status);
         if (status === 'cancelled' && app.pendingCancelLogElement && app.pendingCancelLogElement.isConnected) {
-            app.pendingCancelLogElement.textContent = `[${app.utils.formatLogLevel('info')}] 已取消`;
+            app.pendingCancelLogElement.textContent = `[${app.utils.formatLogLevel('info')}] 当前任务已停止`;
         }
         // 已删除运行状态提示元素相关代码
 
@@ -185,7 +185,7 @@ export class MessageModule {
 
     handleToolCallStarted(data) {
         const app = this.app;
-        const { tool_name, args, tool_call_id, display_title, display_content } = data;
+        const { tool_name, args, tool_call_id, display_title, display_content, parent_tool_call_id } = data;
 
         if (tool_name == 'write_file') {
             app.network.logClient('tool_call_started', { data: data });
@@ -200,8 +200,24 @@ export class MessageModule {
             app.ui.hideThinkingIndicator(state.messageElement);
         }
 
+        // 检查是否是任务列表工具
+        const isTask = tool_name === 'task' || tool_name === 'write_todos';
+        
         if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
             const toolElement = state.toolCalls.get(tool_call_id);
+            
+            // 对于任务列表工具，检查是否需要添加到DOM（第一次调用时未添加）
+            if (isTask && !toolElement.parentElement) {
+                // 第二次调用时，添加到DOM中
+                const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
+                if (messageElement) {
+                    const contentElement = messageElement.querySelector('.message-text');
+                    contentElement.appendChild(toolElement);
+                    // 默认展开
+                    toolElement.classList.add('expanded');
+                }
+            }
+            
             app.ui.updateToolCallElement(toolElement, {
                 name: tool_name,
                 args,
@@ -215,7 +231,27 @@ export class MessageModule {
             }
             return;
         }
-
+        
+        // 对于任务列表工具，第一次调用时创建元素但不添加到DOM
+        if (isTask && state) {
+            const toolElement = app.ui.createToolCallElement({
+                name: tool_name,
+                args: args,
+                id: tool_call_id,
+                status: 'running',
+                todoState: state?.todoState || null,
+                displayTitle: display_title,
+                displayContent: display_content,
+            });
+            // 记录到toolCalls中，但不添加到DOM（等待第二次调用时添加）
+            if (tool_call_id) {
+                state.toolCalls.set(tool_call_id, toolElement);
+            }
+            // 设置为当前任务元素，子工具会添加到其中
+            state.currentTaskElement = toolElement;
+            return;
+        }
+        
         const toolElement = app.ui.createToolCallElement({
             name: tool_name,
             args: args,
@@ -226,13 +262,54 @@ export class MessageModule {
             displayContent: display_content,
         });
 
-        const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
-        if (!messageElement) return;
-        const contentElement = messageElement.querySelector('.message-text');
-        contentElement.appendChild(toolElement);
+        // 检查是否有父任务，如果有则添加到父任务的子容器中
+        // 注意：任务列表工具本身不应该添加到其他任务的子容器中
+        let parentContainer = null;
+        
+        if (!isTask) {
+            // 非任务工具才检查父容器
+            if (parent_tool_call_id && state?.toolCalls?.has(parent_tool_call_id)) {
+                const parentElement = state.toolCalls.get(parent_tool_call_id);
+                parentContainer = parentElement.querySelector('.task-children');
+            }
+            
+            // 如果没有父任务，检查当前是否有活动的任务元素
+            if (!parentContainer && state?.currentTaskElement) {
+                parentContainer = state.currentTaskElement.querySelector('.task-children');
+            }
+        }
+
+        if (parentContainer) {
+            // 添加到父任务的子容器中
+            parentContainer.appendChild(toolElement);
+            // 展开父任务以显示子工具
+            const parentTask = parentContainer.closest('.task-item');
+            if (parentTask && !parentTask.classList.contains('expanded')) {
+                parentTask.classList.add('expanded');
+            }
+        } else {
+            const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
+            if (!messageElement) return;
+            const contentElement = messageElement.querySelector('.message-text');
+            contentElement.appendChild(toolElement);
+        }
+
+        // 如果当前工具是任务列表，设置为当前活动任务
+        if (isTask && state) {
+            // 新任务开始时，自动收起上一个任务
+            if (state.currentTaskElement && state.currentTaskElement !== toolElement) {
+                state.currentTaskElement.classList.remove('expanded');
+            }
+            state.currentTaskElement = toolElement;
+            // 新任务默认展开
+            toolElement.classList.add('expanded');
+        }
 
         // 工具元素添加后，在最下方重新显示思考动效
-        app.ui.showThinkingIndicator(messageElement);
+        const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
+        if (messageElement) {
+            app.ui.showThinkingIndicator(messageElement);
+        }
 
         if (tool_call_id && state) {
             state.toolCalls.set(tool_call_id, toolElement);
@@ -249,10 +326,19 @@ export class MessageModule {
         const toolContent = typeof content === 'string' && content.length ? content : content_preview;
         const runId = data.run_id || app.currentRunId || 'default';
         const state = app.ui.getRunState(runId);
-
+        
+        // 检查是否是任务列表工具
+        const isTask = tool_name === 'task' || tool_name === 'write_todos';
+        
         let toolElement = null;
         if (tool_call_id && state?.toolCalls?.has(tool_call_id)) {
             toolElement = state.toolCalls.get(tool_call_id);
+            
+            // 对于任务列表工具，如果还未添加到DOM，则跳过更新（等待第二次调用）
+            if (isTask && !toolElement.parentElement) {
+                // 任务列表工具还未添加到DOM，不处理结束事件
+                return;
+            }
         } else {
             app.ui.closeAssistantSegment(state);
             toolElement = app.ui.createToolCallElement({
@@ -276,19 +362,15 @@ export class MessageModule {
             statusElement.className = `tool-status ${status}`;
             statusElement.textContent = app.utils.formatToolStatus(status);
         }
-
-        if (args && Object.keys(args).length) {
-            app.ui.updateToolCallElement(toolElement, {
-                name: tool_name || 'tool',
-                args,
-                status: status || 'success',
-                todoState: state?.todoState || null,
-                displayTitle: display_title,
-                displayContent: display_content,
-            });
+        // 更新工具摘要（灰色说明文字），保持显示
+        if (display_content || display_title) {
+            const { content: summaryContent } = app.utils.formatToolDisplay(tool_name, {}, state?.todoState, display_title, display_content);
+            const toolSummaryElement = toolElement.querySelector('.tool-summary');
+            if (toolSummaryElement && summaryContent) {
+                toolSummaryElement.textContent = summaryContent;
+            }
         }
-
-        if (toolContent) {
+        if (toolContent && !isTask) {
             const bodyElement = toolElement.querySelector('.tool-call-body');
             if (bodyElement) {
                 let resultElement = bodyElement.querySelector('.tool-result');
@@ -309,6 +391,9 @@ export class MessageModule {
         }
 
         if (tool_call_id && state) state.toolCalls.delete(tool_call_id);
+
+        // 任务列表结束后不清除currentTaskElement，保持引用以便后续工具继续添加到该任务下
+        // 只有当新任务开始时才会更新currentTaskElement
 
         // 工具调用结束后，重新在最下方显示思考动效
         const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
@@ -360,26 +445,14 @@ export class MessageModule {
 
         const prevTodos = state?.todoState || null;
 
-        let todoElement = state?.messageElement?.querySelector('.todo-list');
-
-        if (!todoElement) {
-            app.ui.closeAssistantSegment(state);
-            const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
-            if (!messageElement) return;
-
-            todoElement = app.ui.createTodoListElement(todos, prevTodos);
-            const contentElement = messageElement.querySelector('.message-text');
-            contentElement.appendChild(todoElement);
-        } else {
-            todoElement.innerHTML = app.utils.renderTodoListHtml(todos, prevTodos);
-        }
+        // 更新任务抽屉（而不是在对话中展示）
+        app.ui.updateTaskDrawer(todos, prevTodos);
 
         if (state) {
             state.todoState = JSON.parse(JSON.stringify(todos));
         }
         if (state?.chatId === app.activeChatId) {
             app.todoState = state.todoState;
-            app.ui.scrollToBottom();
         }
     }
 
@@ -550,6 +623,15 @@ export class MessageModule {
             app.history.backgroundCurrentChat('new_chat');
         }
         app.ui.resetChatView();
+        
+        // 关闭右侧工具详情侧边栏
+        app.ui.closeToolDetailSidebar();
+        
+        // 取消历史记录中的选中状态
+        const activeItem = app.elements.historyList?.querySelector('.history-item.active');
+        if (activeItem) {
+            activeItem.classList.remove('active');
+        }
         app.activeChatId = null;
         app.currentRunId = null;
         app.currentRunStatus = null;

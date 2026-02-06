@@ -51,8 +51,16 @@ export class UtilsModule {
             }
             if (token) {
                 localStorage.setItem('deepagents_auth_token', token);
+                // 保存登录时间戳，用于24小时过期检查
+                localStorage.setItem('deepagents_auth_timestamp', Date.now().toString());
+                // 保存用户名
+                if (app.currentUser) {
+                    localStorage.setItem('deepagents_username', app.currentUser);
+                }
             } else {
                 localStorage.removeItem('deepagents_auth_token');
+                localStorage.removeItem('deepagents_auth_timestamp');
+                localStorage.removeItem('deepagents_username');
             }
         } catch {
             // ignore storage failures
@@ -101,9 +109,21 @@ export class UtilsModule {
     formatToolDisplay(toolName, args, todoStateOverride = null, displayTitle = null, displayContent = null) {
         const name = String(toolName || '');
         const a = args && typeof args === 'object' ? args : {};
+        
+        // 任务列表工具显示当前正在执行的任务名称
+        if (name === 'write_todos') {
+            const todos = Array.isArray(a.todos) ? a.todos : [];
+            // 查找当前正在进行的任务（in_progress状态）
+            const currentTask = todos.find(t => t.status === 'in_progress');
+            // 如果没有进行中的，查找第一个待处理的任务
+            const pendingTask = !currentTask ? todos.find(t => t.status === 'pending') : null;
+            const taskToShow = currentTask || pendingTask;
+            const title = taskToShow ? String(taskToShow.content || '任务列表') : '任务列表';
+            return { title, content: '' };
+        }
+        
         const titleMap = {
             task: '任务分解',
-            write_todos: '任务列表',
             web_search: '搜索',
             fetch_url: '浏览',
             http_request: '浏览',
@@ -599,8 +619,12 @@ export class UtilsModule {
     }
 
     parseMarkdown(text) {
+        if (!text) return '';
         if (typeof marked !== 'undefined') {
-            const processedText = this.linkifyWorkspacePaths(text);
+            // 预处理加粗文本：修复 marked 库对中文冒号后紧跟**的解析问题
+            // 例如 **风险提示：**本报告 -> **风险提示：** 本报告
+            let preprocessedText = text.replace(/\*\*([^*]+[：:])\*\*([^\s\*])/g, '**$1** $2');
+            const processedText = this.linkifyWorkspacePaths(preprocessedText);
             let html = marked.parse(processedText);
             html = html.replace(/<pre><code(?: class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g, (match, lang, code) => {
                 const langDisplay = lang ? lang.toUpperCase() : 'CODE';

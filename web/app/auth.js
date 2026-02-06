@@ -174,11 +174,11 @@ export class AuthModule {
         await this.loadUserConfig();
         await app.history.loadHistory();
         app.history.renderHistory();
-        const resumed = await app.network.resumeSessionIfPossible();
-        if (!resumed) {
-            app.ui.updateConnectionStatus('disconnected');
-            app.elements.chatTitle.textContent = '新对话';
-        }
+        
+        // 登录后默认显示新对话页面，不自动恢复之前的会话
+        app.ui.updateConnectionStatus('disconnected');
+        app.elements.chatTitle.textContent = '新对话';
+        app.elements.welcomeMessage.style.display = 'flex';
         app.ui.updateInputState();
     }
 

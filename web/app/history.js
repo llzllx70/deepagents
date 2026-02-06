@@ -355,7 +355,8 @@ export class HistoryModule {
         const nextMessages = Array.isArray(chat.messages) && chat.messages.length
             ? chat.messages
             : (existing?.messages || []);
-        const nextTitle = chat.title || existing?.title || this.buildChatTitle(nextMessages, null);
+        // 历史记录名称仅记录第一次返回的数据，不覆盖
+        const nextTitle = existing?.title || chat.title || this.buildChatTitle(nextMessages, null);
         const base = existing ? { ...existing } : {};
         delete base.timestamp;
         delete base.updatedAt;
@@ -456,15 +457,21 @@ export class HistoryModule {
         const app = this.app;
         app.elements.historyList.innerHTML = app.chatHistory.map(chat => {
             const statusType = app.utils.getHistoryStatusType(chat.status);
-            const statusLabel = app.utils.getHistoryStatusLabel(chat.status);
+            // 只有运行中状态才显示状态标签
+            const isRunning = statusType === 'running';
+            const statusLabel = isRunning ? app.utils.getHistoryStatusLabel(chat.status) : '';
             const statusHtml = statusLabel
                 ? `<span class="history-item-status ${statusType}">${app.utils.escapeHtml(statusLabel)}</span>`
                 : '';
             const activeClass = chat.id === app.activeChatId ? ' active' : '';
+            // 使用用户提供的任务图标
             return `
                 <div class="history-item${activeClass}" data-chat-id="${chat.id}">
-                    <span class="history-item-icon status-${statusType}">
-                        ${app.utils.getHistoryStatusIcon(statusType)}
+                    <span class="history-item-icon">
+                        <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M742.4 935.7312H405.9648a261.12 261.12 0 0 1-260.7616-260.7616v-430.08a160.3072 160.3072 0 0 1 160.1024-160.256h336.4352a261.12 261.12 0 0 1 260.8128 260.8128v430.08A160.3072 160.3072 0 0 1 742.4 935.7312zM305.3056 146.0736a98.816 98.816 0 0 0-98.6624 98.7136v430.08a199.68 199.68 0 0 0 199.3216 199.3216H742.4a98.7648 98.7648 0 0 0 98.7136-98.6624v-430.08a199.68 199.68 0 0 0-199.3728-199.3728z"></path>
+                            <path d="M689.2032 392.8576H358.4a30.72 30.72 0 0 1 0-61.44h330.7008a30.72 30.72 0 0 1 0 61.44zM583.1168 623.5648H358.4a30.72 30.72 0 0 1 0-61.44h224.6144a30.72 30.72 0 0 1 0 61.44z"></path>
+                        </svg>
                     </span>
                     <span class="history-item-title">${app.utils.escapeHtml(chat.title || '新对话')}</span>
                     ${statusHtml}
@@ -504,6 +511,9 @@ export class HistoryModule {
             this.backgroundCurrentChat('switch_chat');
         }
 
+        // 关闭右侧工具详情侧边栏
+        app.ui.closeToolDetailSidebar();
+        
         app.ui.resetChatView();
         app.elements.chatTitle.textContent = chat.sessionId || chat.title || '对话';
         app.activeChatId = chat.id;
@@ -516,6 +526,12 @@ export class HistoryModule {
             app.runIdToChatId.set(chat.runId, chat.id);
         }
 
+        // 保存当前运行中的 runState（如果是同一个会话）
+        let preservedRunState = null;
+        if (chat.runId && app.utils.isActiveRunStatus(chat.status)) {
+            preservedRunState = app.runStates.get(chat.runId);
+        }
+
         // 清理该对话相关的 runStates，避免与历史消息重复显示
         for (const [runId, state] of app.runStates.entries()) {
             if (state.chatId === chat.id) {
@@ -524,6 +540,7 @@ export class HistoryModule {
             }
         }
 
+        let lastAssistantMessage = null;
         chat.messages.forEach(msg => {
             const messageElement = app.ui.createMessageElement(msg.role);
             const textElement = messageElement.querySelector('.message-text');
@@ -535,11 +552,60 @@ export class HistoryModule {
             if (msg.html) {
                 textElement.innerHTML = msg.html;
             } else {
-                textElement.textContent = msg.content;
+                textElement.textContent = msg.content || '';
             }
             app.elements.messages.appendChild(messageElement);
+            
+            // 记录最后一个助手消息元素
+            if (msg.role === 'assistant') {
+                lastAssistantMessage = messageElement;
+            }
         });
         app.ui.bindHistoryExpandableEntries(app.elements.messages);
+        
+        // 如果是正在运行的会话，恢复或创建 runState 并关联到最后一个消息元素
+        if (chat.runId && app.utils.isActiveRunStatus(chat.status)) {
+            // 检查最后一条消息是否是用户消息
+            const lastMessage = chat.messages[chat.messages.length - 1];
+            const lastMessageIsUser = lastMessage && lastMessage.role === 'user';
+            
+            // 如果最后一条是用户消息，需要创建新的AI消息元素来显示思考动效
+            let targetMessageElement = lastAssistantMessage;
+            if (lastMessageIsUser || !lastAssistantMessage) {
+                // 创建新的AI消息元素
+                targetMessageElement = app.ui.createMessageElement('assistant');
+                app.elements.messages.appendChild(targetMessageElement);
+                lastAssistantMessage = targetMessageElement;
+            }
+            
+            let state = preservedRunState;
+            if (!state) {
+                state = {
+                    runId: chat.runId,
+                    chatId: chat.id,
+                    messageElement: targetMessageElement,
+                    assistantSegmentElement: null,
+                    assistantSegmentText: '',
+                    toolCalls: new Map(),
+                    todoState: null,
+                    currentTaskElement: null
+                };
+            } else {
+                // 更新 messageElement 为当前显示的最后一个助手消息
+                state.messageElement = targetMessageElement;
+            }
+            app.runStates.set(chat.runId, state);
+            app.currentMessageElement = targetMessageElement;
+            
+            // 如果有 todoState，恢复任务抽屉
+            if (state.todoState) {
+                app.todoState = state.todoState;
+                app.ui.updateTaskDrawer(state.todoState, null);
+            }
+            
+            // 恢复思考动效：如果任务正在运行，显示思考中动效
+            app.ui.showThinkingIndicator(targetMessageElement);
+        }
         if (chat.sessionId) {
             app.network.setSessionState({ sessionId: chat.sessionId, chatId: chat.id, hasMessages: chat.messages.length > 0 });
         }
@@ -554,6 +620,9 @@ export class HistoryModule {
         }
 
         this.renderHistory();
+        
+        // 加载完成后滚动到底部
+        app.ui.scrollToBottom();
     }
 
     async deleteChat(chatId) {
@@ -613,5 +682,50 @@ export class HistoryModule {
 
     hasCurrentMessages() {
         return this.collectCurrentMessages().length > 0;
+    }
+
+    /**
+     * 清空所有历史记录
+     */
+    async clearAllHistory() {
+        const app = this.app;
+        
+        // 断开当前 WebSocket 连接
+        app.network.disconnectWebSocket({ allowReconnect: false });
+        
+        // 删除所有会话
+        const sessionIds = [...new Set(app.chatHistory.map(c => c.sessionId).filter(Boolean))];
+        for (const sessionId of sessionIds) {
+            try {
+                await app.network.deleteSession(sessionId);
+            } catch (e) {
+                console.warn('删除会话失败:', sessionId, e);
+            }
+        }
+        
+        // 清空历史记录
+        app.chatHistory = [];
+        app.activeChatId = null;
+        app.runIdToChatId.clear();
+        app.runStates.clear();
+        app.messageBuffer.clear();
+        app.sessionId = null;
+        app.wsUrl = null;
+        app.currentRunId = null;
+        app.currentRunStatus = null;
+        app.isRunning = false;
+        
+        // 保存并渲染
+        this.saveHistory();
+        this.renderHistory();
+        
+        // 重置界面
+        app.ui.resetChatView();
+        app.elements.chatTitle.textContent = '对话';
+        app.elements.welcomeMessage.style.display = 'flex';
+        app.ui.updateConnectionStatus('disconnected');
+        app.ui.updateCancelButton(false);
+        app.ui.updateSendButton();
+        app.ui.clearTaskDrawer();
     }
 }
