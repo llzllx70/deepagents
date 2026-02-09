@@ -2,7 +2,15 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu-ports|g' /etc/apt/sources.list
+# Use CN mirrors for Ubuntu apt repositories (works for both amd64 and arm64 images).
+RUN sed -i \
+    -e 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+    -e 's|https://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+    -e 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+    -e 's|https://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+    -e 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu-ports|g' \
+    -e 's|https://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu-ports|g' \
+    /etc/apt/sources.list
 
 RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
     && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
@@ -70,6 +78,10 @@ RUN python3 -m pip install --upgrade pip setuptools wheel \
 COPY requirements_docker.txt /tmp/requirements_docker.txt
 
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements_docker.txt
+
+# Playwright downloads can be slow/blocked in CN; default to a CN mirror and allow override at build time.
+ARG PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright"
+ENV PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST}"
 
 # Playwright browsers (Chromium) for skills/tests that rely on headless browser automation.
 RUN python3 -m playwright install --with-deps chromium
