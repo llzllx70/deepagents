@@ -35,6 +35,20 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Python/pip: use a newer pip and default to CN mirrors (can be overridden at build time).
+ARG PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple/"
+ARG PIP_EXTRA_INDEX_URL="https://pypi.mirrors.ustc.edu.cn/simple/"
+ENV PIP_INDEX_URL="${PIP_INDEX_URL}"
+ENV PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}"
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=100
+RUN printf "%s\n" \
+    "[global]" \
+    "index-url = ${PIP_INDEX_URL}" \
+    "extra-index-url = ${PIP_EXTRA_INDEX_URL}" \
+    > /etc/pip.conf
+
 # Ensure UTF-8 locale for proper CJK display in vim/terminal apps.
 RUN locale-gen zh_CN.UTF-8 \
     && update-locale LANG=zh_CN.UTF-8
@@ -49,12 +63,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get update && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# uv
-RUN pip3 install --no-cache-dir uv
+# Upgrade pip early so subsequent installs use a modern pip resolver.
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+    && python3 -m pip install uv
 
 COPY requirements_docker.txt /tmp/requirements_docker.txt
 
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements_docker.txt
+
+# Playwright browsers (Chromium) for skills/tests that rely on headless browser automation.
+RUN python3 -m playwright install --with-deps chromium
 
 WORKDIR /workspace
 CMD ["bash", "-lc", "sleep infinity"]

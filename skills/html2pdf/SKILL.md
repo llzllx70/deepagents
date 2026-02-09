@@ -22,13 +22,15 @@ python3 /skills/html2pdf/scripts/html2pdf_playwright.py input.html output.pdf
 
 ## 重要：首次运行前的准备
 
-**首次运行**时，脚本会自动安装 Playwright pip 包和 Chromium 浏览器，大约需要 **3-5 秒**。为避免命令超时，建议在调用转换前先单独执行预安装：
+一般情况下**直接运行转换命令即可**；脚本会在需要时自动安装 Playwright pip 包和 Chromium 浏览器。
+
+如果你在首次转换时运行失败（例如提示缺少 `playwright`，或提示 Chromium 未安装），再手动执行一次安装：
 
 ```bash
 pip3 install playwright -q && python3 -m playwright install chromium
 ```
 
-预安装完成后，脚本会创建锁文件 `~/.playwright_installed`，后续运行将跳过安装步骤，转换耗时仅约 **1-2 秒**。
+安装完成后，脚本会创建锁文件 `~/.playwright_installed`，后续运行将跳过安装步骤，转换耗时仅约 **1-2 秒**。
 
 > **注意**: 安装命令不使用 `--with-deps` 参数，避免触发 `apt-get` 导致的锁冲突。Chromium headless shell 本身不需要额外的系统依赖即可正常运行。
 

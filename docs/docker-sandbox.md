@@ -4,9 +4,18 @@ This project can run agent execution in Docker-based sandboxes with a warm pool.
 
 ## Image Build
 
-Build the sandbox image (Ubuntu 22.04 + python3/pip/uv/apt/vim/node):
+Build the sandbox image (Ubuntu 22.04 + python3/pip/uv/apt/vim/node + Playwright Chromium):
 
 ```bash
+scripts/build_sandbox_image.sh
+```
+
+This image configures pip to use CN mirrors by default (Tsinghua as primary, USTC as extra), and upgrades pip during build.
+You can override mirrors via env vars passed as Docker build args:
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/ \
+PIP_EXTRA_INDEX_URL=https://pypi.mirrors.ustc.edu.cn/simple/ \
 scripts/build_sandbox_image.sh
 ```
 

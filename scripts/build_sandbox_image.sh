@@ -11,4 +11,12 @@ if [[ ! -f "$DOCKERFILE_PATH" ]]; then
 fi
 
 echo "Building Docker image: $IMAGE_NAME"
-docker build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$ROOT_DIR"
+BUILD_ARGS=()
+if [[ -n "${PIP_INDEX_URL:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}")
+fi
+if [[ -n "${PIP_EXTRA_INDEX_URL:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}")
+fi
+
+docker build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "${BUILD_ARGS[@]}" "$ROOT_DIR"
