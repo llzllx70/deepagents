@@ -192,6 +192,12 @@ export class MessageModule {
         }
 
         const runId = data.run_id || app.currentRunId || 'default';
+        
+        // 确保 runId 与当前会话关联
+        if (runId && runId !== 'default' && app.activeChatId && !app.runIdToChatId.has(runId)) {
+            app.runIdToChatId.set(runId, app.activeChatId);
+        }
+        
         const state = app.ui.getRunState(runId);
         app.ui.closeAssistantSegment(state);
 
@@ -265,17 +271,32 @@ export class MessageModule {
         // 检查是否有父任务，如果有则添加到父任务的子容器中
         // 注意：任务列表工具本身不应该添加到其他任务的子容器中
         let parentContainer = null;
+        let parentTaskElement = null;
         
         if (!isTask) {
             // 非任务工具才检查父容器
             if (parent_tool_call_id && state?.toolCalls?.has(parent_tool_call_id)) {
-                const parentElement = state.toolCalls.get(parent_tool_call_id);
-                parentContainer = parentElement.querySelector('.task-children');
+                parentTaskElement = state.toolCalls.get(parent_tool_call_id);
             }
             
             // 如果没有父任务，检查当前是否有活动的任务元素
-            if (!parentContainer && state?.currentTaskElement) {
-                parentContainer = state.currentTaskElement.querySelector('.task-children');
+            if (!parentTaskElement && state?.currentTaskElement) {
+                parentTaskElement = state.currentTaskElement;
+            }
+            
+            // 如果父任务元素存在但还未添加到DOM，先将其添加到DOM
+            if (parentTaskElement && !parentTaskElement.isConnected) {
+                const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
+                if (messageElement) {
+                    const contentElement = messageElement.querySelector('.message-text');
+                    contentElement.appendChild(parentTaskElement);
+                    // 默认展开
+                    parentTaskElement.classList.add('expanded');
+                }
+            }
+            
+            if (parentTaskElement) {
+                parentContainer = parentTaskElement.querySelector('.task-children');
             }
         }
 
@@ -283,9 +304,8 @@ export class MessageModule {
             // 添加到父任务的子容器中
             parentContainer.appendChild(toolElement);
             // 展开父任务以显示子工具
-            const parentTask = parentContainer.closest('.task-item');
-            if (parentTask && !parentTask.classList.contains('expanded')) {
-                parentTask.classList.add('expanded');
+            if (parentTaskElement && !parentTaskElement.classList.contains('expanded')) {
+                parentTaskElement.classList.add('expanded');
             }
         } else {
             const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
@@ -322,9 +342,15 @@ export class MessageModule {
 
     handleToolCallEnded(data) {
         const app = this.app;
-        const { tool_name, status, tool_call_id, content_preview, content, display_title, display_content, args } = data;
+        const { tool_name, status, tool_call_id, content_preview, content, display_title, display_content } = data;
         const toolContent = typeof content === 'string' && content.length ? content : content_preview;
         const runId = data.run_id || app.currentRunId || 'default';
+        
+        // 确保 runId 与当前会话关联
+        if (runId && runId !== 'default' && app.activeChatId && !app.runIdToChatId.has(runId)) {
+            app.runIdToChatId.set(runId, app.activeChatId);
+        }
+        
         const state = app.ui.getRunState(runId);
         
         // 检查是否是任务列表工具
@@ -362,6 +388,7 @@ export class MessageModule {
             statusElement.className = `tool-status ${status}`;
             statusElement.textContent = app.utils.formatToolStatus(status);
         }
+        
         // 更新工具摘要（灰色说明文字），保持显示
         if (display_content || display_title) {
             const { content: summaryContent } = app.utils.formatToolDisplay(tool_name, {}, state?.todoState, display_title, display_content);
@@ -411,6 +438,12 @@ export class MessageModule {
         const app = this.app;
         const { tool_name, path, status, error, metrics, diff, content, content_preview, content_truncated, meta } = data;
         const runId = data.run_id || app.currentRunId || 'default';
+        
+        // 确保 runId 与当前会话关联
+        if (runId && runId !== 'default' && app.activeChatId && !app.runIdToChatId.has(runId)) {
+            app.runIdToChatId.set(runId, app.activeChatId);
+        }
+        
         const state = app.ui.getRunState(runId);
         app.ui.closeAssistantSegment(state);
 
@@ -441,6 +474,12 @@ export class MessageModule {
         const todos = data.todos;
         if (!todos || !Array.isArray(todos)) return;
         const runId = data.run_id || app.currentRunId || 'default';
+        
+        // 确保 runId 与当前会话关联
+        if (runId && runId !== 'default' && app.activeChatId && !app.runIdToChatId.has(runId)) {
+            app.runIdToChatId.set(runId, app.activeChatId);
+        }
+        
         const state = app.ui.getRunState(runId);
 
         const prevTodos = state?.todoState || null;
@@ -514,6 +553,11 @@ export class MessageModule {
         const app = this.app;
         const appended = this.ingestAssistantText(runId, text);
         if (!appended) return;
+
+        // 确保 runId 与当前会话关联
+        if (runId && runId !== 'default' && app.activeChatId && !app.runIdToChatId.has(runId)) {
+            app.runIdToChatId.set(runId, app.activeChatId);
+        }
 
         const state = app.ui.getRunState(runId);
         const messageElement = app.ui.getOrCreateRunMessageElement(runId, state);
