@@ -63,7 +63,7 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 **Entry Point**: `server/deepagents_server.py` - Uvicorn server on port 8000
 
-**Session Management** (`server/sessions.py` - 1328 lines):
+**Session Management** (`server/sessions.py`):
 - Each WebSocket connection creates a session with unique `session_id`
 - Sessions acquire containers from `DockerSandboxPool`
 - Per-session workspace: `workspace/{session_id}/`
@@ -96,7 +96,7 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 **Location**: `web/` - vanilla JavaScript, no build tools
 
-**Entry Point**: `web/app.js` - `DeepAgentsClient` class (~1095 lines)
+**Entry Point**: `web/app.js` - `DeepAgentsClient` class
 
 **State Management**:
 - `currentRunId`, `isRunning` - Active agent run tracking
@@ -115,7 +115,7 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 **Files**:
 - `web/index.html` - Main HTML structure
-- `web/styles.css` - All styles (dark theme, ~1347 lines)
+- `web/styles.css` - All styles (dark theme)
 - `web/libs/` - Local copies of `marked.js`, `highlight.js`, `python.js`
 - `web/app/auth.js` - Authentication handling
 - `web/app/history.js` - Chat history persistence
@@ -125,16 +125,7 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 ### Skills System
 
-**Location**: `skills/` directory (27+ skills)
-
-Each skill is a self-contained package with `SKILL.md` documentation:
-- Document skills: `docx`, `pdf`, `html2pdf`, `html2pptx`, `pptxgen2`, `doc-coauthoring`
-- Research: `arxiv-search`, `web-research`, `langgraph-docs`, `deep-research`, `coze-search`
-- Design: `canvas-design`, `algorithmic-art`, `frontend-design`, `web-artifacts-builder`, `theme-factory`, `brand-guidelines`
-- Specialized: `stock-master`, `webapp-testing`, `mcp-builder`, `skill-creator`, `slack-gif-creator`, `internal-comms`
-- Chinese-specific: `admission-advice`, `career-growth-planner`, `job-match`, `job-search-report`, `xuegong-web-research`
-
-Skills are loaded by `SkillsMiddleware` and injected as agent tools.
+**Location**: `skills/` directory — each skill is a self-contained package with a `SKILL.md` file describing its purpose and usage. Categories include document generation, research, design, and specialized tools. Skills are loaded by `SkillsMiddleware` and injected as agent tools.
 
 ## Configuration Files
 
@@ -216,26 +207,14 @@ Some providers (notably Qwen) do not stream tool call arguments. The `ToolCallAr
 
 ## Key Dependencies
 
-### Core Framework
-- `deepagents==0.3.8` - Agent harness with built-in tools
-- `deepagents-cli==0.0.13` - CLI utilities
-- `langchain`, `langgraph` - LLM orchestration
-- `langsmith==0.4.59` - LLM tracing
+- **Core**: `deepagents`, `deepagents-cli` - Agent harness and CLI utilities
+- **LLM Orchestration**: `langchain`, `langgraph`, `langsmith`
+- **Web Server**: `fastapi`, `uvicorn`, `websockets`
+- **LLM Providers**: `anthropic`, `openai`, `tavily-python`
+- **Browser**: `playwright`
+- **Document Processing**: `python-docx`, `python-pptx`, `pypdfium2`, `pdfplumber`, `fpdf2`, `weasyprint`, `pandoc`
 
-### Web Server
-- `fastapi==0.127.0`, `uvicorn==0.40.0` - ASGI server
-- `websockets==15.0.1` - WebSocket client
-
-### LLM Providers
-- `anthropic==0.75.0` - Claude API
-- `openai==2.11.0` - OpenAI-compatible API
-- `tavily-python==0.7.14` - Web search
-
-### Browser & Automation
-- `playwright==1.57.0` - Browser automation
-
-### Document Processing
-- `python-docx`, `python-pptx`, `pypdfium2`, `pdfplumber`, `fpdf2`, `weasyprint`, `pandoc`
+See `requirements.txt` for exact versions.
 
 ## Important Files
 
