@@ -2,6 +2,7 @@ const state = {
   serverUrl: "",    // ws://host:port/ws/browser
   token: "",
   ws: null,
+  wsUrl: "",        // the URL of the current/last WS connection
   connected: false,
   attachedTabId: null,
   reconnectAttempt: 0,
@@ -117,16 +118,21 @@ function stopHeartbeat() {
 
 // ── WebSocket connect / reconnect ──────────────────────────
 
-async function connectWs() {
+async function connectWs(force = false) {
   const wsUrl = buildWsUrl(state.serverUrl, state.token);
   if (!wsUrl) {
     return { error: "Missing serverUrl" };
+  }
+  // Skip if already connected to the same URL
+  if (!force && state.connected && state.wsUrl === wsUrl) {
+    return { ok: true, skipped: true };
   }
   if (state.ws) {
     try {
       state.ws.close();
     } catch (error) {}
   }
+  state.wsUrl = wsUrl;
   state.ws = new WebSocket(wsUrl);
   state.ws.onopen = async () => {
     state.connected = true;
@@ -241,14 +247,14 @@ async function handleAction(payload) {
     return;
   }
   try {
-    await ensureDebugger(tabId);
     const action = payload.action;
     if (action === "open" && payload.url) {
       const openInNewTab = payload.new_tab !== false;
       if (openInNewTab) {
-        const activateTab = payload.activate_tab === true;
+        const activateTab = payload.activate_tab !== false;
         const newTab = await chrome.tabs.create({ url: payload.url, active: activateTab });
         if (newTab?.id != null) {
+          response.tab_id = newTab.id;
           wsSend({
             type: "browser.tab.created",
             tab_id: newTab.id,
@@ -257,13 +263,17 @@ async function handleAction(payload) {
           });
         }
       } else {
+        await ensureDebugger(tabId);
         await sendCDP(tabId, "Page.navigate", { url: payload.url });
       }
     } else if (action === "click") {
+      await ensureDebugger(tabId);
       await performClick(tabId, payload.target);
     } else if (action === "type") {
+      await ensureDebugger(tabId);
       await performType(tabId, payload.target, payload.text || "", payload.clear !== false);
     } else if (action === "scroll") {
+      await ensureDebugger(tabId);
       await performScroll(tabId, payload.delta || 600);
     } else if (action === "wait") {
       await sleep(payload.wait_ms || 800);
@@ -278,6 +288,10 @@ async function handleAction(payload) {
 
   if (payload.return_snapshot) {
     const snapshotTabId = payload.action === "open" && payload.new_tab !== false ? response.tab_id : tabId;
+    // Wait for new tab to finish loading before collecting snapshot
+    if (payload.action === "open" && snapshotTabId !== tabId) {
+      await waitForTabLoad(snapshotTabId, 8000);
+    }
     const snapshot = await getSnapshotOnce(snapshotTabId || tabId, actionId, payload.mode || "compact");
     if (snapshot) response.snapshot = snapshot;
   }
@@ -358,6 +372,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function waitForTabLoad(tabId, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeoutMs);
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        // Small delay for content script injection
+        setTimeout(resolve, 300);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
 // ── Tab lifecycle events ───────────────────────────────────
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -399,11 +431,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         serverUrl: state.serverUrl,
         token: state.token,
       });
-      if (changed && nextServerUrl && nextToken) {
-        state.reconnectAttempt = 0;
-        connectWs();
-      } else if (!state.connected && nextServerUrl && nextToken) {
-        connectWs();
+      if (nextServerUrl && nextToken) {
+        if (changed) state.reconnectAttempt = 0;
+        connectWs(changed);
       }
       return;
     }
