@@ -7,14 +7,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Server (Python FastAPI)
 
 ```bash
-# Primary method via run.sh script (interactive or command-line)
-./scripts/run.sh                          # Interactive menu mode
-./scripts/run.sh start [server|all] [model-name]
-./scripts/run.sh stop [server|all]
-./scripts/run.sh restart [server|all] [model-name]
-./scripts/run.sh deploy [server|web|all] [model-name]  # Update web + restart server
-./scripts/run.sh log [server|web|all]                 # Follow logs
-./scripts/run.sh process [server|web|all]              # Show running processes
+# Primary method via run.sh script (menu-first, module-aware)
+./scripts/run.sh                          # Interactive menu mode (default)
+./scripts/run.sh help
+
+# Server control (server is the only module that requires model selection)
+./scripts/run.sh server start [--model <model_key>]
+./scripts/run.sh server stop
+./scripts/run.sh server restart [--model <model_key>]
+./scripts/run.sh server model list
+./scripts/run.sh server model show-default
+
+# Web control (static assets only)
+./scripts/run.sh web sync                 # Copy web/ to WEB_DEPLOY_DIR
+./scripts/run.sh web status
+
+# One-click common action
+./scripts/run.sh quick deploy [--model <model_key>]   # web sync + server restart + status
 
 # Direct Python execution (sets DEEPAGENTS_MODEL env var)
 export DEEPAGENTS_MODEL=kimi
@@ -42,9 +51,9 @@ python3 -m http.server 8080
 # Update web assets to nginx (requires WEB_DEPLOY_DIR in config/deepagents.yml)
 ./scripts/deploy_nginx.sh
 
-# Or via run.sh
-./scripts/run.sh update-web   # Copy web/ to WEB_DEPLOY_DIR
-./scripts/run.sh update-all   # Restart server + update web
+# Or via run.sh (preferred)
+./scripts/run.sh web sync
+./scripts/run.sh quick deploy
 ```
 
 ## Architecture Overview
