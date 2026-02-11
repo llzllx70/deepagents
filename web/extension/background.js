@@ -1,28 +1,23 @@
 const state = {
-  baseUrl: "",
-  sessionId: "",
+  serverUrl: "",    // ws://host:port/ws/browser
   token: "",
   ws: null,
   connected: false,
-  tabId: null,
   attachedTabId: null,
+  reconnectAttempt: 0,
 };
 
 const pendingSnapshot = new Map();
 let reconnectTimer = null;
+let heartbeatTimer = null;
 
 function normalizeBaseUrl(value) {
   return value.replace(/\/+$/, "");
 }
 
-function buildWsUrl(baseUrl, sessionId, token) {
-  if (!baseUrl || !sessionId) return "";
-  let url = baseUrl;
-  if (url.includes("{session_id}")) {
-    url = url.replace("{session_id}", sessionId);
-  } else if (!url.endsWith(`/${sessionId}`)) {
-    url = `${normalizeBaseUrl(url)}/${sessionId}`;
-  }
+function buildWsUrl(serverUrl, token) {
+  if (!serverUrl) return "";
+  let url = normalizeBaseUrl(serverUrl);
   if (token) {
     const separator = url.includes("?") ? "&" : "?";
     url = `${url}${separator}token=${encodeURIComponent(token)}`;
@@ -39,13 +34,6 @@ async function getActiveTabId() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs.length) return null;
   return tabs[0].id ?? null;
-}
-
-async function ensureTab() {
-  if (state.tabId == null) {
-    state.tabId = await getActiveTabId();
-  }
-  return state.tabId;
 }
 
 function attachDebugger(tabId) {
@@ -92,7 +80,7 @@ async function ensureDebugger(tabId) {
 
 async function sendHello() {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  const tabId = await ensureTab();
+  const tabId = await getActiveTabId();
   let tabInfo = null;
   if (tabId != null) {
     try {
@@ -103,7 +91,7 @@ async function sendHello() {
   }
   wsSend({
     type: "browser.hello",
-    session_id: state.sessionId,
+    protocol_version: 2,
     tab_id: tabId,
     url: tabInfo?.url || null,
     title: tabInfo?.title || null,
@@ -111,10 +99,28 @@ async function sendHello() {
   });
 }
 
+// ── Heartbeat ──────────────────────────────────────────────
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    wsSend({ type: "ping" });
+  }, 20000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+// ── WebSocket connect / reconnect ──────────────────────────
+
 async function connectWs() {
-  const wsUrl = buildWsUrl(state.baseUrl, state.sessionId, state.token);
+  const wsUrl = buildWsUrl(state.serverUrl, state.token);
   if (!wsUrl) {
-    return { error: "Missing baseUrl or sessionId" };
+    return { error: "Missing serverUrl" };
   }
   if (state.ws) {
     try {
@@ -124,14 +130,18 @@ async function connectWs() {
   state.ws = new WebSocket(wsUrl);
   state.ws.onopen = async () => {
     state.connected = true;
-    await ensureTab();
+    state.reconnectAttempt = 0;
+    startHeartbeat();
     await sendHello();
   };
   state.ws.onclose = () => {
     state.connected = false;
+    stopHeartbeat();
+    scheduleReconnect();
   };
   state.ws.onerror = () => {
     state.connected = false;
+    stopHeartbeat();
   };
   state.ws.onmessage = (event) => {
     let data;
@@ -147,20 +157,36 @@ async function connectWs() {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  if (!state.serverUrl) return;
+  const delays = [200, 400, 1000, 2000, 5000, 10000, 30000];
+  const delay = delays[Math.min(state.reconnectAttempt, delays.length - 1)];
+  state.reconnectAttempt += 1;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (state.baseUrl && state.sessionId) {
-      connectWs();
-    }
-  }, 200);
+    connectWs();
+  }, delay);
 }
+
+// ── MV3 keepalive via alarms ───────────────────────────────
+
+chrome.alarms.create("keepalive", { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "keepalive" && !state.connected) {
+    if (state.serverUrl) connectWs();
+  }
+});
+
+// ── Server message handler ─────────────────────────────────
 
 async function handleServerMessage(data) {
   if (!data || typeof data !== "object") return;
   const type = data.type;
+  if (type === "pong") return;
+
   if (type === "browser.request_snapshot") {
     const requestId = data.request_id || crypto.randomUUID();
-    requestSnapshotFromTab(requestId, true, data.mode || "compact");
+    const tabId = data.tab_id ?? (await getActiveTabId());
+    requestSnapshotFromTab(requestId, true, data.mode || "compact", tabId);
     return;
   }
   if (type === "browser.action") {
@@ -168,44 +194,44 @@ async function handleServerMessage(data) {
   }
 }
 
-function requestSnapshotFromTab(requestId, sendToServer, mode) {
-  ensureTab().then((tabId) => {
-    if (tabId == null) {
-      if (sendToServer) {
-        wsSend({
-          type: "browser.snapshot",
-          request_id: requestId,
-          error: "No active tab",
-        });
-      }
-      return;
+function requestSnapshotFromTab(requestId, sendToServer, mode, tabId) {
+  if (tabId == null) {
+    if (sendToServer) {
+      wsSend({
+        type: "browser.snapshot",
+        request_id: requestId,
+        error: "No active tab",
+      });
     }
-    pendingSnapshot.set(requestId, { sendToServer });
-    chrome.tabs.sendMessage(
-      tabId,
-      { type: "collect_snapshot", request_id: requestId, mode },
-      () => {
-        if (chrome.runtime.lastError) {
-          pendingSnapshot.delete(requestId);
-          if (sendToServer) {
-            wsSend({
-              type: "browser.snapshot",
-              request_id: requestId,
-              error: chrome.runtime.lastError.message,
-            });
-          }
+    return;
+  }
+  pendingSnapshot.set(requestId, { sendToServer, tabId });
+  chrome.tabs.sendMessage(
+    tabId,
+    { type: "collect_snapshot", request_id: requestId, mode },
+    () => {
+      if (chrome.runtime.lastError) {
+        pendingSnapshot.delete(requestId);
+        if (sendToServer) {
+          wsSend({
+            type: "browser.snapshot",
+            request_id: requestId,
+            tab_id: tabId,
+            error: chrome.runtime.lastError.message,
+          });
         }
       }
-    );
-  });
+    }
+  );
 }
 
 async function handleAction(payload) {
-  const tabId = await ensureTab();
+  const tabId = payload.tab_id ?? (await getActiveTabId());
   const actionId = payload.action_id || crypto.randomUUID();
   const response = {
     type: "browser.action.result",
     action_id: actionId,
+    tab_id: tabId,
     status: "ok",
   };
   if (tabId == null) {
@@ -223,7 +249,12 @@ async function handleAction(payload) {
         const activateTab = payload.activate_tab === true;
         const newTab = await chrome.tabs.create({ url: payload.url, active: activateTab });
         if (newTab?.id != null) {
-          state.tabId = newTab.id;
+          wsSend({
+            type: "browser.tab.created",
+            tab_id: newTab.id,
+            url: payload.url,
+            action_id: actionId,
+          });
         }
       } else {
         await sendCDP(tabId, "Page.navigate", { url: payload.url });
@@ -246,7 +277,8 @@ async function handleAction(payload) {
   }
 
   if (payload.return_snapshot) {
-    const snapshot = await getSnapshotOnce(tabId, actionId, payload.mode || "compact");
+    const snapshotTabId = payload.action === "open" && payload.new_tab !== false ? response.tab_id : tabId;
+    const snapshot = await getSnapshotOnce(snapshotTabId || tabId, actionId, payload.mode || "compact");
     if (snapshot) response.snapshot = snapshot;
   }
   if (payload.detach_after !== false && state.attachedTabId === tabId) {
@@ -258,7 +290,7 @@ async function handleAction(payload) {
 
 async function getSnapshotOnce(tabId, requestId, mode) {
   return new Promise((resolve) => {
-    pendingSnapshot.set(requestId, { sendToServer: false, resolve });
+    pendingSnapshot.set(requestId, { sendToServer: false, resolve, tabId });
     chrome.tabs.sendMessage(tabId, { type: "collect_snapshot", request_id: requestId, mode });
     setTimeout(() => {
       if (pendingSnapshot.has(requestId)) {
@@ -326,6 +358,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Tab lifecycle events ───────────────────────────────────
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  wsSend({ type: "browser.tab.closed", tab_id: tabId });
+  if (state.attachedTabId === tabId) {
+    state.attachedTabId = null;
+  }
+});
+
+// ── Message handler (popup / content script) ───────────────
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.source === "content") {
     if (message.type === "snapshot") {
@@ -339,28 +382,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         wsSend({
           type: "browser.snapshot",
           request_id: requestId,
+          tab_id: entry.tabId,
           snapshot: message.snapshot,
         });
       }
     }
     if (message.type === "bridge_config") {
-      const nextBaseUrl = message.baseUrl || state.baseUrl;
-      const nextSessionId = message.sessionId || state.sessionId;
+      const nextServerUrl = message.serverUrl || message.baseUrl || state.serverUrl;
       const nextToken = message.token || state.token;
       const changed =
-        nextBaseUrl !== state.baseUrl ||
-        nextSessionId !== state.sessionId ||
+        nextServerUrl !== state.serverUrl ||
         nextToken !== state.token;
-      state.baseUrl = nextBaseUrl;
-      state.sessionId = nextSessionId;
+      state.serverUrl = nextServerUrl;
       state.token = nextToken;
       chrome.storage.local.set({
-        baseUrl: state.baseUrl,
-        sessionId: state.sessionId,
+        serverUrl: state.serverUrl,
         token: state.token,
       });
-      if (changed) {
-        scheduleReconnect();
+      if (changed && nextServerUrl && nextToken) {
+        state.reconnectAttempt = 0;
+        connectWs();
+      } else if (!state.connected && nextServerUrl && nextToken) {
+        connectWs();
       }
       return;
     }
@@ -368,21 +411,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "connect") {
-    state.baseUrl = message.baseUrl || state.baseUrl;
-    state.sessionId = message.sessionId || state.sessionId;
+    state.serverUrl = message.serverUrl || state.serverUrl;
     state.token = message.token || state.token;
     chrome.storage.local.set({
-      baseUrl: state.baseUrl,
-      sessionId: state.sessionId,
+      serverUrl: state.serverUrl,
       token: state.token,
     });
+    state.reconnectAttempt = 0;
     connectWs().then((result) => sendResponse(result));
     return true;
   }
 
   if (message?.type === "bind_tab") {
     getActiveTabId().then(async (tabId) => {
-      state.tabId = tabId;
       if (tabId != null) {
         try {
           await ensureDebugger(tabId);
@@ -399,9 +440,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
-  const stored = await chrome.storage.local.get(["baseUrl", "sessionId", "token"]);
-  state.baseUrl = stored.baseUrl || "";
-  state.sessionId = stored.sessionId || "";
+// ── Service Worker startup / install ───────────────────────
+
+async function restoreAndConnect() {
+  const stored = await chrome.storage.local.get(["serverUrl", "token"]);
+  state.serverUrl = stored.serverUrl || "";
   state.token = stored.token || "";
-});
+  if (state.serverUrl) {
+    connectWs();
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => restoreAndConnect());
+chrome.runtime.onStartup.addListener(() => restoreAndConnect());

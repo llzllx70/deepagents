@@ -81,19 +81,15 @@
   </head>
   <body>
     <h1>DeepAgents Browser Bridge</h1>
-    <label>Server WS Base</label>
-    <input id="baseUrl" placeholder="ws://localhost:8000/ws/browser" />
-    <label>Session ID</label>
-    <input id="sessionId" placeholder="session id" />
-    <label>Token</label>
-    <input id="token" placeholder="auth token" />
+    <label>Server URL (auto-detected)</label>
+    <input id="serverUrl" placeholder="ws://localhost:8000/ws/browser" />
     <div class="row">
       <button id="connectBtn">Connect</button>
       <button id="bindBtn" class="secondary">Bind Active Tab</button>
     </div>
     <div id="status" class="status disconnected">Disconnected</div>
     <div class="hint">
-      Tip: copy token and sessionId from DeepAgents Web, then connect and open the target page.
+      Open the DeepAgents web page first. The extension will auto-detect server and token from the page.
     </div>
     <script src="popup.js"></script>
   </body>

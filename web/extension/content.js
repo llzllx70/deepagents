@@ -133,26 +133,33 @@ function readBridgeConfig() {
       return '';
     }
   };
-  const baseUrl =
+  let serverUrl =
     doc?.dataset?.daServerWsBase ||
     get('deepagents_server_ws_base') ||
     '';
-  const sessionId = doc?.dataset?.daSessionId || get('deepagents_session_id') || '';
+  // Derive WS URL from HTTP server URL if WS base not explicitly set
+  if (!serverUrl) {
+    const httpUrl = get('deepagents_server_url');
+    if (httpUrl) {
+      const protocol = httpUrl.startsWith('https') ? 'wss:' : 'ws:';
+      const host = httpUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      serverUrl = `${protocol}//${host}/ws/browser`;
+    }
+  }
   const token = doc?.dataset?.daToken || get('deepagents_auth_token') || '';
-  return { baseUrl, sessionId, token };
+  return { serverUrl, token };
 }
 
 function sendBridgeConfig() {
-  const { baseUrl, sessionId, token } = readBridgeConfig();
-  if (!baseUrl && !sessionId && !token) return;
-  const signature = `${baseUrl}|${sessionId}|${token}`;
+  const { serverUrl, token } = readBridgeConfig();
+  if (!serverUrl && !token) return;
+  const signature = `${serverUrl}|${token}`;
   if (signature === lastConfigSent) return;
   lastConfigSent = signature;
   chrome.runtime.sendMessage({
     source: 'content',
     type: 'bridge_config',
-    baseUrl,
-    sessionId,
+    serverUrl,
     token,
   });
 }
@@ -163,7 +170,7 @@ function observeBridgeConfig() {
   const observer = new MutationObserver(() => sendBridgeConfig());
   observer.observe(target, {
     attributes: true,
-    attributeFilter: ['data-da-server-ws-base', 'data-da-session-id', 'data-da-token'],
+    attributeFilter: ['data-da-server-ws-base', 'data-da-token'],
   });
   sendBridgeConfig();
 }

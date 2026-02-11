@@ -31,6 +31,7 @@ from .models import (
 )
 from .sessions import RunRequest, Session, SessionManager, UploadedFile
 from .browser_bridge import BrowserBridge
+from .browser_router import BrowserRouter
 from .storage import (
     read_session_owners,
     read_user_config,
@@ -45,6 +46,13 @@ from .auth import create_auth_token, delete_auth_token, get_user_for_token, veri
 
 docker_pool: DockerSandboxPool | None = None
 manager: SessionManager | None = None
+browser_routers: dict[str, BrowserRouter] = {}
+
+
+def get_or_create_router(username: str) -> BrowserRouter:
+    if username not in browser_routers:
+        browser_routers[username] = BrowserRouter(username)
+    return browser_routers[username]
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
 _TEXT_EXTENSIONS = {
@@ -131,6 +139,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        browser_routers.clear()
         if manager is not None:
             await manager.shutdown()
         if docker_pool is not None:
@@ -244,7 +253,8 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
         req.assistant_id,
         req.auto_approve,
     )
-    session = await manager.create_session(req.assistant_id, req.auto_approve)
+    router = browser_routers.get(username)
+    session = await manager.create_session(req.assistant_id, req.auto_approve, username=username, browser_router=router)
     await set_session_owner(session.session_id, username)
     return CreateSessionResponse(
         session_id=session.session_id,
@@ -449,6 +459,68 @@ async def save_session_state(payload: SessionStatePayload, request: Request) -> 
     return {"status": "ok"}
 
 
+@app.websocket("/ws/browser")
+async def browser_websocket_endpoint(websocket: WebSocket) -> None:
+    token = websocket.query_params.get("token")
+    username = await get_user_for_token(token)
+    if not username:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    router = get_or_create_router(username)
+    await router.attach_ws(websocket)
+
+    # Bind router to any existing sessions for this user
+    if manager is not None:
+        for session_id, session in manager.sessions.items():
+            owner = await get_session_owner(session_id)
+            if owner == username and session.browser_bridge is not None:
+                if session.browser_bridge._router is None:
+                    session.browser_bridge.set_router(router)
+                    router.register_bridge(session_id, session.browser_bridge)
+
+    # Broadcast connected to all user sessions
+    if manager is not None:
+        for session_id in list(router._bridges.keys()):
+            session = await manager.get_session(session_id)
+            if session is not None:
+                await session.broadcast({"type": "browser.connected", "username": username})
+
+    try:
+        while True:
+            message = await websocket.receive_text()
+            data = json.loads(message)
+            response = await router.handle_extension_message(data)
+            if response is not None:
+                await websocket.send_text(json.dumps(response, ensure_ascii=False))
+                # Forward snapshot summaries to the main session WS
+                if response.get("type") == "browser.snapshot":
+                    sid = response.get("session_id")
+                    if sid and manager is not None:
+                        session = await manager.get_session(sid)
+                        if session is not None:
+                            await session.broadcast(
+                                {
+                                    "type": "browser.snapshot",
+                                    "session_id": sid,
+                                    "summary": response.get("summary"),
+                                }
+                            )
+    except WebSocketDisconnect:
+        logger.info("Browser WS disconnected: user=%s", username)
+    except Exception:
+        logger.exception("Browser WS error: user=%s", username)
+    finally:
+        await router.detach_ws(websocket)
+        # Broadcast disconnected to all user sessions
+        if manager is not None:
+            for session_id in list(router._bridges.keys()):
+                session = await manager.get_session(session_id)
+                if session is not None:
+                    await session.broadcast({"type": "browser.disconnected", "username": username})
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     if manager is None:
@@ -494,67 +566,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         if not session.connections and manager is not None:
             await manager.deactivate_session(session_id)
         await websocket.close(code=1011)
-
-
-@app.websocket("/ws/browser/{session_id}")
-async def browser_websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
-    if manager is None:
-        await websocket.accept()
-        await websocket.close(code=1011)
-        return
-    token = websocket.query_params.get("token")
-    username = await get_user_for_token(token)
-    if not username:
-        await websocket.accept()
-        await websocket.close(code=1008)
-        return
-    owner = await get_session_owner(session_id)
-    if owner and owner != username:
-        await websocket.accept()
-        await websocket.close(code=1008)
-        return
-    if owner is None:
-        await set_session_owner(session_id, username)
-    session = await manager.get_session(session_id)
-    if session is None:
-        await websocket.accept()
-        await websocket.close(code=1008)
-        return
-
-    await websocket.accept()
-    if session.browser_bridge is None:
-        session.browser_bridge = BrowserBridge(session_id=session_id)
-    await session.browser_bridge.attach(websocket, meta={"username": username})
-    logger.info("Browser WS connected: session_id=%s", session_id)
-    await session.broadcast({"type": "browser.connected", "session_id": session_id})
-    if manager is not None:
-        await manager.activate_session(session_id)
-
-    try:
-        while True:
-            message = await websocket.receive_text()
-            data = json.loads(message)
-            response = await session.browser_bridge.handle_message(data)
-            if response is not None:
-                await websocket.send_text(json.dumps(response, ensure_ascii=False))
-                if response.get("type") == "browser.snapshot":
-                    await session.broadcast(
-                        {
-                            "type": "browser.snapshot",
-                            "session_id": session_id,
-                            "summary": response.get("summary"),
-                        }
-                    )
-    except WebSocketDisconnect:
-        logger.info("Browser WS disconnected: session_id=%s", session_id)
-    except Exception:
-        logger.exception("Browser WS error: session_id=%s", session_id)
-    finally:
-        if session.browser_bridge is not None:
-            await session.browser_bridge.detach(websocket)
-        await session.broadcast({"type": "browser.disconnected", "session_id": session_id})
-        if not session.connections and manager is not None:
-            await manager.deactivate_session(session_id)
 
 
 async def handle_client_message(session: Session, data: dict[str, Any]) -> None:

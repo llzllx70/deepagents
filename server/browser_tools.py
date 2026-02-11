@@ -46,8 +46,11 @@ def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
         detach_after: bool | None = None,
         wait_ms: int | None = None,
         return_snapshot: bool | None = None,
+        tab_id: int | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"action": action}
+        if tab_id is not None:
+            payload["tab_id"] = tab_id
         normalized_target = normalize_browser_target(target)
         if normalized_target is not None:
             payload["target"] = normalized_target

@@ -1,6 +1,4 @@
-const baseUrlInput = document.getElementById("baseUrl");
-const sessionIdInput = document.getElementById("sessionId");
-const tokenInput = document.getElementById("token");
+const serverUrlInput = document.getElementById("serverUrl");
 const connectBtn = document.getElementById("connectBtn");
 const bindBtn = document.getElementById("bindBtn");
 const statusEl = document.getElementById("status");
@@ -12,10 +10,8 @@ function setStatus(text, connected) {
 }
 
 async function loadConfig() {
-    const stored = await chrome.storage.local.get(["baseUrl", "sessionId", "token"]);
-    if (stored.baseUrl) baseUrlInput.value = stored.baseUrl;
-    if (stored.sessionId) sessionIdInput.value = stored.sessionId;
-    if (stored.token) tokenInput.value = stored.token;
+  const stored = await chrome.storage.local.get(["serverUrl"]);
+  if (stored.serverUrl) serverUrlInput.value = stored.serverUrl;
 }
 
 async function autofillFromActiveTab() {
@@ -39,15 +35,7 @@ async function autofillFromActiveTab() {
           get("deepagents_server_ws_base") ||
           "";
         const serverUrl = get("deepagents_server_url");
-        const sessionId =
-          doc?.dataset?.daSessionId ||
-          get("deepagents_session_id") ||
-          "";
-        const token =
-          doc?.dataset?.daToken ||
-          get("deepagents_auth_token") ||
-          "";
-        return { serverWsBase, serverUrl, sessionId, token };
+        return { serverWsBase, serverUrl };
       },
     });
     const payload = results?.[0]?.result;
@@ -55,18 +43,12 @@ async function autofillFromActiveTab() {
     let wsBase = payload.serverWsBase;
     if (!wsBase && payload.serverUrl) {
       const protocol = payload.serverUrl.startsWith("https") ? "wss:" : "ws:";
-      const host = payload.serverUrl.replace(/^https?:\/\//, "");
+      const host = payload.serverUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
       wsBase = `${protocol}//${host}/ws/browser`;
     }
-    if (wsBase) baseUrlInput.value = wsBase;
-    if (payload.sessionId) sessionIdInput.value = payload.sessionId;
-    if (payload.token) tokenInput.value = payload.token;
-    if (wsBase || payload.sessionId || payload.token) {
-      await chrome.storage.local.set({
-        baseUrl: wsBase || baseUrlInput.value.trim(),
-        sessionId: sessionIdInput.value.trim(),
-        token: tokenInput.value.trim(),
-      });
+    if (wsBase) {
+      serverUrlInput.value = wsBase;
+      await chrome.storage.local.set({ serverUrl: wsBase });
     }
   } catch {
     // ignore injection errors
@@ -89,15 +71,11 @@ async function refreshStatus() {
 }
 
 connectBtn.addEventListener("click", async () => {
-  const baseUrl = baseUrlInput.value.trim();
-  const sessionId = sessionIdInput.value.trim();
-  const token = tokenInput.value.trim();
-  await chrome.storage.local.set({ baseUrl, sessionId, token });
+  const serverUrl = serverUrlInput.value.trim();
+  await chrome.storage.local.set({ serverUrl });
   const response = await sendMessage({
     type: "connect",
-    baseUrl,
-    sessionId,
-    token,
+    serverUrl,
   });
   if (response && response.error) {
     setStatus(`Connect failed: ${response.error}`, false);

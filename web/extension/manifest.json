@@ -3,7 +3,7 @@
   "name": "DeepAgents Browser Bridge",
   "version": "0.1.0",
   "description": "Connect DeepAgents to the user's Chrome via CDP for local browsing control.",
-  "permissions": ["tabs", "scripting", "storage", "activeTab", "debugger"],
+  "permissions": ["tabs", "scripting", "storage", "activeTab", "debugger", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

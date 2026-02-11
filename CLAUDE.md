@@ -7,60 +7,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Server (Python FastAPI)
 
 ```bash
-# Primary method via run.sh script (menu-first, module-aware)
-./scripts/run.sh                          # Interactive menu mode (default)
-./scripts/run.sh help
+# run.sh CLI: ./scripts/run.sh <action> [target] [model]
+# Actions: start, stop, restart, deploy, update-web, update-all, process, log
+# Targets: server, web, all (default depends on action)
+# Model defaults to "main" entry in config/llm-scene.yml
 
-# Server control (server is the only module that requires model selection)
-./scripts/run.sh server start [--model <model_key>]
-./scripts/run.sh server stop
-./scripts/run.sh server restart [--model <model_key>]
-./scripts/run.sh server model list
-./scripts/run.sh server model show-default
+./scripts/run.sh                          # Interactive menu mode
+./scripts/run.sh start server             # Start server with default model
+./scripts/run.sh start server glm         # Start server with specific model
+./scripts/run.sh stop server              # Stop server
+./scripts/run.sh restart server           # Restart with default model
+./scripts/run.sh deploy all               # Update web + restart server
+./scripts/run.sh update-web               # Copy web/ to WEB_DEPLOY_DIR
+./scripts/run.sh process all              # Show running processes
+./scripts/run.sh log server               # Tail server logs
 
-# Web control (static assets only)
-./scripts/run.sh web sync                 # Copy web/ to WEB_DEPLOY_DIR
-./scripts/run.sh web status
-
-# One-click common action
-./scripts/run.sh quick deploy [--model <model_key>]   # web sync + server restart + status
-
-# Direct Python execution (sets DEEPAGENTS_MODEL env var)
+# Direct Python execution
 export DEEPAGENTS_MODEL=kimi
 python -m server.deepagents_server
 
-# Install/update Python dependencies
+# Dependencies
 pip install -r requirements.txt
+npm install                               # Node deps for create_presentation.js
 
-# Run tests
-pytest                              # All tests
-pytest test/test_kimi_tool_args.py # Specific test file
+# Tests
+pytest                                    # All tests
+pytest test/test_kimi_tool_args.py        # Specific test file
 ```
+
+Some tests are integration-heavy and skip unless env vars are set (Playwright, API keys).
 
 ### Web Client (vanilla JS, no build step)
 
 ```bash
-cd web
-python3 -m http.server 8080
-# Open http://localhost:8080
-```
-
-### Deployment
-
-```bash
-# Update web assets to nginx (requires WEB_DEPLOY_DIR in config/deepagents.yml)
-./scripts/deploy_nginx.sh
-
-# Or via run.sh (preferred)
-./scripts/run.sh web sync
-./scripts/run.sh quick deploy
+cd web && python3 -m http.server 8080
 ```
 
 ## Architecture Overview
 
 DeepAgents is an AI agent orchestration platform with a LangGraph-based backend and vanilla JavaScript web client.
-
-### Component Flow
 
 ```
 Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → Tools → LLM Providers
@@ -94,8 +79,10 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 - Pool config via env vars: `DEEPAGENTS_DOCKER_POOL_SIZE` (default: 10), `DEEPAGENTS_DOCKER_MIN_IDLE` (default: 2)
 - Container workdir: `/workspace` mapped to `workspace/{session_id}/` on host
 - Skills mounted read-only: `/user-skills` (user), `/skills` (project)
-- Environment passthrough: `COZE_TOKEN`, `COZE_FLOW_ID`, `COZE_APP_ID`
 - Bind workspace mode: `DEEPAGENTS_DOCKER_BIND_WORKSPACE=1` for development
+
+**Qwen-Specific Runner** (`server/qwen_runner.py`, `server/qwen_tools.py`):
+- Qwen models require a dedicated runner and tool builder due to non-standard tool call streaming
 
 **WebSocket Protocol** (`server/app.py`, `docs/protocol.md`):
 - Server → Client events: `run.*`, `assistant.delta`, `assistant.message`, `tool.call.started`, `tool.call.ended`, `file.op`, `todos.updated`, `interrupt.*`
@@ -107,147 +94,81 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 **Entry Point**: `web/app.js` - `DeepAgentsClient` class
 
-**State Management**:
-- `currentRunId`, `isRunning` - Active agent run tracking
-- `autoApprove` - Per-session toggle for automatic approval
-- `messageBuffer` (Map) - Assemble streaming text chunks
-- `currentToolCalls` (Map) - Track active tool calls
-- `chatHistory` - LocalStorage persistence
+**Key modules** in `web/app/`: `network.js` (WebSocket), `messages.js` (rendering), `ui.js` (state), `auth.js` (authentication), `history.js` (LocalStorage persistence)
 
-**Event Routing** (`handleMessage`):
-- `run.queued`, `run.started`, `run.completed`, `run.failed`, `run.cancelled`, `run.rejected`
-- `assistant.delta` (streaming), `assistant.message` (full)
-- `tool.call.started`, `tool.call.ended`
-- `file.op` (with diff highlighting)
-- `todos.updated`
-- `interrupt.request`
-
-**Files**:
-- `web/index.html` - Main HTML structure
-- `web/styles.css` - All styles (dark theme)
-- `web/libs/` - Local copies of `marked.js`, `highlight.js`, `python.js`
-- `web/app/auth.js` - Authentication handling
-- `web/app/history.js` - Chat history persistence
-- `web/app/network.js` - WebSocket communication
-- `web/app/messages.js` - Message rendering
-- `web/app/ui.js` - UI state management
+**Event Routing** (`handleMessage`): routes `run.*`, `assistant.delta`, `assistant.message`, `tool.call.started/ended`, `file.op`, `todos.updated`, `interrupt.request`
 
 ### Skills System
 
-**Location**: `skills/` directory — each skill is a self-contained package with a `SKILL.md` file describing its purpose and usage. Categories include document generation, research, design, and specialized tools. Skills are loaded by `SkillsMiddleware` and injected as agent tools.
+**Location**: `skills/` directory — each skill is a self-contained package with a `SKILL.md` file. Skills are loaded by `SkillsMiddleware` (`server/skills_middleware.py`) and injected as agent tools. Project skills in `.deepagents/skills/`, user skills at `settings.user_deepagents_dir`.
 
 ## Configuration Files
 
 ### `config/model.yml`
 
-LLM provider configurations (kimi, glm, qwen, qwen3-vl-plus, qwen-image-max, claude, openrouter):
+LLM provider configurations (kimi, glm, qwen, claude, openrouter, etc.):
 ```yaml
 models:
   kimi:
     api_key: "..."
     base_url: "https://api.moonshot.cn/v1"
     model: "moonshot-v1-8k"
-  glm:
-    api_key: "..."
-    base_url: "https://open.bigmodel.cn/api/paas/v4"
-    model: "glm-4"
 ```
 
 ### `config/deepagents.yml`
 
-Environment variables and paths:
+Environment variables and paths (loaded by `run.sh` via `load_env_config`):
 ```yaml
 env:
   LANGCHAIN_TRACING_V2: "true"
   LANGCHAIN_API_KEY: "..."
-  DEEPAGENTS_DOCKER_BIND_WORKSPACE: "1"  # Enable bind workspace for development
-  COZE_TOKEN: "..."
-  COZE_FLOW_ID: "..."
-  COZE_APP_ID: "..."
-  WEB_ROOT: "/Users/double/vsproject/deepagents/web"
+  DEEPAGENTS_DOCKER_BIND_WORKSPACE: "1"
+  WEB_ROOT: "<project_root>/web"
   WEB_DEPLOY_DIR: "/path/to/nginx/root"
 ```
 
 ### `config/llm-scene.yml`
 
-Scene-to-model mapping for run.sh:
+Scene-to-model mapping; `main` key sets the default model for `run.sh`:
 ```yaml
 main: "glm"
 ```
 
 ### `.deepagents/agent.md`
 
-Project-specific agent instructions (Chinese):
-
-**Critical Rules**:
-- 不能删除任何文件 - Never delete any files, even during cleanup or when explicitly requested
+Project-specific agent instructions (Chinese). Critical rules:
+- Never delete any files, even when explicitly requested
 - Tool calls must include intent descriptions in content (no empty `{"content": ""}`)
 - All generated files must go in `workspace/` directory
-- Download URL format: `下载：/files/<workspace相对路径>` (strict format, no Markdown links or full URLs)
+- Download format: `下载：/files/<workspace相对路径>` (strict, no Markdown links or full URLs)
 - HTML resources must use `/files/<workspace相对路径>` absolute paths
-- Never reference paths outside `workspace/`
 
 ## File Path Handling (Critical)
 
-- All paths must be absolute (e.g., `/Users/double/vsproject/deepagents/file.txt`)
 - Workspace: `/workspace` inside container → `workspace/{session_id}/` on host
 - Download prefix: `/files/` served from `workspace/` via `/files` route
 - HTML resources: Use `/files/<workspace-relative-path>` format
-- Example: Image at `workspace/assets/img.png` → HTML references `/files/assets/img.png`
-
-## Download Output Format (Strict)
-
-When providing file downloads to users, use **only** this exact format:
-- `下载：/files/<workspace相对路径>` (e.g., `下载：/files/report.pdf`)
-- **Forbidden**: Markdown links (`[text](url)`), wrapped links, full URLs, or paths without `/files/`
-- The full URL is constructed at runtime by the frontend using hostname+8000 and `?server=` parameter
+- Example: `workspace/assets/img.png` → HTML references `/files/assets/img.png`
+- Never reference paths outside `workspace/`
 
 ## LLM Provider Notes
 
-Some providers (notably Qwen) do not stream tool call arguments. The `ToolCallArgsMiddleware` (`server/tool_args_middleware.py`) captures arguments at execution time to ensure the web client can display them correctly. This is why `tool.call.started` events may show empty `args: {}` for some providers.
+Some providers (notably Qwen) do not stream tool call arguments. The `ToolCallArgsMiddleware` (`server/tool_args_middleware.py`) captures arguments at execution time so the web client can display them. This is why `tool.call.started` events may show empty `args: {}` for some providers. Set `DEEPAGENTS_DEBUG_TOOL_CALLS=1` for verbose logging.
 
 ## Code Style
 
 - Python: 4-space indentation, snake_case filenames
 - JavaScript: ES6 modules, arrow functions, template literals
 - CSS: Custom properties in `:root`, BEM-like naming
-- No repo-wide formatter; `black` is available in requirements.txt if needed
-- Follow existing patterns in each file
+- No repo-wide formatter; follow existing patterns in each file
+- Commit messages: prefer imperative, scoped format (e.g., `server: fix session cleanup`)
 
 ## Key Dependencies
 
-- **Core**: `deepagents`, `deepagents-cli` - Agent harness and CLI utilities
+- **Core**: `deepagents`, `deepagents-cli` (pip packages) - Agent harness and CLI utilities
 - **LLM Orchestration**: `langchain`, `langgraph`, `langsmith`
 - **Web Server**: `fastapi`, `uvicorn`, `websockets`
 - **LLM Providers**: `anthropic`, `openai`, `tavily-python`
 - **Browser**: `playwright`
 - **Document Processing**: `python-docx`, `python-pptx`, `pypdfium2`, `pdfplumber`, `fpdf2`, `weasyprint`, `pandoc`
-
-See `requirements.txt` for exact versions.
-
-## Important Files
-
-- `server/sessions.py` - Session & run execution
-- `server/agent.py` - Agent creation (`create_cli_agent`)
-- `server/docker_pool.py` - Docker pool management
-- `server/app.py` - FastAPI routes & WebSocket handler
-- `server/browser_bridge.py` - Browser integration
-- `server/tool_args_middleware.py` - Tool argument capture
-- `server/skills_middleware.py` - Skill tool injection
-- `server/config.py` - Server configuration and path setup
-- `server/tool_call_args.py` - Tool call argument storage
-- `web/app.js` - Main web client logic
-- `web/app/network.js` - WebSocket communication
-- `web/app/messages.js` - Message rendering
-- `scripts/run.sh` - Server management script
-
-## Security Notes
-
-- Secrets in `config/` files - keep out of git
-- Server writes user history to `data/users/` - avoid committing runtime artifacts
-- WebSocket requires authentication for history/session access
-- All file operations happen in Docker sandbox (or local shell in non-Docker mode)
-
-## Debug Tool Calls
-
-Set `DEEPAGENTS_DEBUG_TOOL_CALLS=1` to enable verbose logging of tool call arguments in `server/tool_args_middleware.py`. This helps diagnose issues with providers that don't stream tool call arguments (like Qwen).
+- **Node**: `pptxgenjs`, `sharp` (for presentation generation)

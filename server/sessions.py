@@ -25,6 +25,7 @@ from deepagents_cli.file_ops import FileOpTracker, format_display_path
 from deepagents_cli.skills.load import list_skills
 from deepagents_cli.tools import fetch_url, http_request, web_search
 from .browser_bridge import BrowserBridge
+from .browser_router import BrowserRouter
 from .browser_tools import build_browser_tools
 from .docker import DockerSandboxBackend
 from .docker_pool import DockerSandboxPool
@@ -1203,6 +1204,10 @@ class SessionManager:
         self._active_session_id: str | None = None
         self._activation_lock = asyncio.Lock()
 
+    @property
+    def sessions(self) -> dict[str, Session]:
+        return self._sessions
+
     async def activate_session(self, session_id: str) -> None:
         async with self._activation_lock:
             async with self._lock:
@@ -1217,7 +1222,13 @@ class SessionManager:
                 self._active_session_id = None
 
 
-    async def create_session(self, assistant_id: str | None, auto_approve: bool) -> Session:
+    async def create_session(
+        self,
+        assistant_id: str | None,
+        auto_approve: bool,
+        username: str | None = None,
+        browser_router: BrowserRouter | None = None,
+    ) -> Session:
         logger.info("Creating session: assistant_id=%s auto_approve=%s", assistant_id, auto_approve)
         session_id = uuid.uuid4().hex
         session_workspace_dir = WORKSPACE_DIR / session_id
@@ -1247,6 +1258,9 @@ class SessionManager:
 
         session_state = SessionState(auto_approve=auto_approve)
         browser_bridge = BrowserBridge(session_id=session_id)
+        if browser_router is not None:
+            browser_bridge.set_router(browser_router)
+            browser_router.register_bridge(session_id, browser_bridge)
         tools.extend(build_browser_tools(browser_bridge))
         sandbox_backend = await self._pool.acquire_for_session(session_id, session_workspace_dir)
         tools.extend(
