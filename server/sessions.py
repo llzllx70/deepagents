@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator
 from fastapi import WebSocket
 from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
 
@@ -48,6 +49,18 @@ from .mcp_tools import get_mcp_tools
 from .tool_call_args import pop_tool_call_args
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
+
+_CONTEXT_OVERFLOW_KEYWORDS = ("context_length", "token", "maximum", "max_tokens", "too long", "too many tokens")
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    """Check if an exception indicates a context length overflow from an LLM API."""
+    exc_type = type(exc).__name__
+    # Match openai.BadRequestError, anthropic.BadRequestError, or similar
+    if "BadRequest" not in exc_type and "InvalidRequest" not in exc_type:
+        return False
+    error_str = str(exc).lower()
+    return any(kw in error_str for kw in _CONTEXT_OVERFLOW_KEYWORDS)
 
 _LANGSMITH_ENV_LOCK: asyncio.Lock | None = None
 _LANGSMITH_TRACING_CONTEXT: Any | None = None
@@ -186,6 +199,76 @@ def _configure_kimi_thinking(model: Any) -> None:
         extra_body = {}
     extra_body = {**extra_body, "thinking": thinking_value}
     model.extra_body = extra_body
+
+
+# Known context window sizes for models without auto-detected profiles
+_MODEL_MAX_INPUT_TOKENS: dict[str, int] = {
+    "kimi-k2.5": 131072,
+    "moonshot-v1-8k": 8192,
+    "moonshot-v1-32k": 32768,
+    "moonshot-v1-128k": 131072,
+    "glm-4.7": 131072,
+    "qwen3-coder-plus": 131072,
+}
+
+
+def _load_model_max_input_tokens(model_name: str) -> int | None:
+    """Load max_input_tokens from config/model.yml for a given model.
+
+    Returns the configured value if found, or None.
+    """
+    try:
+        import yaml
+        config_path = Path(__file__).resolve().parents[0].parent / "config" / "model.yml"
+        if not config_path.exists():
+            return None
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        models = data.get("models")
+        if not isinstance(models, dict):
+            return None
+        # Search through all model entries for a matching model name
+        for _key, model_cfg in models.items():
+            if not isinstance(model_cfg, dict):
+                continue
+            cfg_model = model_cfg.get("model")
+            if cfg_model == model_name:
+                max_tokens = model_cfg.get("max_input_tokens")
+                if isinstance(max_tokens, int) and max_tokens > 0:
+                    return max_tokens
+    except Exception:
+        pass
+    return None
+
+
+def _configure_model_profile(model: Any) -> None:
+    """Set max_input_tokens on model profile if not already set.
+
+    This ensures SummarizationMiddleware triggers at the correct threshold
+    instead of using the default 170k fallback.
+    """
+    if not hasattr(model, "profile"):
+        return
+    profile = model.profile
+    if isinstance(profile, dict) and "max_input_tokens" not in profile:
+        model_name = None
+        for attr in ("model_name", "model", "model_id"):
+            value = getattr(model, attr, None)
+            if isinstance(value, str) and value:
+                model_name = value
+                break
+        if model_name:
+            # Priority: config/model.yml > hardcoded dict
+            actual_limit = _load_model_max_input_tokens(model_name)
+            if actual_limit is None:
+                actual_limit = _MODEL_MAX_INPUT_TOKENS.get(model_name)
+            if actual_limit is not None:
+                # Apply 75% safety margin to compensate for token estimation errors
+                # (char-based estimation can be 20-30% off for CJK, JSON, base64, etc.)
+                profile["max_input_tokens"] = int(actual_limit * 0.75)
+                logger.info(
+                    "Model profile configured: model=%s actual_limit=%d effective_limit=%d",
+                    model_name, actual_limit, profile["max_input_tokens"],
+                )
 
 
 def _describe_tool(tool: Any) -> str:
@@ -710,7 +793,20 @@ class Session:
                     interrupt_occurred = False
                     pending_interrupts: dict[str, HITLRequest] = {}
                     hitl_response: dict[str, HITLResponse] = {}
-    
+
+                    # Log context usage for observability
+                    try:
+                        _state_snapshot = await self.agent.aget_state(config)
+                        _state_messages = _state_snapshot.values.get("messages", [])
+                        _est_tokens = count_tokens_approximately(_state_messages)
+                        logger.info(
+                            "Context usage: session_id=%s run_id=%s round=%d messages=%d est_tokens=%d",
+                            self.session_id, run_request.run_id,
+                            stream_round, len(_state_messages), _est_tokens,
+                        )
+                    except Exception:
+                        pass
+
                     async for chunk in self.agent.astream(
                         stream_input,
                         stream_mode=["messages", "updates"],
@@ -1172,9 +1268,91 @@ class Session:
             logger.info("Run cancelled: session_id=%s run_id=%s", self.session_id, run_request.run_id)
             await self._update_cancelled_state(config)
             raise
+        except Exception as exc:
+            if _is_context_overflow_error(exc):
+                logger.warning(
+                    "Context overflow detected, attempting emergency truncation: "
+                    "session_id=%s run_id=%s error=%s",
+                    self.session_id, run_request.run_id, exc,
+                )
+                await self._emergency_context_truncation(config)
+                await self.broadcast(
+                    {
+                        "type": "log",
+                        "level": "warning",
+                        "run_id": run_request.run_id,
+                        "message": "对话上下文过长，已自动截断历史消息。请重新发送您的请求。",
+                    }
+                )
+                self.run_status[run_request.run_id] = "failed"
+                await self.broadcast(
+                    {
+                        "type": "run.failed",
+                        "run_id": run_request.run_id,
+                        "error": "Context too long, history truncated. Please resend your message.",
+                    }
+                )
+            else:
+                raise
         finally:
             run_ctx.cancel_pending()
             self.current_run = None
+
+    async def _emergency_context_truncation(self, config: dict[str, Any]) -> None:
+        """Emergency truncation when LLM returns context_length_exceeded.
+
+        Reads current state, keeps only the most recent messages (preserving
+        AI/Tool message pairs), and writes back via aupdate_state.
+        """
+        try:
+            state = await self.agent.aget_state(config)
+            messages = state.values.get("messages", [])
+            if not messages:
+                logger.warning("Emergency truncation: no messages in state")
+                return
+
+            # Keep at most 6 recent messages, but ensure AI/Tool pairs stay together
+            keep_count = min(6, len(messages))
+            kept = messages[-keep_count:]
+
+            # If the first kept message is a ToolMessage, we need the preceding
+            # AIMessage to keep the pair intact
+            while kept and isinstance(kept[0], ToolMessage) and keep_count < len(messages):
+                keep_count += 1
+                kept = messages[-keep_count:]
+
+            removed_count = len(messages) - len(kept)
+            if removed_count <= 0:
+                logger.warning(
+                    "Emergency truncation: cannot remove any messages (total=%d, kept=%d)",
+                    len(messages), len(kept),
+                )
+                return
+
+            # Build a summary placeholder for the removed messages
+            summary_text = (
+                f"[Previous conversation ({removed_count} messages) was truncated "
+                f"due to context length limits. Recent context preserved below.]"
+            )
+
+            await self.agent.aupdate_state(
+                config=config,
+                values={
+                    "messages": [
+                        HumanMessage(
+                            content=summary_text,
+                            additional_kwargs={"lc_source": "emergency_truncation"},
+                        ),
+                        *kept,
+                    ]
+                },
+            )
+            logger.info(
+                "Emergency truncation completed: removed=%d kept=%d session_id=%s",
+                removed_count, len(kept), self.session_id,
+            )
+        except Exception:
+            logger.exception("Emergency truncation failed: session_id=%s", self.session_id)
 
     async def _update_cancelled_state(self, config: dict[str, Any]) -> None:
         try:
@@ -1235,6 +1413,7 @@ class SessionManager:
         session_workspace_dir.mkdir(parents=True, exist_ok=True)
         model = create_model()
         _configure_kimi_thinking(model)
+        _configure_model_profile(model)
         tools = [http_request, fetch_url]
         logger.info(
             "settings.has_tavily = %s, tavily_api_key = %s...",

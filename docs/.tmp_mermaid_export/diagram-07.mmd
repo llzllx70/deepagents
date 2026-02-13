@@ -1,0 +1,11 @@
+flowchart TD
+  A["每轮交互开始"] --> B["SkillsMiddleware.before_agent()"]
+  B --> C["list_skills()<br/>扫描 user + project skills 目录"]
+  C --> D["解析每个 SKILL.md 的 frontmatter<br/>得到 (name, description, path, source)"]
+  D --> E["写入 state.skills_metadata"]
+  E --> F["SkillsMiddleware.wrap_model_call()"]
+  F --> G["把 skills 索引注入 system prompt"]
+  G --> H["模型选择是否需要某个 skill"]
+  H -->|需要| I["read_file(skill_path) 读取 SKILL.md 全文"]
+  I --> J["按 SKILL.md 的步骤调用工具并完成任务"]
+  H -->|不需要| K["继续常规推理/工具调用"]

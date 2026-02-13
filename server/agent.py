@@ -26,6 +26,7 @@ from deepagents_cli.shell import ShellMiddleware
 
 from .skills_middleware import SkillsMiddleware
 from .tool_args_middleware import ToolCallArgsMiddleware
+from .tool_result_middleware import ToolResultTruncationMiddleware
 
 
 _PROVIDER_TO_WORKING_DIR: dict[str, str] = {
@@ -516,6 +517,9 @@ def create_cli_agent(
 
         # Note: Shell middleware not used in sandbox mode
         # File operations and execute tool are provided by the sandbox backend
+
+    # Truncate oversized tool results before they reach the model
+    agent_middleware.append(ToolResultTruncationMiddleware())
 
     # Capture tool call arguments at execution time (useful for providers missing args in streams)
     agent_middleware.append(ToolCallArgsMiddleware())

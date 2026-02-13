@@ -1,0 +1,14 @@
+graph TD
+  A["TodoListMiddleware<br/>write_todos/state.todos"]
+  B["FilesystemMiddleware<br/>ls/read_file/write_file/edit_file/glob/grep/(execute)"]
+  C["SubAgentMiddleware<br/>task → 子代理"]
+  D["SummarizationMiddleware<br/>长上下文压缩"]
+  E["AnthropicPromptCachingMiddleware<br/>(不支持则 ignore)"]
+  F["PatchToolCallsMiddleware<br/>补齐悬空 tool_call"]
+  G{interrupt_on?}
+  H["HumanInTheLoopMiddleware<br/>__interrupt__ / resume"]
+
+  A --> B --> C --> D --> E --> F --> G
+  G -->|是| H
+  G -->|否| I["create_agent() 编译成图"]
+  H --> I

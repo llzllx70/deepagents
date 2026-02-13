@@ -1,0 +1,11 @@
+flowchart TD
+  A["CLI loop<br/>等待用户输入"] --> B{"输入类型?"}
+  B -->|/cmd| C["commands.handle_command()"]
+  B -->|!bash| D["commands.execute_bash_command()<br/>(本机 subprocess)"]
+  B -->|普通输入| E["execute_task()<br/>agent.astream()"]
+
+  E --> F{"updates 有 __interrupt__ ?"}
+  F -->|无| G["本轮结束 → 回到 CLI loop"]
+  F -->|有| H["提示用户 approve/reject"]
+  H --> I["Command(resume=...)"]
+  I --> E

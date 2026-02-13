@@ -1,0 +1,23 @@
+flowchart TB
+  U["用户/终端"] --> CLI["deepagents_cli<br/>交互与编排层"]
+  CLI --> EXE["execute_task()<br/>agent.astream(messages+updates)"]
+  CLI --> AGENT_FACTORY["create_cli_agent()<br/>组装 agent + backend"]
+
+  AGENT_FACTORY --> CORE["deepagents.create_deep_agent()<br/>默认中间件栈 + 自定义中间件"]
+  CORE --> GRAPH["LangGraph Agent<br/>CompiledStateGraph/Pregel"]
+  GRAPH -->|model calls| LLM["BaseChatModel"]
+  GRAPH -->|tool calls| TR["Tool Runtime / ToolNode"]
+
+  TR --> FS["FilesystemMiddleware<br/>ls/read/write/edit/glob/grep/(execute)"]
+  TR --> TD["TodoListMiddleware<br/>write_todos"]
+  TR --> SA["SubAgentMiddleware<br/>task → subagent.invoke"]
+  TR --> SH["ShellMiddleware（本地）<br/>shell"]
+  TR --> WEB["CLI tools<br/>web_search/fetch_url/http_request"]
+
+  FS --> BE["BackendProtocol/CompositeBackend"]
+  BE --> LFS["FilesystemBackend（本地）"]
+  BE --> SBX["SandboxBackendProtocol（远程）"]
+
+  GRAPH -->|updates| HITL["__interrupt__ / todos 更新"]
+  HITL --> EXE
+  GRAPH -->|messages| EXE

@@ -1,0 +1,15 @@
+sequenceDiagram
+  participant User as User
+  participant CLI as deepagents_cli.execute_task
+  participant Graph as LangGraph Agent
+  participant LLM as ChatModel
+  participant Tool as ToolNode/Tools
+
+  User->>CLI: 输入一条消息
+  CLI->>Graph: astream(messages+updates)
+  Graph->>LLM: 模型调用
+  LLM-->>Graph: 输出文本 + tool_calls（结构化）
+  Graph->>Tool: 执行工具
+  Tool-->>Graph: ToolMessage / Command(update=...)
+  Graph-->>CLI: messages 流（可渲染）
+  Graph-->>CLI: updates 流（todos / __interrupt__）

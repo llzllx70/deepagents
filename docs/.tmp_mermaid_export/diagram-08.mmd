@@ -1,0 +1,50 @@
+classDiagram
+  class AgentState {
+    +messages: list
+    +todos: list
+  }
+
+  class AgentMiddleware {
+    <<abstract>>
+    +tools: list
+    +state_schema: type
+    +before_agent()
+    +wrap_model_call()
+    +wrap_tool_call()
+  }
+
+  class FilesystemMiddleware
+  class SubAgentMiddleware
+  class PatchToolCallsMiddleware
+  AgentMiddleware <|-- FilesystemMiddleware
+  AgentMiddleware <|-- SubAgentMiddleware
+  AgentMiddleware <|-- PatchToolCallsMiddleware
+
+  class BaseTool {
+    <<abstract>>
+    +name: str
+    +description: str
+  }
+  class StructuredTool
+  BaseTool <|-- StructuredTool
+
+  class TaskTool {
+    +name: task
+    +task()/atask()
+  }
+  StructuredTool <|-- TaskTool
+  SubAgentMiddleware *-- TaskTool : creates
+
+  class ToolRuntime {
+    +state: AgentState
+    +tool_call_id: str
+  }
+
+  class Command {
+    +update: dict
+  }
+
+  FilesystemMiddleware o-- BaseTool : provides
+  SubAgentMiddleware o-- BaseTool : provides
+  TaskTool ..> ToolRuntime : reads state
+  TaskTool ..> Command : returns update

@@ -1,0 +1,8 @@
+flowchart TD
+  M["Main Agent"] -->|tool_call: task| TN["ToolNode"]
+  TN --> V["1) 校验 subagent_type"]
+  V --> P["2) 复制 state（排除 messages/todos）<br/>3) 重置 messages 为 HumanMessage(description)"]
+  P --> S["4) subagent.invoke(subagent_state)"]
+  S --> R["5) 子代理结束：取最后一条输出"]
+  R --> U["6) 追加为 ToolMessage，并用 Command(update) 回灌主图"]
+  U --> M

@@ -1,0 +1,8 @@
+flowchart TD
+  START(__start__) --> MW_BEFORE["before_agent / wrap_model_call 链<br/>(memory/skills/filesystem/subagents/...)"]
+  MW_BEFORE --> MODEL["Model 节点（LLM）"]
+  MODEL --> MW_AFTER["after_model/hitl 检查（可选）"]
+  MW_AFTER -->|无 tool_calls| END(__end__)
+  MW_AFTER -->|有 tool_calls| TOOLS["ToolNode 执行工具"]
+  TOOLS --> MW_TOOLS["wrap_tool_call 链<br/>(filesystem 大结果落盘等)"]
+  MW_TOOLS --> MW_BEFORE
