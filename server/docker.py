@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from deepagents.backends.protocol import (
+    EditResult,
     ExecuteResponse,
     FileDownloadResponse,
     FileOperationError,
@@ -15,6 +16,7 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
+from deepagents.backends.utils import perform_string_replacement
 
 _DEFAULT_TIMEOUT_SECONDS = 120
 
@@ -104,6 +106,43 @@ class DockerSandboxBackend(BaseSandbox):
         if response.error:
             return WriteResult(error=f"Error writing file '{file_path}': {response.error}")
         return WriteResult(path=file_path, files_update=None)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Edit a file by download/replace/upload to avoid shell arg size limits."""
+        response = self.download_files([file_path])[0]
+        if response.error or response.content is None:
+            return EditResult(error=f"Error: File '{file_path}' not found")
+
+        try:
+            content = response.content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return EditResult(error=f"Error editing file '{file_path}': {exc}")
+
+        replacement = perform_string_replacement(
+            content,
+            old_string,
+            new_string,
+            replace_all,
+        )
+        if isinstance(replacement, str):
+            return EditResult(error=replacement)
+
+        new_content, occurrences = replacement
+        upload = self.upload_files([(file_path, new_content.encode("utf-8"))])[0]
+        if upload.error:
+            return EditResult(error=f"Error editing file '{file_path}': {upload.error}")
+
+        return EditResult(
+            path=file_path,
+            files_update=None,
+            occurrences=int(occurrences),
+        )
 
     def pause(self) -> None:
         self._set_pause_state(paused=True)

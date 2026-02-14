@@ -203,6 +203,55 @@ def _first_arg(args: dict[str, Any], keys: list[str]) -> str | None:
     return None
 
 
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if re.fullmatch(r"-?\d+", text):
+            try:
+                return int(text)
+            except ValueError:
+                return None
+    return None
+
+
+def _format_read_file_range(args: dict[str, Any]) -> str | None:
+    offset = _coerce_int(args.get("offset"))
+    limit = _coerce_int(args.get("limit"))
+    if offset is not None and limit is not None:
+        if limit > 0:
+            return f"范围 {offset}-{offset + limit - 1}"
+        if limit == 0:
+            return f"范围 {offset}-{offset}"
+        return f"offset={offset}, limit={limit}"
+
+    for start_key, end_key in (
+        ("start_line", "end_line"),
+        ("line_start", "line_end"),
+        ("from_line", "to_line"),
+        ("line_from", "line_to"),
+    ):
+        start = _coerce_int(args.get(start_key))
+        end = _coerce_int(args.get(end_key))
+        if start is not None and end is not None:
+            return f"范围 {start}-{end}"
+
+    if offset is not None:
+        return f"offset={offset}"
+    if limit is not None:
+        return f"limit={limit}"
+    return None
+
+
 def _extract_target_hint(target: Any) -> str | None:
     if isinstance(target, dict):
         target_id = target.get("id")
@@ -331,7 +380,14 @@ def format_tool_display(
     content: str | None = None
     title_override: str | None = None
 
-    if name in ("read_file", "write_file", "edit_file"):
+    if name == "read_file":
+        file_path = _first_arg(parsed_args, ["file_path", "path", "file"])
+        range_hint = _format_read_file_range(parsed_args)
+        if file_path and range_hint:
+            content = f"{file_path} ({range_hint})"
+        else:
+            content = file_path or range_hint
+    elif name in ("write_file", "edit_file"):
         content = _first_arg(parsed_args, ["file_path", "path", "file"])
     elif name == "ls":
         content = _first_arg(parsed_args, ["path", "dir", "directory"]) or "当前目录"

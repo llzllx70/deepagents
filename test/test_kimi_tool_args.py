@@ -204,3 +204,57 @@ def test_tool_call_block_prefers_arguments_when_args_empty() -> None:
     assert message["type"] == "tool.call.started"
     assert message["tool_name"] == "read_file"
     assert message["args"] == {"file_path": "/skills/stock-master/SKILL.md"}
+
+
+def test_read_file_display_includes_offset_limit_range() -> None:
+    tool_call_buffers: dict[str | int, dict[str, object]] = {}
+    displayed_tool_ids: set[str] = set()
+    tracker = _DummyFileOpTracker()
+    session = _DummySession()
+
+    asyncio.run(
+        handle_tool_call_block(
+            {
+                "tool_name": "read_file",
+                "tool_call_id": "call_6",
+                "arguments": "{\"file_path\": \"/skills/stock-master/SKILL.md\", \"offset\": 2000, \"limit\": 2000}",
+            },
+            tool_call_buffers,
+            displayed_tool_ids,
+            tracker,
+            "run_6",
+            session,
+        )
+    )
+
+    assert session.messages, "Expected a tool.call.started broadcast"
+    message = session.messages[-1]
+    assert message["tool_name"] == "read_file"
+    assert message["display_content"] == "/skills/stock-master/SKILL.md (范围 2000-3999)"
+
+
+def test_read_file_display_includes_line_range() -> None:
+    tool_call_buffers: dict[str | int, dict[str, object]] = {}
+    displayed_tool_ids: set[str] = set()
+    tracker = _DummyFileOpTracker()
+    session = _DummySession()
+
+    asyncio.run(
+        handle_tool_call_block(
+            {
+                "tool_name": "read_file",
+                "tool_call_id": "call_7",
+                "arguments": "{\"file_path\": \"/skills/stock-master/SKILL.md\", \"start_line\": 10, \"end_line\": 20}",
+            },
+            tool_call_buffers,
+            displayed_tool_ids,
+            tracker,
+            "run_7",
+            session,
+        )
+    )
+
+    assert session.messages, "Expected a tool.call.started broadcast"
+    message = session.messages[-1]
+    assert message["tool_name"] == "read_file"
+    assert message["display_content"] == "/skills/stock-master/SKILL.md (范围 10-20)"

@@ -106,6 +106,52 @@ export class UtilsModule {
         return `${text.slice(0, maxLength)}...`;
     }
 
+    parseInteger(value) {
+        if (typeof value === 'number' && Number.isInteger(value)) {
+            return value;
+        }
+        if (typeof value === 'string') {
+            const text = value.trim();
+            if (/^-?\d+$/.test(text)) {
+                return Number.parseInt(text, 10);
+            }
+        }
+        return null;
+    }
+
+    formatReadFileRange(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const offset = this.parseInteger(a.offset);
+        const limit = this.parseInteger(a.limit);
+        if (offset !== null && limit !== null) {
+            if (limit > 0) {
+                return `范围 ${offset}-${offset + limit - 1}`;
+            }
+            if (limit === 0) {
+                return `范围 ${offset}-${offset}`;
+            }
+            return `offset=${offset}, limit=${limit}`;
+        }
+
+        const linePairs = [
+            ['start_line', 'end_line'],
+            ['line_start', 'line_end'],
+            ['from_line', 'to_line'],
+            ['line_from', 'line_to'],
+        ];
+        for (const [startKey, endKey] of linePairs) {
+            const start = this.parseInteger(a[startKey]);
+            const end = this.parseInteger(a[endKey]);
+            if (start !== null && end !== null) {
+                return `范围 ${start}-${end}`;
+            }
+        }
+
+        if (offset !== null) return `offset=${offset}`;
+        if (limit !== null) return `limit=${limit}`;
+        return '';
+    }
+
     formatToolDisplay(toolName, args, todoStateOverride = null, displayTitle = null, displayContent = null) {
         const name = String(toolName || '');
         const a = args && typeof args === 'object' ? args : {};
@@ -187,7 +233,14 @@ export class UtilsModule {
             return `处理中：${counts.in_progress}  待处理：${counts.pending}  已完成：${counts.completed}`;
         }
 
-        if (name === 'read_file' || name === 'write_file' || name === 'edit_file') {
+        if (name === 'read_file') {
+            const filePath = a.file_path || a.path || a.file || '';
+            const range = this.formatReadFileRange(a);
+            if (filePath && range) return `${String(filePath)} (${range})`;
+            return filePath ? String(filePath) : range;
+        }
+
+        if (name === 'write_file' || name === 'edit_file') {
             const filePath = a.file_path || a.path || a.file || '';
             return filePath ? String(filePath) : '';
         }
