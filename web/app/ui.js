@@ -160,6 +160,7 @@ export class UiModule {
 
     setupEventListeners() {
         const app = this.app;
+        let isComposing = false;
         app.elements.sidebarToggle.addEventListener('click', () => {
             app.elements.sidebar.classList.toggle('open');
         });
@@ -208,8 +209,20 @@ export class UiModule {
             this.updateSendButton();
         });
 
+        app.elements.userInput.addEventListener('compositionstart', () => {
+            isComposing = true;
+        });
+
+        app.elements.userInput.addEventListener('compositionend', () => {
+            isComposing = false;
+        });
+
         app.elements.userInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
+                // During IME composition (e.g. Chinese Pinyin), Enter should only confirm candidate.
+                if (isComposing || e.isComposing || e.keyCode === 229) {
+                    return;
+                }
                 if (e.ctrlKey || e.metaKey) {
                     // Ctrl+Enter or Cmd+Enter: insert newline
                     e.preventDefault();
@@ -224,7 +237,7 @@ export class UiModule {
                     // Enter only (without Shift): send message
                     e.preventDefault();
                     if (app.isRunning) {
-                        app.messages.cancelRun();
+                        return;
                     } else {
                         app.messages.sendMessage();
                     }
@@ -346,17 +359,16 @@ export class UiModule {
         });
 
         document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            if (app.elements.deleteConfirmModal?.classList.contains('active')) {
-                this.hideDeleteConfirmModal();
+            if (e.key === 'Escape') {
+                if (app.elements.deleteConfirmModal?.classList.contains('active')) {
+                    this.hideDeleteConfirmModal();
+                    return;
+                }
+                if (app.elements.interruptModal.classList.contains('active')) {
+                    app.ui.hideModal(app.elements.interruptModal);
+                    return;
+                }
                 return;
-            }
-            if (app.elements.interruptModal.classList.contains('active')) {
-                app.ui.hideModal(app.elements.interruptModal);
-                return;
-            }
-            if (app.isRunning) {
-                app.messages.cancelRun();
             }
         });
 
