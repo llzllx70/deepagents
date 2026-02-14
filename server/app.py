@@ -201,6 +201,18 @@ async def clear_session_owner(session_id: str) -> None:
         await write_session_owners(owners)
 
 
+async def _authorize_session_access(username: str, session_id: str) -> None:
+    """Check that *username* owns *session_id*, claiming it if unowned.
+
+    Raises :class:`HTTPException` 403 when the session belongs to another user.
+    """
+    owner = await get_session_owner(session_id)
+    if owner and owner != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if owner is None:
+        await set_session_owner(session_id, username)
+
+
 @app.post("/login", response_model=LoginResponse)
 async def login(payload: LoginRequest) -> LoginResponse:
     username = payload.username.strip()
@@ -267,11 +279,7 @@ async def delete_session(session_id: str, request: Request) -> DeleteSessionResp
     username = await require_user(request)
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
-    owner = await get_session_owner(session_id)
-    if owner and owner != username:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    if owner is None:
-        await set_session_owner(session_id, username)
+    await _authorize_session_access(username, session_id)
     session, synced = await manager.delete_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -280,6 +288,27 @@ async def delete_session(session_id: str, request: Request) -> DeleteSessionResp
         session_id=session.session_id,
         sandbox_id=session.sandbox_backend.id,
         synced=synced,
+    )
+
+
+def _create_upload_error_item(
+    filename: str,
+    content_type: str | None,
+    error_msg: str,
+    *,
+    file_id: str = "",
+    size: int = 0,
+    container_path: str = "",
+) -> AttachmentUploadItem:
+    """Build an ``AttachmentUploadItem`` for a failed upload."""
+    return AttachmentUploadItem(
+        file_id=file_id,
+        filename=filename,
+        content_type=content_type,
+        size=size,
+        container_path=container_path,
+        status="error",
+        error=error_msg,
     )
 
 
@@ -292,9 +321,7 @@ async def upload_attachments(
     username = await require_user(request)
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
-    owner = await get_session_owner(session_id)
-    if owner and owner != username:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    await _authorize_session_access(username, session_id)
     session = await manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -315,17 +342,7 @@ async def upload_attachments(
                 ext = guessed
                 filename = f"{filename}{guessed}"
         if not _is_allowed_upload(ext, upload.content_type):
-            responses.append(
-                AttachmentUploadItem(
-                    file_id="",
-                    filename=filename,
-                    content_type=upload.content_type,
-                    size=0,
-                    container_path="",
-                    status="error",
-                    error="Unsupported file type",
-                )
-            )
+            responses.append(_create_upload_error_item(filename, upload.content_type, "Unsupported file type"))
             await upload.close()
             continue
 
@@ -337,34 +354,21 @@ async def upload_attachments(
         try:
             host_path.write_bytes(content)
         except Exception as exc:
-            responses.append(
-                AttachmentUploadItem(
-                    file_id=file_id,
-                    filename=filename,
-                    content_type=upload.content_type,
-                    size=size,
-                    container_path="",
-                    status="error",
-                    error=f"Failed to save file: {exc}",
-                )
-            )
+            responses.append(_create_upload_error_item(
+                filename, upload.content_type, f"Failed to save file: {exc}",
+                file_id=file_id, size=size,
+            ))
             await upload.close()
             continue
 
         container_path = f"{container_root}/uploads/{unique_name}"
         upload_results = session.sandbox_backend.upload_files([(container_path, content)])
         if upload_results and upload_results[0].error:
-            responses.append(
-                AttachmentUploadItem(
-                    file_id=file_id,
-                    filename=filename,
-                    content_type=upload.content_type,
-                    size=size,
-                    container_path=container_path,
-                    status="error",
-                    error=f"Upload to sandbox failed: {upload_results[0].error}",
-                )
-            )
+            responses.append(_create_upload_error_item(
+                filename, upload.content_type,
+                f"Upload to sandbox failed: {upload_results[0].error}",
+                file_id=file_id, size=size, container_path=container_path,
+            ))
             await upload.close()
             continue
 
@@ -398,9 +402,7 @@ async def delete_attachment(session_id: str, file_id: str, request: Request) -> 
     username = await require_user(request)
     if manager is None:
         raise HTTPException(status_code=503, detail="Session manager unavailable")
-    owner = await get_session_owner(session_id)
-    if owner and owner != username:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    await _authorize_session_access(username, session_id)
     session = await manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")

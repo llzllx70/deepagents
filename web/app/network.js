@@ -13,23 +13,48 @@ export class NetworkModule {
         return urlParams.get('server') || defaultUrl;
     }
 
+    /**
+     * Throw if the user is not authenticated.
+     * @param {{ silent?: boolean }} opts - If silent, returns false instead of throwing.
+     * @returns {boolean}
+     */
+    _ensureAuthenticated({ silent = false } = {}) {
+        if (this.app.auth.isAuthenticated()) return true;
+        if (silent) return false;
+        this.app.auth.setLoginStatus('请先登录', 'error');
+        throw new Error('未登录');
+    }
+
+    /**
+     * Perform an authenticated JSON API call.
+     * @param {string} method - HTTP method.
+     * @param {string} path - URL path relative to serverUrl.
+     * @param {*} [data] - Body payload (will be JSON-stringified unless it's FormData).
+     * @returns {Promise<Response>}
+     */
+    async _apiCall(method, path, data) {
+        const opts = { method };
+        if (data !== undefined) {
+            if (data instanceof FormData) {
+                opts.body = data;
+            } else {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = JSON.stringify(data);
+            }
+        }
+        return await this.app.auth.authFetch(`${this.app.serverUrl}${path}`, opts);
+    }
+
     async createSession() {
         const app = this.app;
-        if (!app.auth.isAuthenticated()) {
-            app.auth.setLoginStatus('请先登录', 'error');
-            throw new Error('未登录');
-        }
+        this._ensureAuthenticated();
         try {
             app.ui.updateConnectionStatus('connecting');
             this.logClient('session_create_start', { mode: 'new' });
 
-            const response = await app.auth.authFetch(`${app.serverUrl}/sessions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    assistant_id: app.assistantId,
-                    auto_approve: app.autoApprove
-                })
+            const response = await this._apiCall('POST', '/sessions', {
+                assistant_id: app.assistantId,
+                auto_approve: app.autoApprove
             });
 
             if (!response.ok) {
@@ -55,10 +80,7 @@ export class NetworkModule {
 
     async ensureSession() {
         const app = this.app;
-        if (!app.auth.isAuthenticated()) {
-            app.auth.setLoginStatus('请先登录', 'error');
-            throw new Error('未登录');
-        }
+        this._ensureAuthenticated();
         if (app.sessionId) return app.sessionId;
         if (app.sessionCreatePromise) return app.sessionCreatePromise;
         app.sessionCreatePromise = this.createSession();
@@ -70,11 +92,7 @@ export class NetworkModule {
     }
 
     async uploadAttachments(files) {
-        const app = this.app;
-        if (!app.auth.isAuthenticated()) {
-            app.auth.setLoginStatus('请先登录', 'error');
-            throw new Error('未登录');
-        }
+        this._ensureAuthenticated();
         if (!files || files.length === 0) {
             throw new Error('未选择文件');
         }
@@ -83,13 +101,7 @@ export class NetworkModule {
         files.forEach(file => {
             formData.append('files', file, file.name);
         });
-        const response = await app.auth.authFetch(
-            `${app.serverUrl}/sessions/${sessionId}/attachments`,
-            {
-                method: 'POST',
-                body: formData
-            }
-        );
+        const response = await this._apiCall('POST', `/sessions/${sessionId}/attachments`, formData);
         if (!response.ok) {
             throw new Error(`附件上传失败：${response.statusText}`);
         }
@@ -98,10 +110,7 @@ export class NetworkModule {
 
     async deleteAttachment(fileId) {
         const app = this.app;
-        if (!app.auth.isAuthenticated()) {
-            app.auth.setLoginStatus('请先登录', 'error');
-            throw new Error('未登录');
-        }
+        this._ensureAuthenticated();
         if (!fileId) {
             throw new Error('缺少附件ID');
         }
@@ -109,10 +118,7 @@ export class NetworkModule {
         if (!sessionId) {
             throw new Error('会话未建立');
         }
-        const response = await app.auth.authFetch(
-            `${app.serverUrl}/sessions/${sessionId}/attachments/${encodeURIComponent(fileId)}`,
-            { method: 'DELETE' }
-        );
+        const response = await this._apiCall('DELETE', `/sessions/${sessionId}/attachments/${encodeURIComponent(fileId)}`);
         if (!response.ok) {
             throw new Error(`删除附件失败：${response.statusText}`);
         }
@@ -144,11 +150,9 @@ export class NetworkModule {
     async deleteSession(sessionId) {
         const app = this.app;
         if (!sessionId) return;
-        if (!app.auth.isAuthenticated()) return;
+        if (!this._ensureAuthenticated({ silent: true })) return;
         try {
-            const response = await app.auth.authFetch(`${app.serverUrl}/sessions/${sessionId}`, {
-                method: 'DELETE'
-            });
+            const response = await this._apiCall('DELETE', `/sessions/${sessionId}`);
             if (!response.ok && response.status !== 404) {
                 throw new Error(`删除会话失败：${response.statusText}`);
             }
@@ -241,7 +245,7 @@ export class NetworkModule {
 
     connectWebSocket() {
         const app = this.app;
-        if (!app.wsUrl || !app.auth.isAuthenticated()) return;
+        if (!app.wsUrl || !this._ensureAuthenticated({ silent: true })) return;
         if (app.ws && (app.ws.readyState === WebSocket.OPEN || app.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
@@ -380,7 +384,7 @@ export class NetworkModule {
 
     setSessionState({ sessionId, chatId = null, hasMessages = false }) {
         const app = this.app;
-        if (!sessionId || !app.auth.isAuthenticated()) return;
+        if (!sessionId || !this._ensureAuthenticated({ silent: true })) return;
         this.persistSessionState({
             session_id: sessionId,
             chat_id: chatId,
@@ -391,9 +395,9 @@ export class NetworkModule {
 
     async loadSessionState() {
         const app = this.app;
-        if (!app.serverUrl || !app.auth.isAuthenticated()) return null;
+        if (!app.serverUrl || !this._ensureAuthenticated({ silent: true })) return null;
         try {
-            const response = await app.auth.authFetch(`${app.serverUrl}/session_state`);
+            const response = await this._apiCall('GET', '/session_state');
             if (!response.ok) return null;
             const parsed = await response.json();
             if (!parsed || typeof parsed !== 'object') return null;
@@ -420,14 +424,10 @@ export class NetworkModule {
 
     async persistSessionState(payload) {
         const app = this.app;
-        if (!app.serverUrl || !app.auth.isAuthenticated()) return;
+        if (!app.serverUrl || !this._ensureAuthenticated({ silent: true })) return;
         const data = { ...payload };
         try {
-            await app.auth.authFetch(`${app.serverUrl}/session_state`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
+            await this._apiCall('PUT', '/session_state', data);
         } catch (error) {
             console.warn('保存会话状态失败：', error);
         }

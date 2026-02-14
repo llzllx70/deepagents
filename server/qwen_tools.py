@@ -6,12 +6,12 @@ import json
 import os
 import shlex
 import uuid
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import yaml
 from langchain_core.tools import BaseTool, tool
+
+from .config_loader import load_model_config, load_scene_config
 
 from deepagents.backends.protocol import SandboxBackendProtocol
 
@@ -59,47 +59,14 @@ def _log_qwen_failure(
     logger.warning("Qwen tool failure: %s", json.dumps(details, ensure_ascii=False))
 
 
-@lru_cache(maxsize=1)
-def _load_model_config() -> dict[str, dict[str, Any]]:
-    config_path = Path(__file__).resolve().parents[1] / "config" / "model.yml"
-    if not config_path.exists():
-        return {}
-    try:
-        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-    models = data.get("models")
-    if not isinstance(models, dict):
-        return {}
-    return {key: value for key, value in models.items() if isinstance(value, dict)}
-
-
-@lru_cache(maxsize=1)
-def _load_scene_config() -> dict[str, str]:
-    config_path = Path(__file__).resolve().parents[1] / "config" / "llm-scene.yml"
-    if not config_path.exists():
-        return {}
-    try:
-        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        key: value
-        for key, value in data.items()
-        if isinstance(key, str) and isinstance(value, str)
-    }
-
-
 def _scene_model(scene: str) -> str | None:
-    return _load_scene_config().get(scene)
+    return load_scene_config().get(scene)
 
 
 def _get_model_config(model_key: str | None) -> tuple[str | None, str | None, str | None]:
     if not model_key:
         return None, None, None
-    models = _load_model_config()
+    models = load_model_config()
     config = models.get(model_key)
     if not isinstance(config, dict):
         return None, None, None

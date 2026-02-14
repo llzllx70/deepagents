@@ -5,7 +5,7 @@ import os
 from typing import Any, TYPE_CHECKING
 
 from .config import logger
-from .message_utils import format_tool_display, parse_tool_args
+from .message_utils import extract_tool_call_info, format_tool_display, parse_tool_args
 
 if TYPE_CHECKING:
     from deepagents_cli.file_ops import FileOpTracker
@@ -115,24 +115,7 @@ async def handle_tool_call_block(
     run_id: str,
     session: "Session",
 ) -> None:
-    chunk_name = block.get("name") or block.get("tool_name")
-    chunk_args = block.get("args")
-    if chunk_args in (None, "", {}):
-        for key in ("arguments", "input", "parameters", "params"):
-            if key in block:
-                chunk_args = block.get(key)
-                break
-    if chunk_name is None and isinstance(block.get("function"), dict):
-        function_block = block.get("function", {})
-        chunk_name = function_block.get("name") or chunk_name
-        if chunk_args in (None, "", {}):
-            for key in ("arguments", "input", "parameters", "params"):
-                if key in function_block:
-                    chunk_args = function_block.get(key)
-                    break
-
-    chunk_id = block.get("id") or block.get("tool_call_id") or block.get("call_id")
-    chunk_index = block.get("index") or block.get("tool_call_index")
+    chunk_name, chunk_args, chunk_id, chunk_index = extract_tool_call_info(block)
 
     if DEBUG_TOOL_CALLS:
         logger.info(

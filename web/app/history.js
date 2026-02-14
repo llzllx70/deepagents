@@ -7,6 +7,20 @@ export class HistoryModule {
         this.app = app;
     }
 
+    /**
+     * Clean up run state and message buffer entries belonging to a chat.
+     * @param {string} chatId
+     */
+    cleanupRunState(chatId) {
+        const app = this.app;
+        for (const [runId, state] of app.runStates.entries()) {
+            if (state.chatId === chatId) {
+                app.runStates.delete(runId);
+                app.messageBuffer.delete(runId);
+            }
+        }
+    }
+
     normalizeTaskId(rawId) {
         const app = this.app;
         const value = rawId == null ? '' : String(rawId).trim();
@@ -533,12 +547,7 @@ export class HistoryModule {
         }
 
         // 清理该对话相关的 runStates，避免与历史消息重复显示
-        for (const [runId, state] of app.runStates.entries()) {
-            if (state.chatId === chat.id) {
-                app.runStates.delete(runId);
-                app.messageBuffer.delete(runId);
-            }
-        }
+        this.cleanupRunState(chat.id);
 
         let lastAssistantMessage = null;
         chat.messages.forEach(msg => {
@@ -660,12 +669,7 @@ export class HistoryModule {
                 app.runIdToChatId.delete(runId);
             }
         }
-        for (const [runId, state] of app.runStates.entries()) {
-            if (state.chatId === chatId) {
-                app.runStates.delete(runId);
-                app.messageBuffer.delete(runId);
-            }
-        }
+        this.cleanupRunState(chatId);
 
         this.saveHistory();
         this.renderHistory();

@@ -126,6 +126,29 @@ class QwenImageClient:
                 return image_url, image_b64
         return None, None
 
+    def _extract_first_image(
+        self,
+        data: dict[str, Any] | None,
+        output: dict[str, Any] | None = None,
+    ) -> tuple[str | None, str | None]:
+        """Try all extraction strategies and return the first image found.
+
+        Attempts multimodal (choices) format first, then results-array format.
+        """
+        if isinstance(data, dict):
+            image_url, image_b64 = self._extract_image_from_multimodal(data)
+            if image_url or image_b64:
+                return image_url, image_b64
+        if output is None and isinstance(data, dict):
+            output = data.get("output")
+            if not isinstance(output, dict):
+                output = None
+        if output is not None:
+            image_url, image_b64 = self._extract_image_from_results(output)
+            if image_url or image_b64:
+                return image_url, image_b64
+        return None, None
+
     def _write_image(
         self,
         output_path: str,
@@ -291,9 +314,7 @@ class QwenImageClient:
                     data = poll_data
                     break
 
-        image_url, image_b64 = self._extract_image_from_multimodal(data)
-        if not image_url and not image_b64:
-            image_url, image_b64 = self._extract_image_from_results(output)
+        image_url, image_b64 = self._extract_first_image(data, output)
         if not image_url and not image_b64:
             fallback = self._generate_text2image(prompt, output_path, size, model)
             if fallback.get("success"):
@@ -366,7 +387,7 @@ class QwenImageClient:
                 if task_status in ("SUCCEEDED", "FAILED"):
                     break
 
-        image_url, image_b64 = self._extract_image_from_results(output)
+        image_url, image_b64 = self._extract_first_image(data, output)
 
         if not image_url and not image_b64:
             return {

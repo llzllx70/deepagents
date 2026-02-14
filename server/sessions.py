@@ -33,6 +33,7 @@ from .docker_pool import DockerSandboxPool
 from .context import inject_file_context
 from .message_utils import (
     extract_skill_name,
+    extract_tool_call_info,
     extract_tool_calls,
     format_tool_display,
     format_tool_content,
@@ -309,26 +310,7 @@ def _preview_json(value: Any, limit: int = 600) -> str:
 
 
 def _extract_tool_call_fields(tool_call: dict[str, Any]) -> tuple[str | None, Any, str | None, int | None]:
-    tool_name = tool_call.get("name") or tool_call.get("tool_name")
-    raw_args = tool_call.get("args")
-    if raw_args in (None, "", {}):
-        for key in ("arguments", "input", "parameters", "params"):
-            if key in tool_call:
-                raw_args = tool_call.get(key)
-                break
-
-    func = tool_call.get("function")
-    if tool_name is None and isinstance(func, dict):
-        tool_name = func.get("name")
-    if raw_args in (None, "", {}) and isinstance(func, dict):
-        for key in ("arguments", "input", "parameters", "params"):
-            if key in func:
-                raw_args = func.get(key)
-                break
-
-    tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id") or tool_call.get("call_id")
-    tool_call_index = tool_call.get("index") or tool_call.get("tool_call_index")
-    return tool_name, raw_args, tool_call_id, tool_call_index
+    return extract_tool_call_info(tool_call)
 
 
 def _fallback_tool_call_id(tool_name: str, tool_call: dict[str, Any]) -> str | None:
@@ -658,6 +640,429 @@ class Session:
         for ws in stale:
             self.connections.discard(ws)
 
+    # ------------------------------------------------------------------
+    # Stream processing state — shared across extracted helper methods
+    # ------------------------------------------------------------------
+
+    @dataclass
+    class _StreamState:
+        """Mutable state bag passed between ``_execute_run`` helpers."""
+
+        run_id: str
+        file_op_tracker: "FileOpTracker"
+        tool_call_buffers: dict[str | int, dict[str, Any]] = field(default_factory=dict)
+        displayed_tool_ids: set[str] = field(default_factory=set)
+        message_buffer: str = ""
+        message_buffer_id: str | None = None
+        emitted_message_ids: set[str] = field(default_factory=set)
+        last_emitted_message: str | None = None
+        streamed_message_ids: set[str] = field(default_factory=set)
+        last_streamed_message: str | None = None
+        streamed_message_pending: bool = False
+        delta_emitted: bool = False
+        logged_message_ids: set[str] = field(default_factory=set)
+        last_logged_message: str | None = None
+
+    async def _log_full_ai_message(self, ss: "_StreamState", text: str, message_id: str | None) -> None:
+        if not text:
+            return
+        if message_id and message_id in ss.logged_message_ids:
+            return
+        if ss.last_logged_message == text:
+            return
+        if message_id:
+            ss.logged_message_ids.add(message_id)
+        ss.last_logged_message = text
+        logger.info(
+            "LLM message: session_id=%s run_id=%s text=%s",
+            self.session_id, ss.run_id, truncate_for_log(text),
+        )
+
+    async def _emit_full_ai_message(self, ss: "_StreamState", text: str, message_id: str | None) -> None:
+        if not text:
+            return
+        if message_id:
+            if message_id in ss.emitted_message_ids:
+                return
+            ss.emitted_message_ids.add(message_id)
+        else:
+            if ss.last_emitted_message == text:
+                return
+        ss.last_emitted_message = text
+        await self._log_full_ai_message(ss, text, message_id)
+        await self.broadcast(
+            {"type": "assistant.message", "run_id": ss.run_id, "text": text}
+        )
+
+    async def _flush_message_buffer(self, ss: "_StreamState") -> None:
+        if not ss.message_buffer:
+            ss.message_buffer_id = None
+            return
+        ss.last_streamed_message = ss.message_buffer
+        ss.streamed_message_pending = True
+        await self._log_full_ai_message(ss, ss.message_buffer, ss.message_buffer_id)
+        ss.message_buffer = ""
+        ss.message_buffer_id = None
+
+    # ------------------------------------------------------------------
+    # Extracted from _execute_run: AI message handling
+    # ------------------------------------------------------------------
+
+    async def _handle_ai_message(
+        self, message: AIMessage, _metadata: Any, ss: "_StreamState",
+    ) -> None:
+        text = normalize_text_content(message.content)
+        message_id = _extract_message_id(message, _metadata)
+        is_chunk = _is_message_chunk(message)
+
+        if text:
+            if is_chunk:
+                ss.streamed_message_pending = False
+                if message_id:
+                    ss.streamed_message_ids.add(message_id)
+                if ss.message_buffer_id is None:
+                    ss.message_buffer_id = message_id
+                elif message_id and ss.message_buffer_id and message_id != ss.message_buffer_id:
+                    await self._flush_message_buffer(ss)
+                    ss.message_buffer_id = message_id
+                ss.message_buffer += text
+                await self.broadcast(
+                    {"type": "assistant.delta", "run_id": ss.run_id, "text": text}
+                )
+                ss.delta_emitted = True
+            else:
+                if ss.message_buffer:
+                    if ss.message_buffer_id and message_id and ss.message_buffer_id != message_id:
+                        await self._flush_message_buffer(ss)
+                    elif text.startswith(ss.message_buffer) or ss.message_buffer.startswith(text):
+                        ss.message_buffer = ""
+                        ss.message_buffer_id = None
+                    else:
+                        await self._flush_message_buffer(ss)
+                is_duplicate_stream = False
+                if message_id and message_id in ss.streamed_message_ids:
+                    is_duplicate_stream = True
+                elif ss.streamed_message_pending and ss.last_streamed_message and (
+                    text == ss.last_streamed_message
+                    or text.startswith(ss.last_streamed_message)
+                    or ss.last_streamed_message.startswith(text)
+                ):
+                    is_duplicate_stream = True
+                ss.streamed_message_pending = False
+                if is_duplicate_stream:
+                    await self._log_full_ai_message(ss, text, message_id)
+                elif ss.delta_emitted:
+                    await self._log_full_ai_message(ss, text, message_id)
+                else:
+                    await self._emit_full_ai_message(ss, text, message_id)
+
+        if is_chunk and _is_message_final(message, _metadata):
+            await self._flush_message_buffer(ss)
+
+        # Process tool calls embedded in the AI message
+        for tool_call in extract_tool_calls(message):
+            if isinstance(tool_call, dict):
+                tool_name, raw_args, tool_call_id, tool_call_index = _extract_tool_call_fields(tool_call)
+                if not tool_name:
+                    continue
+                if tool_call_id is None and tool_call_index is not None:
+                    tool_call_id = _fallback_tool_call_id(str(tool_name), tool_call)
+                parsed_args = parse_tool_args(raw_args)
+                if parsed_args in (None, {}) and raw_args not in (None, "", {}):
+                    logger.info(
+                        "Tool call raw args incomplete: session_id=%s run_id=%s tool=%s tool_call_id=%s raw_args=%s",
+                        self.session_id, ss.run_id, tool_name, tool_call_id,
+                        _preview_raw_args(raw_args),
+                    )
+                if parsed_args == {} and tool_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
+                    additional = getattr(message, "additional_kwargs", None)
+                    response_metadata = getattr(message, "response_metadata", None)
+                    logger.info(
+                        "Tool call missing args: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s additional=%s response_metadata=%s",
+                        self.session_id, ss.run_id, tool_name, tool_call_id,
+                        _preview_json(tool_call), _preview_json(additional),
+                        _preview_json(response_metadata),
+                    )
+                if DEBUG_TOOL_CALLS and parsed_args in (None, {}):
+                    logger.info(
+                        "Tool call payload: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s",
+                        self.session_id, ss.run_id, tool_name, tool_call_id,
+                        _preview_json(tool_call),
+                    )
+                    additional = getattr(message, "additional_kwargs", None)
+                    if isinstance(additional, dict) and additional:
+                        logger.info(
+                            "Tool call additional_kwargs: session_id=%s run_id=%s keys=%s payload=%s",
+                            self.session_id, ss.run_id,
+                            list(additional.keys()), _preview_json(additional),
+                        )
+                    response_metadata = getattr(message, "response_metadata", None)
+                    if isinstance(response_metadata, dict) and response_metadata:
+                        logger.info(
+                            "Tool call response_metadata: session_id=%s run_id=%s keys=%s payload=%s",
+                            self.session_id, ss.run_id,
+                            list(response_metadata.keys()), _preview_json(response_metadata),
+                        )
+                if _should_buffer_tool_args(raw_args, parsed_args):
+                    await handle_tool_call_block(
+                        {"name": tool_name, "args": raw_args, "id": tool_call_id, "index": tool_call_index},
+                        ss.tool_call_buffers, ss.displayed_tool_ids,
+                        ss.file_op_tracker, ss.run_id, self,
+                    )
+                    continue
+                await emit_tool_call_started(
+                    session=self, run_id=ss.run_id,
+                    tool_name=str(tool_name),
+                    tool_call_id=str(tool_call_id) if tool_call_id else None,
+                    args=parsed_args,
+                    file_op_tracker=ss.file_op_tracker,
+                    displayed_tool_ids=ss.displayed_tool_ids,
+                )
+
+        await self._handle_tool_call_chunks(message, ss)
+        await self._handle_content_blocks(message, ss)
+
+    async def _handle_tool_call_chunks(self, message: Any, ss: "_StreamState") -> None:
+        """Process ``tool_call_chunks`` on *message* if present."""
+        tool_call_chunks = getattr(message, "tool_call_chunks", None)
+        if isinstance(tool_call_chunks, list) and tool_call_chunks:
+            for chunk in tool_call_chunks:
+                if isinstance(chunk, dict):
+                    await handle_tool_call_block(
+                        chunk, ss.tool_call_buffers, ss.displayed_tool_ids,
+                        ss.file_op_tracker, ss.run_id, self,
+                    )
+
+    async def _handle_content_blocks(self, message: Any, ss: "_StreamState") -> None:
+        """Process ``content_blocks`` on an AI *message* if present."""
+        content_blocks = getattr(message, "content_blocks", None)
+        if isinstance(content_blocks, list) and content_blocks:
+            for block in content_blocks:
+                if DEBUG_TOOL_CALLS and isinstance(block, dict):
+                    block_type = block.get("type")
+                    if block_type in ("tool_call_chunk", "tool_call"):
+                        logger.info(
+                            "Tool call content_block: session_id=%s run_id=%s type=%s payload=%s",
+                            self.session_id, ss.run_id, block_type, _preview_json(block),
+                        )
+                block_type = block.get("type")
+                if block_type in ("tool_call_chunk", "tool_call"):
+                    await handle_tool_call_block(
+                        block, ss.tool_call_buffers, ss.displayed_tool_ids,
+                        ss.file_op_tracker, ss.run_id, self,
+                    )
+
+    # ------------------------------------------------------------------
+    # Extracted from _execute_run: Tool message handling
+    # ------------------------------------------------------------------
+
+    async def _handle_tool_message(
+        self, message: ToolMessage, ss: "_StreamState",
+    ) -> None:
+        tool_name = getattr(message, "name", "") or "tool"
+        tool_status = getattr(message, "status", "success")
+        tool_full_content = normalize_text_content(message.content)
+        tool_call_id = getattr(message, "tool_call_id", None)
+        tool_call_payload = pop_tool_call_args(
+            self.session_id, tool_call_id,
+            thread_id=self.session_state.thread_id,
+        )
+        args_from_store = None
+        if isinstance(tool_call_payload, dict):
+            args_from_store = tool_call_payload.get("args")
+        if tool_call_id and isinstance(args_from_store, dict) and args_from_store:
+            ss.file_op_tracker.update_args(tool_call_id, args_from_store)
+            active_record = ss.file_op_tracker.active.get(tool_call_id)
+            if active_record and active_record.tool_name == "read_file":
+                path_str = args_from_store.get("file_path") or args_from_store.get("path")
+                if isinstance(path_str, str) and path_str:
+                    active_record.display_path = format_display_path(path_str)
+        record = ss.file_op_tracker.complete_with_message(message)
+
+        tool_call_args: dict[str, Any] | None = None
+        if isinstance(args_from_store, dict) and args_from_store:
+            tool_call_args = args_from_store
+        if tool_call_args is None and record is not None:
+            if isinstance(record.args, dict) and record.args:
+                tool_call_args = record.args
+            content = ""
+            content_preview = ""
+            content_truncated = False
+            meta: dict[str, Any] = {}
+            if record.tool_name == "read_file" and record.read_output is not None:
+                raw_content = record.read_output
+                content, content_truncated = truncate_text(raw_content, limit=50000)
+                content_preview, _preview_truncated = truncate_text(raw_content, limit=6000)
+                if record.display_path.lower().endswith("skill.md"):
+                    skill_name = extract_skill_name(raw_content)
+                    if skill_name:
+                        meta["skill_name"] = skill_name
+            await self.broadcast(
+                {
+                    "type": "file.op",
+                    "run_id": ss.run_id,
+                    "tool_name": record.tool_name,
+                    "path": record.display_path,
+                    "status": record.status,
+                    "error": record.error,
+                    "metrics": {
+                        "lines_read": record.metrics.lines_read,
+                        "lines_written": record.metrics.lines_written,
+                        "lines_added": record.metrics.lines_added,
+                        "lines_removed": record.metrics.lines_removed,
+                        "bytes_written": record.metrics.bytes_written,
+                    },
+                    "diff": record.diff,
+                    "content": content,
+                    "content_preview": content_preview,
+                    "content_truncated": content_truncated,
+                    "meta": meta,
+                }
+            )
+
+        if tool_name in ("qwen_image_understand", "qwen_image_image_understand", "extract_file_text"):
+            payload = _parse_tool_payload(tool_full_content)
+            if payload:
+                container_path = payload.get("image_path") or payload.get("file_path")
+                if isinstance(container_path, str) and container_path:
+                    success = payload.get("success", True)
+                    error = payload.get("error") if not success else None
+                    text = payload.get("text")
+                    if text is not None and not isinstance(text, str):
+                        text = str(text)
+                    truncated_flag = payload.get("truncated")
+                    truncated = truncated_flag if isinstance(truncated_flag, bool) else None
+                    self.record_extracted_text(
+                        container_path=container_path,
+                        tool_name=tool_name,
+                        text=text if success or text else None,
+                        truncated=truncated,
+                        error=error,
+                    )
+
+        preview_limit = 400
+        logger.info(
+            "Tool call ended: session_id=%s run_id=%s tool=%s status=%s",
+            self.session_id, ss.run_id, tool_name, tool_status,
+        )
+        display = format_tool_display(tool_name, tool_call_args)
+        await self.broadcast(
+            {
+                "type": "tool.call.ended",
+                "run_id": ss.run_id,
+                "tool_name": tool_name,
+                "status": tool_status,
+                "tool_call_id": getattr(message, "tool_call_id", None),
+                "args": tool_call_args,
+                "content": tool_full_content,
+                "content_preview": format_tool_content(tool_full_content, limit=preview_limit),
+                "content_truncated": len(tool_full_content) > preview_limit,
+                "display_title": display["title"],
+                "display_content": display["content"],
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Extracted from _execute_run: Interrupt processing
+    # ------------------------------------------------------------------
+
+    async def _process_interrupts(
+        self,
+        pending_interrupts: dict[str, HITLRequest],
+        run_ctx: "RunExecution",
+        ss: "_StreamState",
+        auto_approve: bool,
+    ) -> dict[str, HITLResponse] | None:
+        """Handle pending HITL interrupts.
+
+        Returns the HITL response mapping, or ``None`` if the run was rejected.
+        """
+        hitl_response: dict[str, HITLResponse] = {}
+        for interrupt_id, hitl_request in pending_interrupts.items():
+            if auto_approve:
+                decisions = [
+                    {"type": "approve"}
+                    for _ in hitl_request.get("action_requests", [])
+                ]
+                hitl_response[interrupt_id] = {"decisions": decisions}
+                await self.broadcast(
+                    {
+                        "type": "interrupt.auto_approved",
+                        "run_id": ss.run_id,
+                        "interrupt_id": interrupt_id,
+                    }
+                )
+                continue
+
+            waiter = run_ctx.register_interrupt(interrupt_id)
+            await self.broadcast(
+                {
+                    "type": "interrupt.request",
+                    "run_id": ss.run_id,
+                    "interrupt_id": interrupt_id,
+                    "request": hitl_request,
+                }
+            )
+            response = await waiter
+            hitl_response[interrupt_id] = response
+
+        if any(
+            decision.get("type") == "reject"
+            for response in hitl_response.values()
+            for decision in response.get("decisions", [])
+        ):
+            self.run_status[ss.run_id] = "rejected"
+            await self.broadcast(
+                {"type": "run.rejected", "run_id": ss.run_id, "session_id": self.session_id}
+            )
+            return None
+
+        return hitl_response
+
+    # ------------------------------------------------------------------
+    # Extracted from _execute_run: Fallback message handling
+    # ------------------------------------------------------------------
+
+    async def _handle_fallback_message(self, message: Any, ss: "_StreamState") -> None:
+        """Handle messages that are neither AI nor Tool (fallback path)."""
+        await self._handle_tool_call_chunks(message, ss)
+
+        if not hasattr(message, "content_blocks"):
+            text_content = getattr(message, "content", None)
+            if isinstance(text_content, str) and text_content:
+                logger.debug(
+                    "LLM delta: session_id=%s run_id=%s delta_len=%s",
+                    self.session_id, ss.run_id, len(text_content),
+                )
+                await self.broadcast(
+                    {"type": "assistant.delta", "run_id": ss.run_id, "text": text_content}
+                )
+                ss.delta_emitted = True
+            return
+
+        for block in message.content_blocks:
+            block_type = block.get("type")
+            if block_type == "text":
+                text = block.get("text", "")
+                if text:
+                    logger.debug(
+                        "LLM delta: session_id=%s run_id=%s delta_len=%s",
+                        self.session_id, ss.run_id, len(text),
+                    )
+                    await self.broadcast(
+                        {"type": "assistant.delta", "run_id": ss.run_id, "text": text}
+                    )
+                    ss.delta_emitted = True
+            elif block_type in ("tool_call_chunk", "tool_call"):
+                await handle_tool_call_block(
+                    block, ss.tool_call_buffers, ss.displayed_tool_ids,
+                    ss.file_op_tracker, ss.run_id, self,
+                )
+
+    # ------------------------------------------------------------------
+    # Main run execution (orchestration only)
+    # ------------------------------------------------------------------
+
     async def _execute_run(self, run_request: RunRequest) -> None:
         run_ctx = RunExecution(run_id=run_request.run_id)
         self.current_run = run_ctx
@@ -716,69 +1121,10 @@ class Session:
             },
         }
 
-        file_op_tracker = FileOpTracker(assistant_id=self.assistant_id, backend=self.backend)
-        tool_call_buffers: dict[str | int, dict[str, Any]] = {}
-        displayed_tool_ids: set[str] = set()
-        message_buffer = ""
-        message_buffer_id: str | None = None
-        emitted_message_ids: set[str] = set()
-        last_emitted_message: str | None = None
-        streamed_message_ids: set[str] = set()
-        last_streamed_message: str | None = None
-        streamed_message_pending = False
-        delta_emitted = False
-        logged_message_ids: set[str] = set()
-        last_logged_message: str | None = None
-
-        async def log_full_ai_message(text: str, message_id: str | None) -> None:
-            nonlocal last_logged_message
-            if not text:
-                return
-            if message_id and message_id in logged_message_ids:
-                return
-            if last_logged_message == text:
-                return
-            if message_id:
-                logged_message_ids.add(message_id)
-            last_logged_message = text
-            logger.info(
-                "LLM message: session_id=%s run_id=%s text=%s",
-                self.session_id,
-                run_request.run_id,
-                truncate_for_log(text),
-            )
-
-        async def emit_full_ai_message(text: str, message_id: str | None) -> None:
-            nonlocal last_emitted_message
-            if not text:
-                return
-            if message_id:
-                if message_id in emitted_message_ids:
-                    return
-                emitted_message_ids.add(message_id)
-            else:
-                if last_emitted_message == text:
-                    return
-            last_emitted_message = text
-            await log_full_ai_message(text, message_id)
-            await self.broadcast(
-                {
-                    "type": "assistant.message",
-                    "run_id": run_request.run_id,
-                    "text": text,
-                }
-            )
-
-        async def flush_message_buffer() -> None:
-            nonlocal message_buffer, message_buffer_id, last_streamed_message, streamed_message_pending
-            if not message_buffer:
-                message_buffer_id = None
-                return
-            last_streamed_message = message_buffer
-            streamed_message_pending = True
-            await log_full_ai_message(message_buffer, message_buffer_id)
-            message_buffer = ""
-            message_buffer_id = None
+        ss = self._StreamState(
+            run_id=run_request.run_id,
+            file_op_tracker=FileOpTracker(assistant_id=self.assistant_id, backend=self.backend),
+        )
 
         try:
             async with _langsmith_project_context(self.session_id):
@@ -792,7 +1138,6 @@ class Session:
                         )
                     interrupt_occurred = False
                     pending_interrupts: dict[str, HITLRequest] = {}
-                    hitl_response: dict[str, HITLResponse] = {}
 
                     # Log context usage for observability
                     try:
@@ -816,13 +1161,13 @@ class Session:
                     ):
                         if run_ctx.cancel_event.is_set():
                             raise asyncio.CancelledError()
-    
+
                         if not isinstance(chunk, tuple) or len(chunk) != 3:
                             continue
-    
+
                         namespace, current_stream_mode, data = chunk
                         is_root = is_root_namespace(namespace)
-    
+
                         if current_stream_mode == "updates":
                             if not isinstance(data, dict):
                                 continue
@@ -853,411 +1198,43 @@ class Session:
                                         "todos": chunk_data["todos"],
                                     }
                                 )
-    
+
                         if current_stream_mode != "messages":
                             continue
                         if not is_root:
                             continue
-    
+
                         if not isinstance(data, tuple) or len(data) != 2:
                             continue
-    
+
                         message, _metadata = data
-    
+
                         if isinstance(message, HumanMessage):
                             continue
-    
+
                         if isinstance(message, AIMessage):
-                            text = normalize_text_content(message.content)
-                            message_id = _extract_message_id(message, _metadata)
-                            is_chunk = _is_message_chunk(message)
-                            if text:
-                                if is_chunk:
-                                    streamed_message_pending = False
-                                    if message_id:
-                                        streamed_message_ids.add(message_id)
-                                    if message_buffer_id is None:
-                                        message_buffer_id = message_id
-                                    elif message_id and message_buffer_id and message_id != message_buffer_id:
-                                        await flush_message_buffer()
-                                        message_buffer_id = message_id
-                                    message_buffer += text
-                                    await self.broadcast(
-                                        {
-                                            "type": "assistant.delta",
-                                            "run_id": run_request.run_id,
-                                            "text": text,
-                                        }
-                                    )
-                                    delta_emitted = True
-                                else:
-                                    if message_buffer:
-                                        if message_buffer_id and message_id and message_buffer_id != message_id:
-                                            await flush_message_buffer()
-                                        elif text.startswith(message_buffer) or message_buffer.startswith(text):
-                                            message_buffer = ""
-                                            message_buffer_id = None
-                                        else:
-                                            await flush_message_buffer()
-                                    is_duplicate_stream = False
-                                    if message_id and message_id in streamed_message_ids:
-                                        is_duplicate_stream = True
-                                    elif streamed_message_pending and last_streamed_message and (
-                                        text == last_streamed_message
-                                        or text.startswith(last_streamed_message)
-                                        or last_streamed_message.startswith(text)
-                                    ):
-                                        is_duplicate_stream = True
-                                    streamed_message_pending = False
-                                    if is_duplicate_stream:
-                                        await log_full_ai_message(text, message_id)
-                                    elif delta_emitted:
-                                        await log_full_ai_message(text, message_id)
-                                    else:
-                                        await emit_full_ai_message(text, message_id)
-                            if is_chunk and _is_message_final(message, _metadata):
-                                await flush_message_buffer()
-    
-                            for tool_call in extract_tool_calls(message):
-                                if isinstance(tool_call, dict):
-                                    tool_name, raw_args, tool_call_id, tool_call_index = _extract_tool_call_fields(tool_call)
-                                    if not tool_name:
-                                        continue
-                                    if tool_call_id is None and tool_call_index is not None:
-                                        tool_call_id = _fallback_tool_call_id(str(tool_name), tool_call)
-                                    parsed_args = parse_tool_args(raw_args)
-                                    if parsed_args in (None, {}) and raw_args not in (None, "", {}):
-                                        logger.info(
-                                            "Tool call raw args incomplete: session_id=%s run_id=%s tool=%s tool_call_id=%s raw_args=%s",
-                                            self.session_id,
-                                            run_request.run_id,
-                                            tool_name,
-                                            tool_call_id,
-                                            _preview_raw_args(raw_args),
-                                        )
-                                    if parsed_args == {} and tool_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
-                                        additional = getattr(message, "additional_kwargs", None)
-                                        response_metadata = getattr(message, "response_metadata", None)
-                                        logger.info(
-                                            "Tool call missing args: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s additional=%s response_metadata=%s",
-                                            self.session_id,
-                                            run_request.run_id,
-                                            tool_name,
-                                            tool_call_id,
-                                            _preview_json(tool_call),
-                                            _preview_json(additional),
-                                            _preview_json(response_metadata),
-                                        )
-                                    if DEBUG_TOOL_CALLS and parsed_args in (None, {}):
-                                        logger.info(
-                                            "Tool call payload: session_id=%s run_id=%s tool=%s tool_call_id=%s tool_call=%s",
-                                            self.session_id,
-                                            run_request.run_id,
-                                            tool_name,
-                                            tool_call_id,
-                                            _preview_json(tool_call),
-                                        )
-                                        additional = getattr(message, "additional_kwargs", None)
-                                        if isinstance(additional, dict) and additional:
-                                            logger.info(
-                                                "Tool call additional_kwargs: session_id=%s run_id=%s keys=%s payload=%s",
-                                                self.session_id,
-                                                run_request.run_id,
-                                                list(additional.keys()),
-                                                _preview_json(additional),
-                                            )
-                                        response_metadata = getattr(message, "response_metadata", None)
-                                        if isinstance(response_metadata, dict) and response_metadata:
-                                            logger.info(
-                                                "Tool call response_metadata: session_id=%s run_id=%s keys=%s payload=%s",
-                                                self.session_id,
-                                                run_request.run_id,
-                                                list(response_metadata.keys()),
-                                                _preview_json(response_metadata),
-                                            )
-                                    if _should_buffer_tool_args(raw_args, parsed_args):
-                                        await handle_tool_call_block(
-                                            {
-                                                "name": tool_name,
-                                                "args": raw_args,
-                                                "id": tool_call_id,
-                                                "index": tool_call_index,
-                                            },
-                                            tool_call_buffers,
-                                            displayed_tool_ids,
-                                            file_op_tracker,
-                                            run_request.run_id,
-                                            self,
-                                        )
-                                        continue
-                                    await emit_tool_call_started(
-                                        session=self,
-                                        run_id=run_request.run_id,
-                                        tool_name=str(tool_name),
-                                        tool_call_id=str(tool_call_id) if tool_call_id else None,
-                                        args=parsed_args,
-                                        file_op_tracker=file_op_tracker,
-                                        displayed_tool_ids=displayed_tool_ids,
-                                    )
-                            tool_call_chunks = getattr(message, "tool_call_chunks", None)
-                            if isinstance(tool_call_chunks, list) and tool_call_chunks:
-                                for chunk in tool_call_chunks:
-                                    if isinstance(chunk, dict):
-                                        await handle_tool_call_block(
-                                            chunk,
-                                            tool_call_buffers,
-                                            displayed_tool_ids,
-                                            file_op_tracker,
-                                            run_request.run_id,
-                                            self,
-                                        )
-    
-                            content_blocks = getattr(message, "content_blocks", None)
-                            if isinstance(content_blocks, list) and content_blocks:
-                                for block in content_blocks:
-                                    if DEBUG_TOOL_CALLS and isinstance(block, dict):
-                                        block_type = block.get("type")
-                                        if block_type in ("tool_call_chunk", "tool_call"):
-                                            logger.info(
-                                                "Tool call content_block: session_id=%s run_id=%s type=%s payload=%s",
-                                                self.session_id,
-                                                run_request.run_id,
-                                                block_type,
-                                                _preview_json(block),
-                                            )
-                                    block_type = block.get("type")
-                                    if block_type in ("tool_call_chunk", "tool_call"):
-                                        await handle_tool_call_block(
-                                            block,
-                                            tool_call_buffers,
-                                            displayed_tool_ids,
-                                            file_op_tracker,
-                                            run_request.run_id,
-                                            self,
-                                        )
+                            await self._handle_ai_message(message, _metadata, ss)
                             continue
-    
+
                         if isinstance(message, ToolMessage):
-                            tool_name = getattr(message, "name", "") or "tool"
-                            tool_status = getattr(message, "status", "success")
-                            tool_full_content = normalize_text_content(message.content)
-                            tool_call_id = getattr(message, "tool_call_id", None)
-                            tool_call_payload = pop_tool_call_args(
-                                self.session_id,
-                                tool_call_id,
-                                thread_id=self.session_state.thread_id,
-                            )
-                            args_from_store = None
-                            if isinstance(tool_call_payload, dict):
-                                args_from_store = tool_call_payload.get("args")
-                            if tool_call_id and isinstance(args_from_store, dict) and args_from_store:
-                                file_op_tracker.update_args(tool_call_id, args_from_store)
-                                active_record = file_op_tracker.active.get(tool_call_id)
-                                if active_record and active_record.tool_name == "read_file":
-                                    path_str = args_from_store.get("file_path") or args_from_store.get("path")
-                                    if isinstance(path_str, str) and path_str:
-                                        active_record.display_path = format_display_path(path_str)
-                            record = file_op_tracker.complete_with_message(message)
-    
-                            tool_call_args: dict[str, Any] | None = None
-                            if isinstance(args_from_store, dict) and args_from_store:
-                                tool_call_args = args_from_store
-                            if tool_call_args is None and record is not None:
-                                if isinstance(record.args, dict) and record.args:
-                                    tool_call_args = record.args
-                                content = ""
-                                content_preview = ""
-                                content_truncated = False
-                                meta: dict[str, Any] = {}
-                                if record.tool_name == "read_file" and record.read_output is not None:
-                                    raw_content = record.read_output
-                                    content, content_truncated = truncate_text(raw_content, limit=50000)
-                                    content_preview, _preview_truncated = truncate_text(raw_content, limit=6000)
-                                    if record.display_path.lower().endswith("skill.md"):
-                                        skill_name = extract_skill_name(raw_content)
-                                        if skill_name:
-                                            meta["skill_name"] = skill_name
-                                await self.broadcast(
-                                    {
-                                        "type": "file.op",
-                                        "run_id": run_request.run_id,
-                                        "tool_name": record.tool_name,
-                                        "path": record.display_path,
-                                        "status": record.status,
-                                        "error": record.error,
-                                        "metrics": {
-                                            "lines_read": record.metrics.lines_read,
-                                            "lines_written": record.metrics.lines_written,
-                                            "lines_added": record.metrics.lines_added,
-                                            "lines_removed": record.metrics.lines_removed,
-                                            "bytes_written": record.metrics.bytes_written,
-                                        },
-                                        "diff": record.diff,
-                                        "content": content,
-                                        "content_preview": content_preview,
-                                        "content_truncated": content_truncated,
-                                        "meta": meta,
-                                    }
-                                )
-    
-                            if tool_name in ("qwen_image_understand", "qwen_image_image_understand", "extract_file_text"):
-                                payload = _parse_tool_payload(tool_full_content)
-                                if payload:
-                                    container_path = payload.get("image_path") or payload.get("file_path")
-                                    if isinstance(container_path, str) and container_path:
-                                        success = payload.get("success", True)
-                                        error = payload.get("error") if not success else None
-                                        text = payload.get("text")
-                                        if text is not None and not isinstance(text, str):
-                                            text = str(text)
-                                        truncated_flag = payload.get("truncated")
-                                        truncated = truncated_flag if isinstance(truncated_flag, bool) else None
-                                        self.record_extracted_text(
-                                            container_path=container_path,
-                                            tool_name=tool_name,
-                                            text=text if success or text else None,
-                                            truncated=truncated,
-                                            error=error,
-                                        )
-    
-                            preview_limit = 400
-                            logger.info(
-                                "Tool call ended: session_id=%s run_id=%s tool=%s status=%s",
-                                self.session_id,
-                                run_request.run_id,
-                                tool_name,
-                                tool_status,
-                            )
-                            display = format_tool_display(tool_name, tool_call_args)
-                            await self.broadcast(
-                                {
-                                    "type": "tool.call.ended",
-                                    "run_id": run_request.run_id,
-                                    "tool_name": tool_name,
-                                    "status": tool_status,
-                                    "tool_call_id": getattr(message, "tool_call_id", None),
-                                    "args": tool_call_args,
-                                    "content": tool_full_content,
-                                    "content_preview": format_tool_content(tool_full_content, limit=preview_limit),
-                                    "content_truncated": len(tool_full_content) > preview_limit,
-                                    "display_title": display["title"],
-                                    "display_content": display["content"],
-                                }
-                            )
+                            await self._handle_tool_message(message, ss)
                             continue
-    
-                        tool_call_chunks = getattr(message, "tool_call_chunks", None)
-                        if isinstance(tool_call_chunks, list) and tool_call_chunks:
-                            for chunk in tool_call_chunks:
-                                if isinstance(chunk, dict):
-                                    await handle_tool_call_block(
-                                        chunk,
-                                        tool_call_buffers,
-                                        displayed_tool_ids,
-                                        file_op_tracker,
-                                        run_request.run_id,
-                                        self,
-                                    )
-    
-                        if not hasattr(message, "content_blocks"):
-                            text_content = getattr(message, "content", None)
-                            if isinstance(text_content, str) and text_content:
-                                logger.debug(
-                                    "LLM delta: session_id=%s run_id=%s delta_len=%s",
-                                    self.session_id,
-                                    run_request.run_id,
-                                    len(text_content),
-                                )
-                                await self.broadcast(
-                                    {
-                                        "type": "assistant.delta",
-                                        "run_id": run_request.run_id,
-                                        "text": text_content,
-                                    }
-                                )
-                                delta_emitted = True
-                            continue
-    
-                        for block in message.content_blocks:
-                            block_type = block.get("type")
-                            if block_type == "text":
-                                text = block.get("text", "")
-                                if text:
-                                    logger.debug(
-                                        "LLM delta: session_id=%s run_id=%s delta_len=%s",
-                                        self.session_id,
-                                        run_request.run_id,
-                                        len(text),
-                                    )
-                                    await self.broadcast(
-                                        {
-                                            "type": "assistant.delta",
-                                            "run_id": run_request.run_id,
-                                            "text": text,
-                                        }
-                                    )
-                                    delta_emitted = True
-                            elif block_type in ("tool_call_chunk", "tool_call"):
-                                await handle_tool_call_block(
-                                    block,
-                                    tool_call_buffers,
-                                    displayed_tool_ids,
-                                    file_op_tracker,
-                                    run_request.run_id,
-                                    self,
-                                )
-    
+
+                        await self._handle_fallback_message(message, ss)
+
                     if interrupt_occurred:
-                        for interrupt_id, hitl_request in pending_interrupts.items():
-                            if auto_approve:
-                                decisions = [
-                                    {"type": "approve"}
-                                    for _ in hitl_request.get("action_requests", [])
-                                ]
-                                hitl_response[interrupt_id] = {"decisions": decisions}
-                                await self.broadcast(
-                                    {
-                                        "type": "interrupt.auto_approved",
-                                        "run_id": run_request.run_id,
-                                        "interrupt_id": interrupt_id,
-                                    }
-                                )
-                                continue
-    
-                            waiter = run_ctx.register_interrupt(interrupt_id)
-                            await self.broadcast(
-                                {
-                                    "type": "interrupt.request",
-                                    "run_id": run_request.run_id,
-                                    "interrupt_id": interrupt_id,
-                                    "request": hitl_request,
-                                }
-                            )
-                            response = await waiter
-                            hitl_response[interrupt_id] = response
-    
-                        if any(
-                            decision.get("type") == "reject"
-                            for response in hitl_response.values()
-                            for decision in response.get("decisions", [])
-                        ):
-                            self.run_status[run_request.run_id] = "rejected"
-                            await self.broadcast(
-                                {
-                                    "type": "run.rejected",
-                                    "run_id": run_request.run_id,
-                                    "session_id": self.session_id,
-                                }
-                            )
+                        hitl_response = await self._process_interrupts(
+                            pending_interrupts, run_ctx, ss, auto_approve,
+                        )
+                        if hitl_response is None:
                             return
-    
                         stream_input = Command(resume=hitl_response)
                         continue
-    
-                    if message_buffer:
-                        await flush_message_buffer()
+
+                    if ss.message_buffer:
+                        await self._flush_message_buffer(ss)
                     break
-    
+
                 self.run_status[run_request.run_id] = "completed"
                 logger.info("Run completed: session_id=%s run_id=%s", self.session_id, run_request.run_id)
                 await self.broadcast(

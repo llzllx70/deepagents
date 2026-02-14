@@ -59,35 +59,7 @@ require_scene_config_file() {
 }
 
 load_env_config() {
-  python - "$CONFIG_FILE" <<'PY'
-import sys
-
-path = sys.argv[1]
-current_section = None
-env = {}
-
-with open(path, "r", encoding="utf-8") as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            current_section = stripped.rstrip(":")
-            continue
-        if current_section != "env":
-            continue
-        if indent == 2 and ":" in stripped:
-            raw_key, raw_value = stripped.split(":", 1)
-            value = raw_value.strip()
-            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                value = value[1:-1]
-            env[raw_key.strip()] = value
-
-for key, value in env.items():
-    sys.stdout.write(f"{key}\t{value}\n")
-PY
+  python "${SCRIPT_DIR}/config_parser.py" env "$CONFIG_FILE"
 }
 
 export_env_config() {
@@ -103,31 +75,7 @@ export_env_config() {
 scene_config_value() {
   local scene="$1"
   require_scene_config_file
-  python - "$SCENE_CONFIG_FILE" "$scene" <<'PY'
-import sys
-
-path = sys.argv[1]
-scene = sys.argv[2]
-value = ""
-
-with open(path, "r", encoding="utf-8") as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if ":" not in stripped:
-            continue
-        key, raw_value = stripped.split(":", 1)
-        if key.strip() != scene:
-            continue
-        value = raw_value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-            value = value[1:-1]
-        break
-
-sys.stdout.write(value)
-PY
+  python "${SCRIPT_DIR}/config_parser.py" scene-val "$SCENE_CONFIG_FILE" "$scene"
 }
 
 default_main_model() {
@@ -144,71 +92,12 @@ model_config_value() {
   local model="$1"
   local key="$2"
   require_model_config_file
-  python - "$MODEL_CONFIG_FILE" "$model" "$key" <<'PY'
-import sys
-
-path = sys.argv[1]
-model = sys.argv[2]
-key = sys.argv[3]
-
-models = {}
-current_section = None
-current_model = None
-
-with open(path, "r", encoding="utf-8") as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            current_section = stripped.rstrip(":")
-            current_model = None
-            continue
-        if current_section != "models":
-            continue
-        if indent == 2 and stripped.endswith(":"):
-            current_model = stripped[:-1].strip()
-            models.setdefault(current_model, {})
-            continue
-        if indent == 4 and ":" in stripped and current_model:
-            raw_key, raw_value = stripped.split(":", 1)
-            value = raw_value.strip()
-            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                value = value[1:-1]
-            models[current_model][raw_key.strip()] = value
-
-sys.stdout.write(models.get(model, {}).get(key, ""))
-PY
+  python "${SCRIPT_DIR}/config_parser.py" model-val "$MODEL_CONFIG_FILE" "$model" "$key"
 }
 
 model_config_keys() {
   require_model_config_file
-  python - "$MODEL_CONFIG_FILE" <<'PY'
-import sys
-
-path = sys.argv[1]
-current_section = None
-keys = []
-
-with open(path, "r", encoding="utf-8") as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            current_section = stripped.rstrip(":")
-            continue
-        if current_section != "models":
-            continue
-        if indent == 2 and stripped.endswith(":"):
-            keys.append(stripped[:-1].strip())
-
-sys.stdout.write("\n".join(keys))
-PY
+  python "${SCRIPT_DIR}/config_parser.py" model-keys "$MODEL_CONFIG_FILE"
 }
 
 model_exists() {
@@ -217,33 +106,7 @@ model_exists() {
     return 1
   fi
   require_model_config_file
-  python - "$MODEL_CONFIG_FILE" "$model" <<'PY'
-import sys
-
-path = sys.argv[1]
-model = sys.argv[2]
-current_section = None
-found = False
-
-with open(path, "r", encoding="utf-8") as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            current_section = stripped.rstrip(":")
-            continue
-        if current_section != "models":
-            continue
-        if indent == 2 and stripped.endswith(":"):
-            if stripped[:-1].strip() == model:
-                found = True
-                break
-
-sys.exit(0 if found else 1)
-PY
+  python "${SCRIPT_DIR}/config_parser.py" model-exists "$MODEL_CONFIG_FILE" "$model"
   return $?
 }
 

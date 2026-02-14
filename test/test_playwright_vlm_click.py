@@ -377,37 +377,8 @@ def _wait_until_closed(page: Any) -> None:
 
 
 def _load_models_config() -> dict[str, dict[str, str]]:
-    if not CONFIG_PATH.is_file():
-        pytest.skip(f"Missing model config file: {CONFIG_PATH}")
-
-    models: dict[str, dict[str, str]] = {}
-    current_section = None
-    current_model = None
-
-    for raw_line in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            current_section = stripped.rstrip(":")
-            current_model = None
-            continue
-        if current_section != "models":
-            continue
-        if indent == 2 and stripped.endswith(":"):
-            current_model = stripped[:-1].strip()
-            models.setdefault(current_model, {})
-            continue
-        if indent == 4 and ":" in stripped and current_model:
-            raw_key, raw_value = stripped.split(":", 1)
-            value = raw_value.strip()
-            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                value = value[1:-1]
-            models[current_model][raw_key.strip()] = value
-
-    return models
+    from conftest import load_models_config
+    return load_models_config()
 
 
 def _encode_image(path: Path) -> str:

@@ -14,6 +14,8 @@ from langchain.agents.middleware.types import AgentState
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 
+from .message_utils import truncate_string
+
 logger = logging.getLogger(__name__)
 
 # ~7.5k tokens at ~4 chars/token
@@ -22,15 +24,7 @@ _MAX_TOOL_RESULT_CHARS = 30000
 
 def _truncate_tool_result(content: str, max_chars: int = _MAX_TOOL_RESULT_CHARS) -> str:
     """Truncate a tool result string, keeping head and tail for context."""
-    if len(content) <= max_chars:
-        return content
-    half = max_chars // 2
-    removed = len(content) - max_chars
-    return (
-        content[:half]
-        + f"\n\n... (truncated {removed} chars) ...\n\n"
-        + content[-half:]
-    )
+    return truncate_string(content, max_chars, mode="head_tail")
 
 
 class ToolResultTruncationMiddleware(AgentMiddleware):

@@ -53,17 +53,38 @@ def is_root_namespace(namespace: object) -> bool:
     return False
 
 
-def truncate_for_log(text: str, limit: int = 2000) -> str:
+def truncate_string(
+    text: str,
+    limit: int,
+    *,
+    mode: str = "head",
+    suffix: str = "...(truncated)",
+) -> str:
+    """Truncate *text* to *limit* characters.
+
+    ``mode``
+        ``"head"`` – keep the first *limit* characters (default).
+        ``"head_tail"`` – keep the first and last *limit // 2* characters.
+
+    ``suffix``
+        String inserted at the truncation point (default ``"...(truncated)"``).
+    """
     if len(text) <= limit:
         return text
-    return f"{text[:limit]}...(truncated)"
+    if mode == "head_tail":
+        half = limit // 2
+        removed = len(text) - limit
+        return f"{text[:half]}\n\n... (truncated {removed} chars) ...\n\n{text[-half:]}"
+    return f"{text[:limit]}{suffix}"
+
+
+def truncate_for_log(text: str, limit: int = 2000) -> str:
+    return truncate_string(text, limit)
 
 
 def format_tool_content(content: Any, limit: int = 400) -> str:
     text = normalize_text_content(content)
-    if len(text) > limit:
-        return text[:limit] + "...(truncated)"
-    return text
+    return truncate_string(text, limit)
 
 
 def normalize_text_content(content: Any) -> str:
@@ -170,9 +191,7 @@ def _compact_single_line(text: str) -> str:
 
 
 def _truncate_inline(text: str, limit: int = TOOL_DISPLAY_LIMIT) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "..."
+    return truncate_string(text, limit, suffix="...")
 
 
 def _first_arg(args: dict[str, Any], keys: list[str]) -> str | None:
@@ -384,3 +403,33 @@ def extract_tool_calls(message: Any) -> list[dict[str, Any]]:
         if isinstance(maybe, list) and maybe:
             return maybe
     return []
+
+
+def extract_tool_call_info(
+    tool_call: dict[str, Any],
+) -> tuple[str | None, Any, str | None, int | None]:
+    """Extract (tool_name, raw_args, tool_call_id, tool_call_index) from a tool call dict.
+
+    Handles multiple key naming conventions used by different LLM providers
+    (e.g. ``name`` vs ``tool_name``, ``args`` vs ``arguments``).
+    """
+    tool_name = tool_call.get("name") or tool_call.get("tool_name")
+    raw_args = tool_call.get("args")
+    if raw_args in (None, "", {}):
+        for key in ("arguments", "input", "parameters", "params"):
+            if key in tool_call:
+                raw_args = tool_call.get(key)
+                break
+
+    func = tool_call.get("function")
+    if tool_name is None and isinstance(func, dict):
+        tool_name = func.get("name")
+    if raw_args in (None, "", {}) and isinstance(func, dict):
+        for key in ("arguments", "input", "parameters", "params"):
+            if key in func:
+                raw_args = func.get(key)
+                break
+
+    tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id") or tool_call.get("call_id")
+    tool_call_index = tool_call.get("index") or tool_call.get("tool_call_index")
+    return tool_name, raw_args, tool_call_id, tool_call_index

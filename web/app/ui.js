@@ -9,6 +9,14 @@ export class UiModule {
         this.attachmentItems = new Map();
     }
 
+    showModal(modalEl) {
+        modalEl?.classList.add('active');
+    }
+
+    hideModal(modalEl) {
+        modalEl?.classList.remove('active');
+    }
+
     async init() {
         const app = this.app;
         this.cacheElements();
@@ -277,12 +285,12 @@ export class UiModule {
         });
 
         app.elements.closeModalBtn.addEventListener('click', () => {
-            app.elements.interruptModal.classList.remove('active');
+            app.ui.hideModal(app.elements.interruptModal);
         });
 
         app.elements.interruptModal.addEventListener('click', (e) => {
             if (e.target === app.elements.interruptModal) {
-                app.elements.interruptModal.classList.remove('active');
+                app.ui.hideModal(app.elements.interruptModal);
             }
         });
 
@@ -344,7 +352,7 @@ export class UiModule {
                 return;
             }
             if (app.elements.interruptModal.classList.contains('active')) {
-                app.elements.interruptModal.classList.remove('active');
+                app.ui.hideModal(app.elements.interruptModal);
                 return;
             }
             if (app.isRunning) {
@@ -460,12 +468,12 @@ export class UiModule {
 
     showDeleteConfirmModal(chatId) {
         this.pendingDeleteChatId = chatId;
-        this.app.elements.deleteConfirmModal?.classList.add('active');
+        this.showModal(this.app.elements.deleteConfirmModal);
     }
 
     hideDeleteConfirmModal() {
         this.pendingDeleteChatId = null;
-        this.app.elements.deleteConfirmModal?.classList.remove('active');
+        this.hideModal(this.app.elements.deleteConfirmModal);
         // 恢复默认文案
         const confirmText = this.app.elements.deleteConfirmModal?.querySelector('.confirm-text');
         if (confirmText) {
@@ -489,7 +497,7 @@ export class UiModule {
         
         // 标记为清空模式
         this.pendingDeleteChatId = '__CLEAR_ALL__';
-        modal.classList.add('active');
+        this.showModal(modal);
     }
 
     createMessageElement(type) {
@@ -864,18 +872,19 @@ export class UiModule {
         }
     }
     
-    addUploadingPreview({ tempId, filename, contentType, file }) {
-        const app = this.app;
-        if (!app.elements.attachmentPreview) return;
-        
+    /**
+     * 创建附件预览元素的共享方法
+     * @param {{ filename: string, contentType: string, file?: File, extraClasses?: string }} opts
+     * @returns {{ item: HTMLElement, visual: HTMLElement, meta: HTMLElement, previewUrl: string|null }}
+     */
+    _createAttachmentElement({ filename, contentType, file, extraClasses }) {
         const item = document.createElement('div');
-        item.className = 'attachment-item uploading';
-        item.setAttribute('data-temp-id', tempId);
+        item.className = 'attachment-item' + (extraClasses ? ' ' + extraClasses : '');
         item.setAttribute('data-filename', filename || '');
-        
+
         const visual = document.createElement('div');
         visual.className = 'attachment-visual ' + this.getFileTypeClass(filename, contentType);
-        
+
         let previewUrl = null;
         const isImage = this.isImageAttachment(contentType, filename);
         if (isImage && file instanceof File) {
@@ -887,26 +896,38 @@ export class UiModule {
             img.alt = filename || 'image';
             visual.appendChild(img);
         } else {
-            const iconHtml = this.getFileTypeIcon(filename, contentType);
-            visual.innerHTML = iconHtml;
+            visual.innerHTML = this.getFileTypeIcon(filename, contentType);
         }
-        
+
         const meta = document.createElement('div');
         meta.className = 'attachment-meta';
         const nameEl = document.createElement('div');
         nameEl.className = 'attachment-name';
         nameEl.textContent = filename || '未命名文件';
         meta.appendChild(nameEl);
-        
+
+        item.appendChild(visual);
+        item.appendChild(meta);
+
+        return { item, visual, meta, previewUrl };
+    }
+
+    addUploadingPreview({ tempId, filename, contentType, file }) {
+        const app = this.app;
+        if (!app.elements.attachmentPreview) return;
+
+        const { item, meta, previewUrl } = this._createAttachmentElement({
+            filename, contentType, file, extraClasses: 'uploading',
+        });
+        item.setAttribute('data-temp-id', tempId);
+
         const statusEl = document.createElement('div');
         statusEl.className = 'attachment-status uploading';
         statusEl.innerHTML = '<span class="upload-spinner"></span><span>上传中...</span>';
         meta.appendChild(statusEl);
-        
-        item.appendChild(visual);
-        item.appendChild(meta);
+
         app.elements.attachmentPreview.appendChild(item);
-        
+
         // 存储临时预览信息
         this.attachmentItems.set(tempId, {
             element: item,
@@ -1023,26 +1044,27 @@ export class UiModule {
         if (!app.elements.attachmentPreview || !fileId) return;
         if (this.attachmentItems.has(fileId)) return;
 
-        const item = document.createElement('div');
-        item.className = 'attachment-item';
+        const { item, meta, previewUrl } = this._createAttachmentElement({
+            filename, contentType, file,
+        });
         item.setAttribute('data-file-id', fileId);
-        item.setAttribute('data-filename', filename || '');
 
-        const visual = document.createElement('div');
-        visual.className = 'attachment-visual ' + this.getFileTypeClass(filename, contentType);
+        // 显示文件类型和大小
+        const fileTypeLabel = this.getFileTypeLabel(filename, contentType);
+        const sizeLabel = app.utils.formatFileSize(size);
 
-        let previewUrl = null;
-        const isImage = this.isImageAttachment(contentType, filename);
-        if (isImage && file instanceof File) {
-            previewUrl = URL.createObjectURL(file);
-            const img = document.createElement('img');
-            img.className = 'attachment-thumb';
-            img.src = previewUrl;
-            img.alt = filename || 'image';
-            visual.appendChild(img);
-        } else {
-            const iconHtml = this.getFileTypeIcon(filename, contentType);
-            visual.innerHTML = iconHtml;
+        if (fileTypeLabel || sizeLabel) {
+            const typeSizeEl = document.createElement('div');
+            typeSizeEl.className = 'attachment-type-size';
+
+            if (fileTypeLabel && sizeLabel) {
+                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span><span class="dot"></span><span>${sizeLabel}</span>`;
+            } else if (fileTypeLabel) {
+                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span>`;
+            } else {
+                typeSizeEl.textContent = sizeLabel;
+            }
+            meta.appendChild(typeSizeEl);
         }
 
         const removeBtn = document.createElement('button');
@@ -1056,35 +1078,8 @@ export class UiModule {
                 <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
         `;
-
-        const meta = document.createElement('div');
-        meta.className = 'attachment-meta';
-        const nameEl = document.createElement('div');
-        nameEl.className = 'attachment-name';
-        nameEl.textContent = filename || '未命名文件';
-        meta.appendChild(nameEl);
-
-        // 显示文件类型和大小
-        const fileTypeLabel = this.getFileTypeLabel(filename, contentType);
-        const sizeLabel = app.utils.formatFileSize(size);
-        
-        if (fileTypeLabel || sizeLabel) {
-            const typeSizeEl = document.createElement('div');
-            typeSizeEl.className = 'attachment-type-size';
-            
-            if (fileTypeLabel && sizeLabel) {
-                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span><span class="dot"></span><span>${sizeLabel}</span>`;
-            } else if (fileTypeLabel) {
-                typeSizeEl.innerHTML = `<span>${fileTypeLabel}</span>`;
-            } else {
-                typeSizeEl.textContent = sizeLabel;
-            }
-            meta.appendChild(typeSizeEl);
-        }
-
-        item.appendChild(visual);
-        item.appendChild(meta);
         item.appendChild(removeBtn);
+
         app.elements.attachmentPreview.appendChild(item);
 
         this.attachmentItems.set(fileId, {
@@ -1371,7 +1366,7 @@ export class UiModule {
                 interrupt_id: interrupt.id,
                 approved: true
             });
-            app.elements.interruptModal.classList.remove('active');
+            app.ui.hideModal(app.elements.interruptModal);
         });
 
         document.getElementById('rejectAllBtn').addEventListener('click', () => {
@@ -1380,10 +1375,10 @@ export class UiModule {
                 interrupt_id: interrupt.id,
                 approved: false
             });
-            app.elements.interruptModal.classList.remove('active');
+            app.ui.hideModal(app.elements.interruptModal);
         });
 
-        app.elements.interruptModal.classList.add('active');
+        app.ui.showModal(app.elements.interruptModal);
     }
 
     renderToolCall(toolCall, state) {
@@ -2132,53 +2127,58 @@ export class UiModule {
     }
 
     /**
+     * 检测文件类型，返回统一的类型信息对象
+     * @param {string} filename - 文件名
+     * @param {string} contentType - 文件MIME类型
+     * @returns {{ type: string, cssClass: string, label: string, iconText: string|null, iconFontSize: string|null }}
+     */
+    detectFileType(filename, contentType) {
+        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
+        const type = (contentType || '').toLowerCase();
+
+        if (ext === 'pdf' || type === 'application/pdf') {
+            return { type: 'pdf', cssClass: 'file-pdf', label: 'PDF', iconText: 'PDF', iconFontSize: '6' };
+        }
+        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
+            return { type: 'ppt', cssClass: 'file-ppt', label: '演示文稿', iconText: 'PPT', iconFontSize: '5' };
+        }
+        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
+            return { type: 'word', cssClass: 'file-word', label: '文档', iconText: 'DOC', iconFontSize: '4.5' };
+        }
+        if (ext === 'xls' || ext === 'xlsx' || type.includes('spreadsheet') || type.includes('excel')) {
+            return { type: 'excel', cssClass: 'file-excel', label: '电子表格', iconText: 'XLS', iconFontSize: '5' };
+        }
+        if (ext === 'csv') {
+            return { type: 'csv', cssClass: 'file-excel', label: 'CSV', iconText: 'XLS', iconFontSize: '5' };
+        }
+        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
+            return { type: 'text', cssClass: 'file-text', label: '文本', iconText: null, iconFontSize: null };
+        }
+        if (ext === 'json' || ext === 'jsonl') {
+            return { type: 'json', cssClass: 'file-default', label: 'JSON', iconText: null, iconFontSize: null };
+        }
+        if (ext === 'yaml' || ext === 'yml') {
+            return { type: 'yaml', cssClass: 'file-default', label: 'YAML', iconText: null, iconFontSize: null };
+        }
+        if (ext === 'log') {
+            return { type: 'log', cssClass: 'file-default', label: '日志', iconText: null, iconFontSize: null };
+        }
+        if (this.isImageAttachment(contentType, filename)) {
+            return { type: 'image', cssClass: 'file-image', label: '图片', iconText: null, iconFontSize: null };
+        }
+        return { type: 'default', cssClass: 'file-default', label: '文件', iconText: null, iconFontSize: null };
+    }
+
+    /**
      * 根据文件名和类型获取对应的图标
      * @param {string} filename - 文件名
      * @param {string} contentType - 文件MIME类型
      * @returns {string} SVG图标HTML
      */
     getFileTypeIcon(filename, contentType) {
-        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
-        const type = (contentType || '').toLowerCase();
-        
-        // PDF文件
-        if (ext === 'pdf' || type === 'application/pdf') {
-            return `<svg class="attachment-file-icon file-icon-pdf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <text x="12" y="17" text-anchor="middle" font-size="6" font-weight="bold" fill="currentColor" stroke="none">PDF</text>
-            </svg>`;
-        }
-        
-        // PPT/PPTX文件
-        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
-            return `<svg class="attachment-file-icon file-icon-ppt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <text x="12" y="17" text-anchor="middle" font-size="5" font-weight="bold" fill="currentColor" stroke="none">PPT</text>
-            </svg>`;
-        }
-        
-        // Word文件
-        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
-            return `<svg class="attachment-file-icon file-icon-word" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <text x="12" y="17" text-anchor="middle" font-size="4.5" font-weight="bold" fill="currentColor" stroke="none">DOC</text>
-            </svg>`;
-        }
-        
-        // Excel文件
-        if (ext === 'xls' || ext === 'xlsx' || ext === 'csv' || type.includes('spreadsheet') || type.includes('excel')) {
-            return `<svg class="attachment-file-icon file-icon-excel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <text x="12" y="17" text-anchor="middle" font-size="5" font-weight="bold" fill="currentColor" stroke="none">XLS</text>
-            </svg>`;
-        }
-        
-        // TXT文件
-        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
+        const info = this.detectFileType(filename, contentType);
+
+        if (info.type === 'text') {
             return `<svg class="attachment-file-icon file-icon-txt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                 <polyline points="14 2 14 8 20 8"></polyline>
@@ -2186,7 +2186,16 @@ export class UiModule {
                 <line x1="8" y1="17" x2="14" y2="17"></line>
             </svg>`;
         }
-        
+
+        if (info.iconText) {
+            const iconClass = `file-icon-${info.type}`;
+            return `<svg class="attachment-file-icon ${iconClass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <text x="12" y="17" text-anchor="middle" font-size="${info.iconFontSize}" font-weight="bold" fill="currentColor" stroke="none">${info.iconText}</text>
+            </svg>`;
+        }
+
         // 通用文件图标
         return `<svg class="attachment-file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -2201,28 +2210,7 @@ export class UiModule {
      * @returns {string} CSS类名
      */
     getFileTypeClass(filename, contentType) {
-        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
-        const type = (contentType || '').toLowerCase();
-        
-        if (ext === 'pdf' || type === 'application/pdf') {
-            return 'file-pdf';
-        }
-        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
-            return 'file-ppt';
-        }
-        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
-            return 'file-word';
-        }
-        if (ext === 'xls' || ext === 'xlsx' || ext === 'csv' || type.includes('spreadsheet') || type.includes('excel')) {
-            return 'file-excel';
-        }
-        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
-            return 'file-text';
-        }
-        if (this.isImageAttachment(contentType, filename)) {
-            return 'file-image';
-        }
-        return 'file-default';
+        return this.detectFileType(filename, contentType).cssClass;
     }
 
     /**
@@ -2232,40 +2220,7 @@ export class UiModule {
      * @returns {string} 文件类型标签
      */
     getFileTypeLabel(filename, contentType) {
-        const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
-        const type = (contentType || '').toLowerCase();
-        
-        if (ext === 'pdf' || type === 'application/pdf') {
-            return 'PDF';
-        }
-        if (ext === 'ppt' || ext === 'pptx' || type.includes('presentation')) {
-            return '演示文稿';
-        }
-        if (ext === 'doc' || ext === 'docx' || type.includes('word') || type.includes('document')) {
-            return '文档';
-        }
-        if (ext === 'xls' || ext === 'xlsx' || type.includes('spreadsheet') || type.includes('excel')) {
-            return '电子表格';
-        }
-        if (ext === 'csv') {
-            return 'CSV';
-        }
-        if (ext === 'txt' || ext === 'md' || ext === 'markdown' || type.includes('text/plain')) {
-            return '文本';
-        }
-        if (ext === 'json' || ext === 'jsonl') {
-            return 'JSON';
-        }
-        if (ext === 'yaml' || ext === 'yml') {
-            return 'YAML';
-        }
-        if (ext === 'log') {
-            return '日志';
-        }
-        if (this.isImageAttachment(contentType, filename)) {
-            return '图片';
-        }
-        return '文件';
+        return this.detectFileType(filename, contentType).label;
     }
     
     /**
@@ -2322,123 +2277,4 @@ export class UiModule {
         }
     }
     
-    /**
-     * 解析AI回复中的文件链接
-     * @param {string} content - 消息内容
-     * @returns {Array} 文件链接数组
-     */
-    extractFileLinks(content) {
-        if (!content) return [];
-        
-        const fileLinks = [];
-        // 匹配常见文件链接模式
-        const patterns = [
-            // Markdown链接: [filename](url)
-            /\[([^\]]+)\]\((https?:\/\/[^)]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|zip|rar|png|jpg|jpeg|gif|svg))\)/gi,
-            // 纯 URL
-            /(https?:\/\/[^\s<>"]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|zip|rar|png|jpg|jpeg|gif|svg))/gi
-        ];
-        
-        // 匹配 Markdown 链接
-        const mdPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi;
-        let match;
-        while ((match = mdPattern.exec(content)) !== null) {
-            const filename = match[1];
-            const url = match[2];
-            // 检查是否是文件链接
-            if (this.isFileUrl(url)) {
-                fileLinks.push({ filename, url });
-            }
-        }
-        
-        return fileLinks;
-    }
-    
-    /**
-     * 检查URL是否是文件链接
-     * @param {string} url - URL
-     * @returns {boolean}
-     */
-    isFileUrl(url) {
-        if (!url) return false;
-        const fileExtensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'csv', 'json', 'zip', 'rar', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'mp3', 'mp4', 'wav'];
-        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
-        return fileExtensions.includes(ext);
-    }
-    
-    /**
-     * 根据URL获取文件类型图标类名
-     * @param {string} url - 文件URL
-     * @returns {string} 图标类名
-     */
-    getFileIconClass(url) {
-        if (!url) return 'default';
-        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
-        if (ext === 'pdf') return 'pdf';
-        if (['doc', 'docx'].includes(ext)) return 'word';
-        if (['xls', 'xlsx', 'csv'].includes(ext)) return 'excel';
-        if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) return 'image';
-        return 'default';
-    }
-    
-    /**
-     * 根据URL获取文件类型标签
-     * @param {string} url - 文件URL
-     * @returns {string} 文件类型标签
-     */
-    getFileTypeFromUrl(url) {
-        if (!url) return '文件';
-        const ext = url.split('.').pop()?.toLowerCase().split('?')[0];
-        const typeMap = {
-            'pdf': 'PDF',
-            'doc': 'Word',
-            'docx': 'Word',
-            'xls': 'Excel',
-            'xlsx': 'Excel',
-            'csv': 'CSV',
-            'ppt': 'PPT',
-            'pptx': 'PPT',
-            'txt': '文本',
-            'md': 'Markdown',
-            'json': 'JSON',
-            'png': '图片',
-            'jpg': '图片',
-            'jpeg': '图片',
-            'gif': '图片',
-            'svg': 'SVG',
-            'zip': '压缩包',
-            'rar': '压缩包'
-        };
-        return typeMap[ext] || '文件';
-    }
-    
-    /**
-     * 渲染文件链接卡片
-     * @param {Array} fileLinks - 文件链接数组
-     * @returns {string} HTML字符串
-     */
-    renderFileCards(fileLinks) {
-        if (!fileLinks || !fileLinks.length) return '';
-        
-        const cards = fileLinks.map(file => {
-            const iconClass = this.getFileIconClass(file.url);
-            const fileType = this.getFileTypeFromUrl(file.url);
-            return `
-                <a class="file-link-card" href="${this.app.utils.escapeHtml(file.url)}" target="_blank" rel="noopener noreferrer">
-                    <div class="file-icon ${iconClass}">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                        </svg>
-                    </div>
-                    <div class="file-info">
-                        <div class="file-name">${this.app.utils.escapeHtml(file.filename)}</div>
-                        <div class="file-type">${fileType}</div>
-                    </div>
-                </a>
-            `;
-        }).join('');
-        
-        return `<div class="message-file-cards">${cards}</div>`;
-    }
 }

@@ -8,7 +8,7 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from .message_utils import parse_tool_args
+from .message_utils import extract_tool_call_info, parse_tool_args
 from .config import logger
 from .tool_call_args import record_tool_call_args
 
@@ -20,20 +20,7 @@ class ToolCallArgsMiddleware(AgentMiddleware):
 
     def _record(self, request: ToolCallRequest) -> None:
         tool_call = request.tool_call or {}
-        tool_call_id = tool_call.get("id") or tool_call.get("tool_call_id")
-        tool_name = tool_call.get("name") or tool_call.get("tool_name")
-        raw_args = tool_call.get("args")
-        if raw_args in (None, "", {}):
-            for key in ("arguments", "input", "parameters", "params"):
-                if key in tool_call:
-                    raw_args = tool_call.get(key)
-                    break
-        if raw_args in (None, "", {}) and isinstance(tool_call.get("function"), dict):
-            func = tool_call.get("function", {})
-            for key in ("arguments", "input", "parameters", "params"):
-                if key in func:
-                    raw_args = func.get(key)
-                    break
+        tool_name, raw_args, tool_call_id, _ = extract_tool_call_info(tool_call)
         parsed_args = parse_tool_args(raw_args)
         if DEBUG_TOOL_CALLS and tool_name in {"read_file", "write_file", "edit_file", "execute", "shell"}:
             logger.info(

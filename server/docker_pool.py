@@ -260,6 +260,34 @@ class DockerSandboxPool:
     async def sync_workspace(self, backend: DockerSandboxBackend, target_dir: Path) -> None:
         await asyncio.to_thread(backend.copy_workspace_to_host, target_dir)
 
+    @staticmethod
+    def _run_docker_command(
+        args: list[str],
+        *,
+        check: bool = True,
+        allow_errors: list[str] | None = None,
+        error_msg: str = "Docker command failed.",
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a docker subprocess and handle common error patterns.
+
+        Args:
+            args: Command arguments (e.g. ``["docker", "pause", container_id]``).
+            check: If ``True``, raise on non-zero exit code.
+            allow_errors: Substrings in stderr that should be silently ignored.
+            error_msg: Default error message when stderr is empty.
+        """
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0 and check:
+            stderr = result.stderr.strip()
+            if allow_errors:
+                lowered = stderr.lower()
+                for allowed in allow_errors:
+                    if allowed in lowered:
+                        return result
+            msg = stderr or error_msg
+            raise RuntimeError(msg)
+        return result
+
     async def _ensure_idle(self, target: int) -> None:
         if self._config.bind_workspace:
             return
@@ -336,7 +364,9 @@ class DockerSandboxPool:
         args.append(self._config.image)
         masked_args.append(self._config.image)
 
-        result = subprocess.run(args, capture_output=True, text=True)
+        result = self._run_docker_command(
+            args, error_msg="Failed to start Docker sandbox.",
+        )
         logger.debug(
             "Docker run args=%s rc=%s stdout=%s stderr=%s",
             masked_args,
@@ -344,29 +374,22 @@ class DockerSandboxPool:
             result.stdout.strip(),
             result.stderr.strip(),
         )
-        if result.returncode != 0:
-            msg = result.stderr.strip() or "Failed to start Docker sandbox."
-            raise RuntimeError(msg)
         container_id = result.stdout.strip()
         self._pause_container(container_id)
         logger.info("Started Docker sandbox %s", container_id)
         return container_id
 
     def _rename_container(self, container_id: str, new_name: str) -> None:
-        result = subprocess.run(
+        self._run_docker_command(
             ["docker", "rename", container_id, new_name],
-            capture_output=True,
-            text=True,
+            error_msg="Failed to rename Docker sandbox.",
         )
-        if result.returncode != 0:
-            msg = result.stderr.strip() or "Failed to rename Docker sandbox."
-            raise RuntimeError(msg)
 
     def _remove_container(self, container_id: str) -> None:
-        result = subprocess.run(
+        result = self._run_docker_command(
             ["docker", "rm", "-f", container_id],
-            capture_output=True,
-            text=True,
+            check=False,
+            error_msg="Failed to remove Docker sandbox.",
         )
         if result.returncode != 0:
             msg = result.stderr.strip() or "Failed to remove Docker sandbox."
@@ -375,27 +398,15 @@ class DockerSandboxPool:
             logger.info("Removed Docker sandbox %s", container_id)
 
     def _pause_container(self, container_id: str) -> None:
-        result = subprocess.run(
+        self._run_docker_command(
             ["docker", "pause", container_id],
-            capture_output=True,
-            text=True,
+            allow_errors=["already paused"],
+            error_msg="Failed to pause Docker sandbox.",
         )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if "already paused" in stderr.lower():
-                return
-            msg = stderr or "Failed to pause Docker sandbox."
-            raise RuntimeError(msg)
 
     def _unpause_container(self, container_id: str) -> None:
-        result = subprocess.run(
+        self._run_docker_command(
             ["docker", "unpause", container_id],
-            capture_output=True,
-            text=True,
+            allow_errors=["not paused"],
+            error_msg="Failed to unpause Docker sandbox.",
         )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if "not paused" in stderr.lower():
-                return
-            msg = stderr or "Failed to unpause Docker sandbox."
-            raise RuntimeError(msg)

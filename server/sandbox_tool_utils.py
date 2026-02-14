@@ -9,6 +9,8 @@ from typing import Any
 
 from deepagents.backends.protocol import SandboxBackendProtocol
 
+from .message_utils import truncate_string
+
 _RESULT_PREFIX = "RESULT_JSON:"
 _WORKSPACE_ROOT = Path("/workspace")
 
@@ -25,9 +27,7 @@ def _extract_result(output: str) -> dict[str, Any] | None:
 
 
 def _truncate_text(text: str, limit: int = 4000) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n... (truncated)"
+    return truncate_string(text, limit, suffix="\n... (truncated)")
 
 
 def _parse_sandbox_result(output: str, exit_code: int | None) -> dict[str, Any]:
