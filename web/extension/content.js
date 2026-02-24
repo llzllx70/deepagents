@@ -1,9 +1,12 @@
 let idCounter = 0;
 let lastConfigSent = '';
+const isIframe = window !== window.top;
+// Use a unique prefix per frame to avoid da-id collisions between main frame and iframes
+const idPrefix = isIframe ? `da-f${Math.random().toString(36).slice(2, 6)}-` : 'da-';
 
 function nextId() {
   idCounter += 1;
-  return `da-${idCounter}`;
+  return `${idPrefix}${idCounter}`;
 }
 
 function isVisible(element) {
@@ -114,12 +117,28 @@ function collectSnapshot(mode) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "collect_snapshot") {
     const snapshot = collectSnapshot(message.mode || "compact");
-    chrome.runtime.sendMessage({
-      source: "content",
-      type: "snapshot",
-      request_id: message.request_id,
-      snapshot,
-    });
+    if (isIframe) {
+      // Tag each element with the frame URL so the agent knows where it lives
+      const frameUrl = location.href;
+      for (const el of snapshot.elements) {
+        el.frame = frameUrl;
+      }
+      chrome.runtime.sendMessage({
+        source: "content",
+        type: "snapshot",
+        request_id: message.request_id,
+        snapshot,
+        isIframe: true,
+        frameUrl,
+      });
+    } else {
+      chrome.runtime.sendMessage({
+        source: "content",
+        type: "snapshot",
+        request_id: message.request_id,
+        snapshot,
+      });
+    }
     sendResponse({ ok: true });
   }
 });
@@ -175,8 +194,11 @@ function observeBridgeConfig() {
   sendBridgeConfig();
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', observeBridgeConfig, { once: true });
-} else {
-  observeBridgeConfig();
+// Only the main frame should manage bridge config — iframes just provide snapshots
+if (!isIframe) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', observeBridgeConfig, { once: true });
+  } else {
+    observeBridgeConfig();
+  }
 }

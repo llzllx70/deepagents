@@ -211,20 +211,33 @@ function requestSnapshotFromTab(requestId, sendToServer, mode, tabId) {
     }
     return;
   }
-  pendingSnapshot.set(requestId, { sendToServer, tabId });
+  // With all_frames: true, multiple content scripts may respond.
+  // We aggregate: main frame snapshot is the base, iframe snapshots merge elements.
+  pendingSnapshot.set(requestId, {
+    sendToServer,
+    tabId,
+    mainSnapshot: null,
+    iframeElements: [],
+    aggregateTimer: null,
+  });
   chrome.tabs.sendMessage(
     tabId,
     { type: "collect_snapshot", request_id: requestId, mode },
     () => {
       if (chrome.runtime.lastError) {
-        pendingSnapshot.delete(requestId);
-        if (sendToServer) {
-          wsSend({
-            type: "browser.snapshot",
-            request_id: requestId,
-            tab_id: tabId,
-            error: chrome.runtime.lastError.message,
-          });
+        // If the main frame failed, still wait briefly for iframes,
+        // but if nothing comes in, report error
+        const entry = pendingSnapshot.get(requestId);
+        if (entry && !entry.mainSnapshot && entry.iframeElements.length === 0) {
+          pendingSnapshot.delete(requestId);
+          if (sendToServer) {
+            wsSend({
+              type: "browser.snapshot",
+              request_id: requestId,
+              tab_id: tabId,
+              error: chrome.runtime.lastError.message,
+            });
+          }
         }
       }
     }
@@ -304,12 +317,18 @@ async function handleAction(payload) {
 
 async function getSnapshotOnce(tabId, requestId, mode) {
   return new Promise((resolve) => {
-    pendingSnapshot.set(requestId, { sendToServer: false, resolve, tabId });
+    pendingSnapshot.set(requestId, {
+      sendToServer: false,
+      resolve,
+      tabId,
+      mainSnapshot: null,
+      iframeElements: [],
+      aggregateTimer: null,
+    });
     chrome.tabs.sendMessage(tabId, { type: "collect_snapshot", request_id: requestId, mode });
     setTimeout(() => {
       if (pendingSnapshot.has(requestId)) {
-        pendingSnapshot.delete(requestId);
-        resolve(null);
+        finalizeSnapshot(requestId);
       }
     }, 3000);
   });
@@ -389,6 +408,64 @@ async function performType(tabId, target, text, clearFirst) {
     const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusByTextScript, returnByValue: true });
     focused = !!result?.result?.value;
   }
+  // 3) iframe fallback — try to focus element inside child frames
+  if (!focused) {
+    try {
+      const frames = await getChildFrameContexts(tabId);
+      for (const frame of frames) {
+        if (focused) break;
+        if (selector) {
+          const script = `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  if (!el) return false;
+  el.focus();
+  if (${clearFirst ? "true" : "false"}) {
+    if ("value" in el) el.value = "";
+    if (el.isContentEditable) el.innerText = "";
+  }
+  return true;
+})()`;
+          const result = await sendCDP(tabId, "Runtime.evaluate", {
+            expression: script,
+            contextId: frame.contextId,
+            returnByValue: true,
+          });
+          focused = !!result?.result?.value;
+        }
+        if (!focused && target?.text) {
+          const script = `(() => {
+  const text = ${JSON.stringify(target.text)};
+  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
+  const candidates = tagFilter
+    ? document.querySelectorAll(tagFilter)
+    : document.querySelectorAll('input,textarea,select,a,button,label,[role],[contenteditable],span,div');
+  for (const el of candidates) {
+    if (!el.textContent || !el.textContent.includes(text)) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+    el.focus();
+    if (${clearFirst ? "true" : "false"}) {
+      if ("value" in el) el.value = "";
+      if (el.isContentEditable) el.innerText = "";
+    }
+    return true;
+  }
+  return false;
+})()`;
+          const result = await sendCDP(tabId, "Runtime.evaluate", {
+            expression: script,
+            contextId: frame.contextId,
+            returnByValue: true,
+          });
+          focused = !!result?.result?.value;
+        }
+      }
+    } catch (e) {
+      // iframe enumeration failed, ignore
+    }
+  }
   if (!focused) throw new Error("Failed to focus target");
   if (text) {
     await sendCDP(tabId, "Input.insertText", { text });
@@ -431,6 +508,14 @@ async function resolveTargetRect(tabId, target) {
       if (rect) return rect;
       if (attempt < 2) await sleep(500);
     }
+  }
+
+  // 4) iframe fallback — search child frames via CDP
+  try {
+    const iframeRect = await resolveTargetRectInFrames(tabId, target);
+    if (iframeRect) return iframeRect;
+  } catch (e) {
+    // CDP frame enumeration failed, ignore
   }
 
   return null;
@@ -479,6 +564,146 @@ async function resolveByText(tabId, text, tag) {
   return result?.result?.value || null;
 }
 
+// ── iframe support helpers ────────────────────────────────
+
+async function getChildFrameContexts(tabId) {
+  const tree = await sendCDP(tabId, "Page.getFrameTree");
+  const childFrames = tree?.frameTree?.childFrames || [];
+  const results = [];
+  for (const child of childFrames) {
+    const frameId = child.frame?.id;
+    const frameUrl = child.frame?.url || "";
+    if (!frameId) continue;
+    // Skip about:blank and chrome-internal frames
+    if (!frameUrl || frameUrl === "about:blank" || frameUrl.startsWith("chrome")) continue;
+    try {
+      const { executionContextId } = await sendCDP(tabId, "Page.createIsolatedWorld", {
+        frameId,
+        worldName: "deepagents-iframe",
+      });
+      // Get the iframe element's bounding rect in the main frame
+      const iframeRectScript = `(() => {
+  const targetUrl = ${JSON.stringify(frameUrl)}.replace(/\\/$/, '');
+  const frames = document.querySelectorAll('iframe');
+  // First pass: match by src URL
+  for (const f of frames) {
+    try {
+      if (!f.src) continue;
+      const src = new URL(f.src, location.href).href.replace(/\\/$/, '');
+      if (targetUrl === src || targetUrl.startsWith(src) || src.startsWith(targetUrl)) {
+        const r = f.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          return { x: r.left, y: r.top, width: r.width, height: r.height };
+        }
+      }
+    } catch(e) {}
+  }
+  // Fallback: return first visible iframe
+  for (const f of frames) {
+    const r = f.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
+    }
+  }
+  return null;
+})()`;
+      const rectResult = await sendCDP(tabId, "Runtime.evaluate", {
+        expression: iframeRectScript,
+        returnByValue: true,
+      });
+      const rect = rectResult?.result?.value || { x: 0, y: 0, width: 0, height: 0 };
+      results.push({ frameId, contextId: executionContextId, url: frameUrl, rect });
+    } catch (e) {
+      // Frame may have been destroyed, skip
+    }
+  }
+  return results;
+}
+
+async function resolveTargetRectInFrames(tabId, target) {
+  const selector = target.selector || (target.id ? `[data-da-id="${target.id}"]` : null);
+  const frames = await getChildFrameContexts(tabId);
+
+  for (const frame of frames) {
+    let elementRect = null;
+    if (selector) {
+      const script = `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return null;
+  return {
+    x: rect.left, y: rect.top,
+    width: rect.width, height: rect.height,
+    centerX: rect.left + rect.width / 2,
+    centerY: rect.top + rect.height / 2
+  };
+})()`;
+      const result = await sendCDP(tabId, "Runtime.evaluate", {
+        expression: script,
+        contextId: frame.contextId,
+        returnByValue: true,
+      });
+      elementRect = result?.result?.value || null;
+    }
+    if (!elementRect && target.text) {
+      const script = `(() => {
+  const text = ${JSON.stringify(target.text)};
+  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
+  const interactiveTags = new Set(['a','button','input','select','textarea','label','details','summary']);
+  const candidates = tagFilter
+    ? document.querySelectorAll(tagFilter)
+    : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
+  function isVis(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    if (rect.bottom < 0 || rect.right < 0) return null;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+      centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
+  }
+  let firstVisible = null;
+  let bestInteractive = null;
+  let bestArea = Infinity;
+  for (const el of candidates) {
+    if (!el.textContent || !el.textContent.includes(text)) continue;
+    const r = isVis(el);
+    if (!r) continue;
+    if (!firstVisible) firstVisible = r;
+    const area = r.width * r.height;
+    const tn = el.tagName.toLowerCase();
+    if (interactiveTags.has(tn) || el.hasAttribute('role')
+        || el.hasAttribute('onclick') || el.closest('a,button,label,[role]')) {
+      if (area < bestArea) { bestArea = area; bestInteractive = r; }
+    }
+  }
+  return bestInteractive || firstVisible;
+})()`;
+      const result = await sendCDP(tabId, "Runtime.evaluate", {
+        expression: script,
+        contextId: frame.contextId,
+        returnByValue: true,
+      });
+      elementRect = result?.result?.value || null;
+    }
+    if (elementRect) {
+      // Coordinate transform: iframe-local → viewport-absolute
+      return {
+        x: frame.rect.x + elementRect.x,
+        y: frame.rect.y + elementRect.y,
+        width: elementRect.width,
+        height: elementRect.height,
+        centerX: frame.rect.x + elementRect.centerX,
+        centerY: frame.rect.y + elementRect.centerY,
+        frameContextId: frame.contextId,
+        frameId: frame.frameId,
+      };
+    }
+  }
+  return null;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -510,6 +735,32 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+// ── Snapshot aggregation (main + iframe frames) ─────────────
+
+function finalizeSnapshot(requestId) {
+  const entry = pendingSnapshot.get(requestId);
+  if (!entry) return;
+  pendingSnapshot.delete(requestId);
+
+  const snapshot = entry.mainSnapshot || { page: {}, text: "", elements: [], ts: Date.now() };
+  // Merge iframe elements into the main snapshot
+  if (entry.iframeElements.length > 0) {
+    snapshot.elements = (snapshot.elements || []).concat(entry.iframeElements);
+  }
+
+  if (entry.resolve) {
+    entry.resolve(snapshot);
+  }
+  if (entry.sendToServer) {
+    wsSend({
+      type: "browser.snapshot",
+      request_id: requestId,
+      tab_id: entry.tabId,
+      snapshot,
+    });
+  }
+}
+
 // ── Message handler (popup / content script) ───────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -517,18 +768,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "snapshot") {
       const requestId = message.request_id;
       const entry = pendingSnapshot.get(requestId);
-      pendingSnapshot.delete(requestId);
-      if (entry?.resolve) {
-        entry.resolve(message.snapshot || null);
+      if (!entry) return;
+
+      if (message.isIframe) {
+        // Collect iframe elements for merging
+        const iframeElements = (message.snapshot?.elements || []);
+        entry.iframeElements.push(...iframeElements);
+      } else {
+        // Main frame snapshot
+        entry.mainSnapshot = message.snapshot || null;
       }
-      if (entry?.sendToServer) {
-        wsSend({
-          type: "browser.snapshot",
-          request_id: requestId,
-          tab_id: entry.tabId,
-          snapshot: message.snapshot,
-        });
-      }
+
+      // Start or reset the aggregation timer — wait briefly for all frames
+      if (entry.aggregateTimer) clearTimeout(entry.aggregateTimer);
+      entry.aggregateTimer = setTimeout(() => {
+        finalizeSnapshot(requestId);
+      }, 500);
     }
     if (message.type === "bridge_config") {
       const nextServerUrl = message.serverUrl || message.baseUrl || state.serverUrl;
