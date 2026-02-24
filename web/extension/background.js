@@ -268,7 +268,7 @@ async function handleAction(payload) {
       }
     } else if (action === "click") {
       await ensureDebugger(tabId);
-      await performClick(tabId, payload.target);
+      await performClick(tabId, payload.target, payload.text);
     } else if (action === "type") {
       await ensureDebugger(tabId);
       await performType(tabId, payload.target, payload.text || "", payload.clear !== false);
@@ -315,11 +315,31 @@ async function getSnapshotOnce(tabId, requestId, mode) {
   });
 }
 
-async function performClick(tabId, target) {
+async function performClick(tabId, target, text) {
+  if (!target && text) {
+    target = { text };
+  } else if (target && !target.text && text) {
+    target = Object.assign({}, target, { text });
+  }
   const rect = await resolveTargetRect(tabId, target);
-  if (!rect) throw new Error("Target not found");
+  if (!rect) {
+    const hint = target.id
+      ? ` (da-id "${target.id}" may be stale — request a new snapshot)`
+      : target.selector
+        ? ` (selector "${target.selector}" not found in DOM)`
+        : target.text
+          ? ` (no visible element with text "${target.text}")`
+          : "";
+    throw new Error("Target not found" + hint);
+  }
   const x = Math.round(rect.centerX);
   const y = Math.round(rect.centerY);
+  // Move mouse to target first — many pages need this to register the click target
+  await sendCDP(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+  });
   await sendCDP(tabId, "Input.dispatchMouseEvent", {
     type: "mousePressed",
     x,
@@ -388,18 +408,29 @@ async function resolveTargetRect(tabId, target) {
       centerY: target.point.y,
     };
   }
+  if (typeof target.x === "number" && typeof target.y === "number") {
+    return { centerX: target.x, centerY: target.y };
+  }
   const selector =
     target.selector || (target.id ? `[data-da-id=\"${target.id}\"]` : null);
   if (selector) {
-    const script = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return null;\n  const rect = el.getBoundingClientRect();\n  return {\n    x: rect.left,\n    y: rect.top,\n    width: rect.width,\n    height: rect.height,\n    centerX: rect.left + rect.width / 2,\n    centerY: rect.top + rect.height / 2\n  };\n})()`;
-    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: script, returnByValue: true });
-    const rect = result?.result?.value || null;
-    if (rect) return rect;
+    const selectorScript = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return null;\n  const rect = el.getBoundingClientRect();\n  if (rect.width === 0 && rect.height === 0) return null;\n  return {\n    x: rect.left,\n    y: rect.top,\n    width: rect.width,\n    height: rect.height,\n    centerX: rect.left + rect.width / 2,\n    centerY: rect.top + rect.height / 2\n  };\n})()`;
+    // Retry up to 3 times with 500ms intervals for dynamic pages
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await sendCDP(tabId, "Runtime.evaluate", { expression: selectorScript, returnByValue: true });
+      const rect = result?.result?.value || null;
+      if (rect) return rect;
+      if (attempt < 2) await sleep(500);
+    }
   }
 
-  // 3) Text-based fallback
+  // 3) Text-based fallback (also with retry)
   if (target.text) {
-    return await resolveByText(tabId, target.text, target.tag);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rect = await resolveByText(tabId, target.text, target.tag);
+      if (rect) return rect;
+      if (attempt < 2) await sleep(500);
+    }
   }
 
   return null;
@@ -423,17 +454,25 @@ async function resolveByText(tabId, text, tag) {
       centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
   }
   let firstVisible = null;
+  let bestInteractive = null;
+  let bestArea = Infinity;
   for (const el of candidates) {
     if (!el.textContent || !el.textContent.includes(text)) continue;
     const r = isVisible(el);
     if (!r) continue;
     if (!firstVisible) firstVisible = r;
+    const area = r.width * r.height;
     const tn = el.tagName.toLowerCase();
     if (interactiveTags.has(tn) || el.hasAttribute('role')
         || el.hasAttribute('onclick') || el.closest('a,button,label,[role]')) {
-      return r;
+      // Prefer the smallest (most specific) interactive element
+      if (area < bestArea) {
+        bestArea = area;
+        bestInteractive = r;
+      }
     }
   }
+  if (bestInteractive) return bestInteractive;
   return firstVisible;
 })()`;
   const result = await sendCDP(tabId, "Runtime.evaluate", { expression: script, returnByValue: true });
