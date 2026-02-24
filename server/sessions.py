@@ -411,6 +411,7 @@ class RunExecution:
     run_id: str
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     interrupt_waiters: dict[str, asyncio.Future[HITLResponse]] = field(default_factory=dict)
+    intervention_waiters: dict[str, asyncio.Future[str]] = field(default_factory=dict)
 
     def register_interrupt(self, interrupt_id: str) -> asyncio.Future[HITLResponse]:
         loop = asyncio.get_running_loop()
@@ -425,8 +426,24 @@ class RunExecution:
         future.set_result(response)
         return True
 
+    def register_intervention(self, intervention_id: str) -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        self.intervention_waiters[intervention_id] = future
+        return future
+
+    def resolve_intervention(self, intervention_id: str, feedback: str) -> bool:
+        future = self.intervention_waiters.get(intervention_id)
+        if future is None or future.done():
+            return False
+        future.set_result(feedback)
+        return True
+
     def cancel_pending(self) -> None:
         for future in self.interrupt_waiters.values():
+            if not future.done():
+                future.cancel()
+        for future in self.intervention_waiters.values():
             if not future.done():
                 future.cancel()
 
@@ -549,6 +566,20 @@ class Session:
             lines.append("解析结果会自动加入到本上下文中。")
         return "\n".join(lines)
 
+    def _resolve_browser_element_hint(self, tool_name: str, args: dict[str, Any] | None) -> str | None:
+        if tool_name != "browser_action" or not args or not self.browser_bridge:
+            return None
+        target = args.get("target")
+        if isinstance(target, dict):
+            element_id = target.get("id")
+        elif isinstance(target, str):
+            element_id = target.strip()
+        else:
+            return None
+        if not element_id:
+            return None
+        return self.browser_bridge.describe_element(str(element_id))
+
     async def shutdown(self) -> None:
         if self.current_run is not None:
             await self.cancel_current_run()
@@ -639,6 +670,28 @@ class Session:
                 stale.append(ws)
         for ws in stale:
             self.connections.discard(ws)
+
+    async def request_browser_intervention(
+        self, intervention_id: str, description: str, timeout: float,
+    ) -> str:
+        run_ctx = self.current_run
+        if run_ctx is None:
+            return "[Error: no active run]"
+        future = run_ctx.register_intervention(intervention_id)
+        await self.broadcast({
+            "type": "browser.intervention.request",
+            "run_id": run_ctx.run_id,
+            "intervention_id": intervention_id,
+            "description": description,
+        })
+        try:
+            feedback = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            run_ctx.intervention_waiters.pop(intervention_id, None)
+            return "[Timeout: user did not respond]"
+        except asyncio.CancelledError:
+            return "[Cancelled]"
+        return feedback
 
     # ------------------------------------------------------------------
     # Stream processing state — shared across extracted helper methods
@@ -945,7 +998,8 @@ class Session:
             "Tool call ended: session_id=%s run_id=%s tool=%s status=%s",
             self.session_id, ss.run_id, tool_name, tool_status,
         )
-        display = format_tool_display(tool_name, tool_call_args)
+        element_hint = self._resolve_browser_element_hint(tool_name, tool_call_args)
+        display = format_tool_display(tool_name, tool_call_args, element_hint=element_hint)
         await self.broadcast(
             {
                 "type": "tool.call.ended",
@@ -1417,7 +1471,17 @@ class SessionManager:
         if browser_router is not None:
             browser_bridge.set_router(browser_router)
             browser_router.register_bridge(session_id, browser_bridge)
-        tools.extend(build_browser_tools(browser_bridge))
+
+        _intervention_holder: list[Any] = []
+
+        async def _intervention_callback(
+            intervention_id: str, description: str, timeout: float,
+        ) -> str:
+            return await _intervention_holder[0].request_browser_intervention(
+                intervention_id, description, timeout,
+            )
+
+        tools.extend(build_browser_tools(browser_bridge, intervention_callback=_intervention_callback))
         sandbox_backend = await self._pool.acquire_for_session(session_id, session_workspace_dir)
         tools.extend(
             build_qwen_tools(
@@ -1463,6 +1527,7 @@ class SessionManager:
             workspace_dir=session_workspace_dir,
             browser_bridge=browser_bridge,
         )
+        _intervention_holder.append(session)
         await session.start()
         async with self._lock:
             self._sessions[session_id] = session

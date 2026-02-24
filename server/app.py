@@ -660,6 +660,39 @@ async def handle_client_message(session: Session, data: dict[str, Any]) -> None:
             )
         return
 
+    if msg_type == "browser_intervention_response":
+        run_id = data.get("run_id")
+        intervention_id = data.get("intervention_id")
+        feedback = data.get("feedback", "")
+        if not run_id or not intervention_id:
+            await session.broadcast(
+                {
+                    "type": "log",
+                    "level": "warning",
+                    "message": "Invalid browser intervention response payload.",
+                }
+            )
+            return
+        if session.current_run is None or session.current_run.run_id != run_id:
+            await session.broadcast(
+                {
+                    "type": "log",
+                    "level": "warning",
+                    "message": "Browser intervention response does not match active run.",
+                }
+            )
+            return
+        resolved = session.current_run.resolve_intervention(intervention_id, feedback)
+        if not resolved:
+            await session.broadcast(
+                {
+                    "type": "log",
+                    "level": "warning",
+                    "message": "Browser intervention response already handled or expired.",
+                }
+            )
+        return
+
     if msg_type == "auto_approve":
         enabled = bool(data.get("enabled"))
         session.session_state.auto_approve = enabled

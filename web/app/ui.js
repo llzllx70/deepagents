@@ -140,6 +140,10 @@ export class UiModule {
             interruptModalFooter: document.getElementById('interruptModalFooter'),
             closeModalBtn: document.getElementById('closeModalBtn'),
 
+            interventionModal: document.getElementById('interventionModal'),
+            interventionModalBody: document.getElementById('interventionModalBody'),
+            interventionModalFooter: document.getElementById('interventionModalFooter'),
+
             // Delete confirmation modal
             deleteConfirmModal: document.getElementById('deleteConfirmModal'),
             closeDeleteModalBtn: document.getElementById('closeDeleteModalBtn'),
@@ -360,6 +364,10 @@ export class UiModule {
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                // Intervention modal must not be dismissed via Escape
+                if (app.elements.interventionModal?.classList.contains('active')) {
+                    return;
+                }
                 if (app.elements.deleteConfirmModal?.classList.contains('active')) {
                     this.hideDeleteConfirmModal();
                     return;
@@ -721,6 +729,11 @@ export class UiModule {
     finalizeRunState(runId, status) {
         const app = this.app;
         if (!runId) return;
+
+        // Close intervention modal if open
+        if (app.elements.interventionModal?.classList.contains('active')) {
+            this.hideModal(app.elements.interventionModal);
+        }
 
         // 保存运行状态到历史记录
         this.saveRunStateToHistory(runId, status);
@@ -1391,6 +1404,35 @@ export class UiModule {
         });
 
         app.ui.showModal(app.elements.interruptModal);
+    }
+
+    showBrowserInterventionModal(description, interventionId, runId) {
+        const app = this.app;
+
+        app.elements.interventionModalBody.innerHTML = `
+            <div class="intervention-description">${app.utils.escapeHtml(description)}</div>
+            <p class="intervention-hint">请在浏览器中完成上述操作，完成后点击下方「已完成」按钮。</p>
+            <textarea class="intervention-textarea" id="interventionFeedback" rows="3"
+                placeholder="（可选）描述您的操作结果…"></textarea>
+        `;
+
+        app.elements.interventionModalFooter.innerHTML = `
+            <button class="btn btn-primary" id="interventionDoneBtn">已完成</button>
+        `;
+
+        document.getElementById('interventionDoneBtn').addEventListener('click', () => {
+            const feedbackEl = document.getElementById('interventionFeedback');
+            const feedback = feedbackEl?.value?.trim() || '已完成';
+            app.network.send({
+                type: 'browser_intervention_response',
+                run_id: runId,
+                intervention_id: interventionId,
+                feedback,
+            });
+            app.ui.hideModal(app.elements.interventionModal);
+        });
+
+        app.ui.showModal(app.elements.interventionModal);
     }
 
     renderToolCall(toolCall, state) {

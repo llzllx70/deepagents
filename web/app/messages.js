@@ -50,6 +50,9 @@ export class MessageModule {
             case 'interrupt.request':
                 this.handleInterruptRequest(data);
                 break;
+            case 'browser.intervention.request':
+                this.handleBrowserInterventionRequest(data);
+                break;
             case 'interrupt.auto_approved':
                 this.handleInterruptAutoApproved(data);
                 break;
@@ -502,6 +505,12 @@ export class MessageModule {
 
         app.pendingInterrupts.push({ interrupt_id, request, run_id: data.run_id });
         app.ui.showInterruptModal(request, interrupt_id, data.run_id);
+    }
+
+    handleBrowserInterventionRequest(data) {
+        const { intervention_id, description, run_id } = data;
+        console.log('Browser intervention request:', intervention_id, description);
+        this.app.ui.showBrowserInterventionModal(description, intervention_id, run_id);
     }
 
     handleInterruptAutoApproved(data) {

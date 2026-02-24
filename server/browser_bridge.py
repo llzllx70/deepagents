@@ -156,6 +156,20 @@ class BrowserBridge:
             result = result[:max_chars] + "..."
         return result
 
+    def describe_element(self, element_id: str) -> str | None:
+        """Look up a human-readable description for an element from the last snapshot."""
+        if not self._snapshot or not element_id:
+            return None
+        elements = self._snapshot.payload.get("elements")
+        if not isinstance(elements, list):
+            return None
+        for item in elements:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id", "")) == element_id:
+                return _describe_element(item)
+        return None
+
     # ── Private ──────────────────────────────────────────────
 
     async def _send(self, payload: dict[str, Any]) -> None:
@@ -175,6 +189,26 @@ class BrowserBridge:
             "elements": len(elements) if isinstance(elements, list) else 0,
             "text_len": len(text) if isinstance(text, str) else 0,
         }
+
+
+def _describe_element(item: dict[str, Any]) -> str | None:
+    """Return a short human-readable description for a snapshot element.
+
+    Example outputs: ``button "提交"``, ``input "搜索"``, ``a "首页"``
+    """
+    tag = item.get("tag") or item.get("role")
+    text = item.get("text") or item.get("ariaLabel") or ""
+    if isinstance(text, str):
+        text = " ".join(text.split()).strip()
+        if len(text) > 40:
+            text = text[:40] + "..."
+    if tag and text:
+        return f'{tag} "{text}"'
+    if tag:
+        return str(tag)
+    if text:
+        return f'"{text}"'
+    return None
 
 
 def _format_element_line(item: dict[str, Any]) -> str | None:

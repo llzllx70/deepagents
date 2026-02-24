@@ -25,6 +25,7 @@ TOOL_TITLE_MAP: dict[str, str] = {
     "qwen_image_generate": "文生图",
     "browser_request_snapshot": "浏览器快照",
     "browser_action": "浏览器操作",
+    "browser_request_user_intervention": "需要手动操作",
 }
 
 TOOL_DISPLAY_LIMIT = 160
@@ -302,13 +303,15 @@ def _format_scroll_delta(delta: Any) -> str | None:
     return f"{direction}{abs(value)}px"
 
 
-def _format_browser_action_display(args: dict[str, Any]) -> tuple[str | None, str | None]:
+def _format_browser_action_display(
+    args: dict[str, Any], *, element_hint: str | None = None,
+) -> tuple[str | None, str | None]:
     action = _first_arg(args, ["action"])
     if not action:
         return None, None
     action_key = action.strip().lower()
     action_label = BROWSER_ACTION_LABELS.get(action_key, action)
-    target_hint = _extract_target_hint(args.get("target"))
+    target_hint = element_hint or _extract_target_hint(args.get("target"))
     detail: str | None = None
 
     if action_key == "open":
@@ -372,7 +375,8 @@ def _summarize_todos(todos: Any) -> str | None:
 
 
 def format_tool_display(
-    tool_name: str | None, args: dict[str, Any] | None
+    tool_name: str | None, args: dict[str, Any] | None,
+    *, element_hint: str | None = None,
 ) -> dict[str, str | None]:
     name = str(tool_name or "")
     title = TOOL_TITLE_MAP.get(name, name or "tool")
@@ -426,7 +430,9 @@ def format_tool_display(
         if content is None:
             content = _first_arg(parsed_args, ["mode", "reason"]) or "请求快照"
     elif name == "browser_action":
-        title_override, content = _format_browser_action_display(parsed_args)
+        title_override, content = _format_browser_action_display(parsed_args, element_hint=element_hint)
+    elif name == "browser_request_user_intervention":
+        content = _first_arg(parsed_args, ["description"])
 
     if content:
         content = _truncate_inline(_compact_single_line(content))

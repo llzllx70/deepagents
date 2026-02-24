@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.tools import BaseTool, tool
@@ -7,8 +9,13 @@ from langchain_core.tools import BaseTool, tool
 from .browser_bridge import BrowserBridge
 from .browser_target_utils import normalize_browser_target
 
+InterventionCallback = Callable[[str, str, float], Awaitable[str]]
 
-def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
+
+def build_browser_tools(
+    browser_bridge: BrowserBridge,
+    intervention_callback: InterventionCallback | None = None,
+) -> list[BaseTool]:
     @tool(
         "browser_request_snapshot",
         description=(
@@ -72,7 +79,34 @@ def build_browser_tools(browser_bridge: BrowserBridge) -> list[BaseTool]:
             payload["return_snapshot"] = return_snapshot
         return await browser_bridge.send_action(payload)
 
-    return [browser_request_snapshot, browser_action]
+    tools: list[BaseTool] = [browser_request_snapshot, browser_action]
+
+    if intervention_callback is not None:
+        @tool(
+            "browser_request_user_intervention",
+            description=(
+                "Request manual user intervention in the browser. "
+                "Use when you encounter a CAPTCHA, login wall, permission gate, "
+                "security challenge, or any situation requiring human action in the browser. "
+                "Provide a clear description of what the user needs to do. "
+                "The tool will pause and wait for the user to complete the action and provide feedback."
+            ),
+        )
+        async def browser_request_user_intervention(
+            description: str,
+            timeout_minutes: float = 5.0,
+        ) -> dict[str, Any]:
+            intervention_id = uuid.uuid4().hex
+            feedback = await intervention_callback(
+                intervention_id, description, timeout_minutes * 60.0,
+            )
+            if feedback.startswith(("[Timeout:", "[Error:", "[Cancelled]")):
+                return {"success": False, "error": feedback}
+            return {"success": True, "user_feedback": feedback}
+
+        tools.append(browser_request_user_intervention)
+
+    return tools
 
 
 __all__ = ["build_browser_tools"]

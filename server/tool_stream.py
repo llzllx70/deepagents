@@ -10,9 +10,29 @@ from .message_utils import extract_tool_call_info, format_tool_display, parse_to
 if TYPE_CHECKING:
     from deepagents_cli.file_ops import FileOpTracker
 
+    from .browser_bridge import BrowserBridge
     from .sessions import Session
 
 DEBUG_TOOL_CALLS = os.getenv("DEEPAGENTS_DEBUG_TOOL_CALLS") == "1"
+
+
+def _resolve_element_hint(session: "Session", tool_name: str, args: dict[str, Any] | None) -> str | None:
+    """Look up a human-readable element description from the browser snapshot."""
+    if tool_name != "browser_action" or not args:
+        return None
+    bridge: BrowserBridge | None = getattr(session, "browser_bridge", None)
+    if bridge is None:
+        return None
+    target = args.get("target")
+    if isinstance(target, dict):
+        element_id = target.get("id")
+    elif isinstance(target, str):
+        element_id = target.strip()
+    else:
+        return None
+    if not element_id:
+        return None
+    return bridge.describe_element(str(element_id))
 
 
 def _preview_args(value: Any, limit: int = 200) -> str:
@@ -93,7 +113,8 @@ async def emit_tool_call_started(
             tool_name,
             tool_call_id,
         )
-    display = format_tool_display(tool_name, args)
+    element_hint = _resolve_element_hint(session, tool_name, args)
+    display = format_tool_display(tool_name, args, element_hint=element_hint)
     await session.broadcast(
         {
             "type": "tool.call.started",
@@ -214,7 +235,8 @@ async def handle_tool_call_block(
             _preview_args(parsed_args),
         )
 
-    display = format_tool_display(buffer_name, parsed_args)
+    element_hint = _resolve_element_hint(session, buffer_name, parsed_args)
+    display = format_tool_display(buffer_name, parsed_args, element_hint=element_hint)
     await session.broadcast(
         {
             "type": "tool.call.started",
