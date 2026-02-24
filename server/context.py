@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def inject_file_context(user_input: str) -> tuple[str, list[str]]:
-    pattern = r"@((?:[^\s@]|(?<=\\)\s)+)"
+    pattern = r"(?<!\S)@((?:[^\s@]|(?<=\\)\s)+)"
     matches = re.findall(pattern, user_input)
     warnings: list[str] = []
     if not matches:
