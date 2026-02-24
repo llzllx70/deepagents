@@ -479,3 +479,10 @@ server去掉接收web日志的相关代码，接口是client_logs
 }
 
 可接合web目录一起定位原因，同时可结合日志分析
+
+
+# 20260224
+
+1. 查看 openclaw如何打开 chrome，查看邮件，cortexai 可以仿照
+2. 利用claude 4.6 进行分析
+3. openclaw 操作网页不太行，打开boss不停的闪，登陆163都不行
