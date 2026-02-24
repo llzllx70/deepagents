@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, ToolException, tool
 
 from .browser_bridge import BrowserBridge
 from .browser_target_utils import normalize_browser_target
@@ -77,8 +77,12 @@ def build_browser_tools(
             payload["wait_ms"] = wait_ms
         if return_snapshot is not None:
             payload["return_snapshot"] = return_snapshot
-        return await browser_bridge.send_action(payload)
+        result = await browser_bridge.send_action(payload)
+        if isinstance(result, dict) and result.get("status") == "error":
+            raise ToolException(result.get("error") or "Browser action failed")
+        return result
 
+    browser_action.handle_tool_error = True
     tools: list[BaseTool] = [browser_request_snapshot, browser_action]
 
     if intervention_callback is not None:

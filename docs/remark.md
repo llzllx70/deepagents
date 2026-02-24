@@ -486,3 +486,7 @@ server去掉接收web日志的相关代码，接口是client_logs
 1. 查看 openclaw如何打开 chrome，查看邮件，cortexai 可以仿照
 2. 利用claude 4.6 进行分析
 3. openclaw 操作网页不太行，打开boss不停的闪，登陆163都不行
+
+4. 先打开sina, 再点击博客， ok
+5. 打开sohu，使用微信快捷登陆
+6. 使用glm-5，测试使用弹窗，不知道开始的时候有没有识别，继续验证

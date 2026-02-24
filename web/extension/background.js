@@ -295,7 +295,7 @@ async function handleAction(payload) {
     const snapshot = await getSnapshotOnce(snapshotTabId || tabId, actionId, payload.mode || "compact");
     if (snapshot) response.snapshot = snapshot;
   }
-  if (payload.detach_after !== false && state.attachedTabId === tabId) {
+  if (payload.detach_after === true && state.attachedTabId === tabId) {
     await detachDebugger(tabId);
     state.attachedTabId = null;
   }
@@ -338,10 +338,38 @@ async function performClick(tabId, target) {
 
 async function performType(tabId, target, text, clearFirst) {
   const selector = target?.selector || (target?.id ? `[data-da-id=\"${target.id}\"]` : null);
-  if (!selector) throw new Error("Missing target selector");
-  const focusScript = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return false;\n  el.focus();\n  if (${clearFirst ? "true" : "false"}) {\n    if (\"value\" in el) el.value = \"\";\n    if (el.isContentEditable) el.innerText = \"\";\n  }\n  return true;\n})()`;
-  const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusScript, returnByValue: true });
-  if (!result?.result?.value) throw new Error("Failed to focus target");
+  let focused = false;
+  if (selector) {
+    const focusScript = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return false;\n  el.focus();\n  if (${clearFirst ? "true" : "false"}) {\n    if (\"value\" in el) el.value = \"\";\n    if (el.isContentEditable) el.innerText = \"\";\n  }\n  return true;\n})()`;
+    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusScript, returnByValue: true });
+    focused = !!result?.result?.value;
+  }
+  if (!focused && target?.text) {
+    const focusByTextScript = `(() => {
+  const text = ${JSON.stringify(target.text)};
+  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
+  const candidates = tagFilter
+    ? document.querySelectorAll(tagFilter)
+    : document.querySelectorAll('input,textarea,select,a,button,label,[role],[contenteditable],span,div');
+  for (const el of candidates) {
+    if (!el.textContent || !el.textContent.includes(text)) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+    el.focus();
+    if (${clearFirst ? "true" : "false"}) {
+      if ("value" in el) el.value = "";
+      if (el.isContentEditable) el.innerText = "";
+    }
+    return true;
+  }
+  return false;
+})()`;
+    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusByTextScript, returnByValue: true });
+    focused = !!result?.result?.value;
+  }
+  if (!focused) throw new Error("Failed to focus target");
   if (text) {
     await sendCDP(tabId, "Input.insertText", { text });
   }
@@ -362,8 +390,52 @@ async function resolveTargetRect(tabId, target) {
   }
   const selector =
     target.selector || (target.id ? `[data-da-id=\"${target.id}\"]` : null);
-  if (!selector) return null;
-  const script = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return null;\n  const rect = el.getBoundingClientRect();\n  return {\n    x: rect.left,\n    y: rect.top,\n    width: rect.width,\n    height: rect.height,\n    centerX: rect.left + rect.width / 2,\n    centerY: rect.top + rect.height / 2\n  };\n})()`;
+  if (selector) {
+    const script = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return null;\n  const rect = el.getBoundingClientRect();\n  return {\n    x: rect.left,\n    y: rect.top,\n    width: rect.width,\n    height: rect.height,\n    centerX: rect.left + rect.width / 2,\n    centerY: rect.top + rect.height / 2\n  };\n})()`;
+    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: script, returnByValue: true });
+    const rect = result?.result?.value || null;
+    if (rect) return rect;
+  }
+
+  // 3) Text-based fallback
+  if (target.text) {
+    return await resolveByText(tabId, target.text, target.tag);
+  }
+
+  return null;
+}
+
+async function resolveByText(tabId, text, tag) {
+  const script = `(() => {
+  const text = ${JSON.stringify(text)};
+  const tagFilter = ${tag ? JSON.stringify(tag).toLowerCase() : "null"};
+  const interactiveTags = new Set(['a','button','input','select','textarea','label','details','summary']);
+  const candidates = tagFilter
+    ? document.querySelectorAll(tagFilter)
+    : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
+  function isVisible(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    if (rect.bottom < 0 || rect.right < 0) return null;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+      centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
+  }
+  let firstVisible = null;
+  for (const el of candidates) {
+    if (!el.textContent || !el.textContent.includes(text)) continue;
+    const r = isVisible(el);
+    if (!r) continue;
+    if (!firstVisible) firstVisible = r;
+    const tn = el.tagName.toLowerCase();
+    if (interactiveTags.has(tn) || el.hasAttribute('role')
+        || el.hasAttribute('onclick') || el.closest('a,button,label,[role]')) {
+      return r;
+    }
+  }
+  return firstVisible;
+})()`;
   const result = await sendCDP(tabId, "Runtime.evaluate", { expression: script, returnByValue: true });
   return result?.result?.value || null;
 }
