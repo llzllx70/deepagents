@@ -1,189 +1,34 @@
-const state = {
-  serverUrl: "",    // ws://host:port/ws/browser
-  token: "",
-  ws: null,
-  wsUrl: "",        // the URL of the current/last WS connection
-  connected: false,
-  attachedTabId: null,
-  reconnectAttempt: 0,
-};
+/**
+ * background.js — Service Worker 入口文件
+ *
+ * 职责：
+ * 1. 导入所有功能模块
+ * 2. 注册 Chrome 扩展事件监听器（alarms / tabs / runtime）
+ * 3. 路由服务端消息到对应模块
+ * 4. 路由内部消息（popup / content script）到对应处理逻辑
+ *
+ * 不包含具体业务逻辑，只做「胶水」和「路由」。
+ */
 
-const pendingSnapshot = new Map();
-let reconnectTimer = null;
-let heartbeatTimer = null;
+import { state, pendingSnapshot } from "./lib/state.js";
+import { getActiveTabId } from "./lib/utils.js";
+import { wsSend, connectWs, restoreAndConnect, setMessageHandler } from "./lib/connection.js";
+import { ensureDebugger } from "./lib/cdp.js";
+import { requestSnapshotFromTab, finalizeSnapshot } from "./lib/snapshot.js";
+import { handleAction } from "./lib/actions.js";
 
-function normalizeBaseUrl(value) {
-  return value.replace(/\/+$/, "");
-}
+// ── 注册服务端消息处理回调 ──────────────────────────────────
 
-function buildWsUrl(serverUrl, token) {
-  if (!serverUrl) return "";
-  let url = normalizeBaseUrl(serverUrl);
-  if (token) {
-    const separator = url.includes("?") ? "&" : "?";
-    url = `${url}${separator}token=${encodeURIComponent(token)}`;
-  }
-  return url;
-}
-
-function wsSend(payload) {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  state.ws.send(JSON.stringify(payload));
-}
-
-async function getActiveTabId() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tabs.length) return null;
-  return tabs[0].id ?? null;
-}
-
-function attachDebugger(tabId) {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.attach({ tabId }, "1.3", () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      state.attachedTabId = tabId;
-      resolve();
-    });
-  });
-}
-
-function detachDebugger(tabId) {
-  return new Promise((resolve) => {
-    chrome.debugger.detach({ tabId }, () => resolve());
-  });
-}
-
-function sendCDP(tabId, method, params = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(result);
-    });
-  });
-}
-
-async function ensureDebugger(tabId) {
-  if (state.attachedTabId === tabId) return;
-  if (state.attachedTabId != null) {
-    await detachDebugger(state.attachedTabId);
-  }
-  await attachDebugger(tabId);
-  await sendCDP(tabId, "Page.enable");
-  await sendCDP(tabId, "Runtime.enable");
-  await sendCDP(tabId, "DOM.enable");
-}
-
-async function sendHello() {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  const tabId = await getActiveTabId();
-  let tabInfo = null;
-  if (tabId != null) {
-    try {
-      tabInfo = await chrome.tabs.get(tabId);
-    } catch (error) {
-      tabInfo = null;
-    }
-  }
-  wsSend({
-    type: "browser.hello",
-    protocol_version: 2,
-    tab_id: tabId,
-    url: tabInfo?.url || null,
-    title: tabInfo?.title || null,
-    user_agent: navigator.userAgent,
-  });
-}
-
-// ── Heartbeat ──────────────────────────────────────────────
-
-function startHeartbeat() {
-  stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    wsSend({ type: "ping" });
-  }, 20000);
-}
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-// ── WebSocket connect / reconnect ──────────────────────────
-
-async function connectWs(force = false) {
-  const wsUrl = buildWsUrl(state.serverUrl, state.token);
-  if (!wsUrl) {
-    return { error: "Missing serverUrl" };
-  }
-  // Skip if already connected to the same URL
-  if (!force && state.connected && state.wsUrl === wsUrl) {
-    return { ok: true, skipped: true };
-  }
-  if (state.ws) {
-    try {
-      state.ws.close();
-    } catch (error) {}
-  }
-  state.wsUrl = wsUrl;
-  state.ws = new WebSocket(wsUrl);
-  state.ws.onopen = async () => {
-    state.connected = true;
-    state.reconnectAttempt = 0;
-    startHeartbeat();
-    await sendHello();
-  };
-  state.ws.onclose = () => {
-    state.connected = false;
-    stopHeartbeat();
-    scheduleReconnect();
-  };
-  state.ws.onerror = () => {
-    state.connected = false;
-    stopHeartbeat();
-  };
-  state.ws.onmessage = (event) => {
-    let data;
-    try {
-      data = JSON.parse(event.data);
-    } catch (error) {
-      return;
-    }
-    handleServerMessage(data);
-  };
-  return { ok: true };
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  if (!state.serverUrl) return;
-  const delays = [200, 400, 1000, 2000, 5000, 10000, 30000];
-  const delay = delays[Math.min(state.reconnectAttempt, delays.length - 1)];
-  state.reconnectAttempt += 1;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectWs();
-  }, delay);
-}
-
-// ── MV3 keepalive via alarms ───────────────────────────────
-
-chrome.alarms.create("keepalive", { periodInMinutes: 0.4 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "keepalive" && !state.connected) {
-    if (state.serverUrl) connectWs();
-  }
-});
-
-// ── Server message handler ─────────────────────────────────
-
+/**
+ * 处理从 WebSocket 收到的服务端消息
+ *
+ * 根据 data.type 路由到对应模块：
+ * - "pong"                    → 忽略（心跳响应）
+ * - "browser.request_snapshot" → snapshot 模块
+ * - "browser.action"          → actions 模块
+ *
+ * @param {object} data - JSON.parse 后的消息对象
+ */
 async function handleServerMessage(data) {
   if (!data || typeof data !== "object") return;
   const type = data.type;
@@ -195,538 +40,24 @@ async function handleServerMessage(data) {
     requestSnapshotFromTab(requestId, true, data.mode || "compact", tabId);
     return;
   }
+
   if (type === "browser.action") {
     await handleAction(data);
   }
 }
 
-function requestSnapshotFromTab(requestId, sendToServer, mode, tabId) {
-  if (tabId == null) {
-    if (sendToServer) {
-      wsSend({
-        type: "browser.snapshot",
-        request_id: requestId,
-        error: "No active tab",
-      });
-    }
-    return;
-  }
-  // With all_frames: true, multiple content scripts may respond.
-  // We aggregate: main frame snapshot is the base, iframe snapshots merge elements.
-  pendingSnapshot.set(requestId, {
-    sendToServer,
-    tabId,
-    mainSnapshot: null,
-    iframeElements: [],
-    aggregateTimer: null,
-  });
-  chrome.tabs.sendMessage(
-    tabId,
-    { type: "collect_snapshot", request_id: requestId, mode },
-    () => {
-      if (chrome.runtime.lastError) {
-        // If the main frame failed, still wait briefly for iframes,
-        // but if nothing comes in, report error
-        const entry = pendingSnapshot.get(requestId);
-        if (entry && !entry.mainSnapshot && entry.iframeElements.length === 0) {
-          pendingSnapshot.delete(requestId);
-          if (sendToServer) {
-            wsSend({
-              type: "browser.snapshot",
-              request_id: requestId,
-              tab_id: tabId,
-              error: chrome.runtime.lastError.message,
-            });
-          }
-        }
-      }
-    }
-  );
-}
+setMessageHandler(handleServerMessage);
 
-async function handleAction(payload) {
-  const tabId = payload.tab_id ?? (await getActiveTabId());
-  const actionId = payload.action_id || crypto.randomUUID();
-  const response = {
-    type: "browser.action.result",
-    action_id: actionId,
-    tab_id: tabId,
-    status: "ok",
-  };
-  if (tabId == null) {
-    response.status = "error";
-    response.error = "No active tab";
-    wsSend(response);
-    return;
-  }
-  try {
-    const action = payload.action;
-    if (action === "open" && payload.url) {
-      const openInNewTab = payload.new_tab !== false;
-      if (openInNewTab) {
-        const activateTab = payload.activate_tab !== false;
-        const newTab = await chrome.tabs.create({ url: payload.url, active: activateTab });
-        if (newTab?.id != null) {
-          response.tab_id = newTab.id;
-          wsSend({
-            type: "browser.tab.created",
-            tab_id: newTab.id,
-            url: payload.url,
-            action_id: actionId,
-          });
-        }
-      } else {
-        await ensureDebugger(tabId);
-        await sendCDP(tabId, "Page.navigate", { url: payload.url });
-      }
-    } else if (action === "click") {
-      await ensureDebugger(tabId);
-      await performClick(tabId, payload.target, payload.text);
-    } else if (action === "type") {
-      await ensureDebugger(tabId);
-      await performType(tabId, payload.target, payload.text || "", payload.clear !== false);
-    } else if (action === "scroll") {
-      await ensureDebugger(tabId);
-      await performScroll(tabId, payload.delta || 600);
-    } else if (action === "wait") {
-      await sleep(payload.wait_ms || 800);
-    } else {
-      response.status = "error";
-      response.error = `Unsupported action: ${action}`;
-    }
-  } catch (error) {
-    response.status = "error";
-    response.error = String(error);
-  }
+// ── MV3 保活：通过 alarms 定时唤醒 ────────────────────────
 
-  if (payload.return_snapshot) {
-    const snapshotTabId = payload.action === "open" && payload.new_tab !== false ? response.tab_id : tabId;
-    // Wait for new tab to finish loading before collecting snapshot
-    if (payload.action === "open" && snapshotTabId !== tabId) {
-      await waitForTabLoad(snapshotTabId, 8000);
-    }
-    const snapshot = await getSnapshotOnce(snapshotTabId || tabId, actionId, payload.mode || "compact");
-    if (snapshot) response.snapshot = snapshot;
+chrome.alarms.create("keepalive", { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "keepalive" && !state.connected) {
+    if (state.serverUrl) connectWs();
   }
-  if (payload.detach_after === true && state.attachedTabId === tabId) {
-    await detachDebugger(tabId);
-    state.attachedTabId = null;
-  }
-  wsSend(response);
-}
+});
 
-async function getSnapshotOnce(tabId, requestId, mode) {
-  return new Promise((resolve) => {
-    pendingSnapshot.set(requestId, {
-      sendToServer: false,
-      resolve,
-      tabId,
-      mainSnapshot: null,
-      iframeElements: [],
-      aggregateTimer: null,
-    });
-    chrome.tabs.sendMessage(tabId, { type: "collect_snapshot", request_id: requestId, mode });
-    setTimeout(() => {
-      if (pendingSnapshot.has(requestId)) {
-        finalizeSnapshot(requestId);
-      }
-    }, 3000);
-  });
-}
-
-async function performClick(tabId, target, text) {
-  if (!target && text) {
-    target = { text };
-  } else if (target && !target.text && text) {
-    target = Object.assign({}, target, { text });
-  }
-  const rect = await resolveTargetRect(tabId, target);
-  if (!rect) {
-    const hint = target.id
-      ? ` (da-id "${target.id}" may be stale — request a new snapshot)`
-      : target.selector
-        ? ` (selector "${target.selector}" not found in DOM)`
-        : target.text
-          ? ` (no visible element with text "${target.text}")`
-          : "";
-    throw new Error("Target not found" + hint);
-  }
-  const x = Math.round(rect.centerX);
-  const y = Math.round(rect.centerY);
-  // Move mouse to target first — many pages need this to register the click target
-  await sendCDP(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x,
-    y,
-  });
-  await sendCDP(tabId, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
-  });
-  await sendCDP(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
-  });
-}
-
-async function performType(tabId, target, text, clearFirst) {
-  const selector = target?.selector || (target?.id ? `[data-da-id=\"${target.id}\"]` : null);
-  let focused = false;
-  if (selector) {
-    const focusScript = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return false;\n  el.focus();\n  if (${clearFirst ? "true" : "false"}) {\n    if (\"value\" in el) el.value = \"\";\n    if (el.isContentEditable) el.innerText = \"\";\n  }\n  return true;\n})()`;
-    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusScript, returnByValue: true });
-    focused = !!result?.result?.value;
-  }
-  if (!focused && target?.text) {
-    const focusByTextScript = `(() => {
-  const text = ${JSON.stringify(target.text)};
-  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
-  const candidates = tagFilter
-    ? document.querySelectorAll(tagFilter)
-    : document.querySelectorAll('input,textarea,select,a,button,label,[role],[contenteditable],span,div');
-  for (const el of candidates) {
-    if (!el.textContent || !el.textContent.includes(text)) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) continue;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') continue;
-    el.focus();
-    if (${clearFirst ? "true" : "false"}) {
-      if ("value" in el) el.value = "";
-      if (el.isContentEditable) el.innerText = "";
-    }
-    return true;
-  }
-  return false;
-})()`;
-    const result = await sendCDP(tabId, "Runtime.evaluate", { expression: focusByTextScript, returnByValue: true });
-    focused = !!result?.result?.value;
-  }
-  // 3) iframe fallback — try to focus element inside child frames
-  if (!focused) {
-    try {
-      const frames = await getChildFrameContexts(tabId);
-      for (const frame of frames) {
-        if (focused) break;
-        if (selector) {
-          const script = `(() => {
-  const el = document.querySelector(${JSON.stringify(selector)});
-  if (!el) return false;
-  el.focus();
-  if (${clearFirst ? "true" : "false"}) {
-    if ("value" in el) el.value = "";
-    if (el.isContentEditable) el.innerText = "";
-  }
-  return true;
-})()`;
-          const result = await sendCDP(tabId, "Runtime.evaluate", {
-            expression: script,
-            contextId: frame.contextId,
-            returnByValue: true,
-          });
-          focused = !!result?.result?.value;
-        }
-        if (!focused && target?.text) {
-          const script = `(() => {
-  const text = ${JSON.stringify(target.text)};
-  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
-  const candidates = tagFilter
-    ? document.querySelectorAll(tagFilter)
-    : document.querySelectorAll('input,textarea,select,a,button,label,[role],[contenteditable],span,div');
-  for (const el of candidates) {
-    if (!el.textContent || !el.textContent.includes(text)) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) continue;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') continue;
-    el.focus();
-    if (${clearFirst ? "true" : "false"}) {
-      if ("value" in el) el.value = "";
-      if (el.isContentEditable) el.innerText = "";
-    }
-    return true;
-  }
-  return false;
-})()`;
-          const result = await sendCDP(tabId, "Runtime.evaluate", {
-            expression: script,
-            contextId: frame.contextId,
-            returnByValue: true,
-          });
-          focused = !!result?.result?.value;
-        }
-      }
-    } catch (e) {
-      // iframe enumeration failed, ignore
-    }
-  }
-  if (!focused) throw new Error("Failed to focus target");
-  if (text) {
-    await sendCDP(tabId, "Input.insertText", { text });
-  }
-}
-
-async function performScroll(tabId, delta) {
-  const script = `window.scrollBy(0, ${Number(delta) || 0});`;
-  await sendCDP(tabId, "Runtime.evaluate", { expression: script });
-}
-
-async function resolveTargetRect(tabId, target) {
-  if (!target) return null;
-  if (target.point && typeof target.point.x === "number") {
-    return {
-      centerX: target.point.x,
-      centerY: target.point.y,
-    };
-  }
-  if (typeof target.x === "number" && typeof target.y === "number") {
-    return { centerX: target.x, centerY: target.y };
-  }
-  const selector =
-    target.selector || (target.id ? `[data-da-id=\"${target.id}\"]` : null);
-  if (selector) {
-    const selectorScript = `(() => {\n  const el = document.querySelector(${JSON.stringify(selector)});\n  if (!el) return null;\n  const rect = el.getBoundingClientRect();\n  if (rect.width === 0 && rect.height === 0) return null;\n  return {\n    x: rect.left,\n    y: rect.top,\n    width: rect.width,\n    height: rect.height,\n    centerX: rect.left + rect.width / 2,\n    centerY: rect.top + rect.height / 2\n  };\n})()`;
-    // Retry up to 3 times with 500ms intervals for dynamic pages
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await sendCDP(tabId, "Runtime.evaluate", { expression: selectorScript, returnByValue: true });
-      const rect = result?.result?.value || null;
-      if (rect) return rect;
-      if (attempt < 2) await sleep(500);
-    }
-  }
-
-  // 3) Text-based fallback (also with retry)
-  if (target.text) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const rect = await resolveByText(tabId, target.text, target.tag);
-      if (rect) return rect;
-      if (attempt < 2) await sleep(500);
-    }
-  }
-
-  // 4) iframe fallback — search child frames via CDP
-  try {
-    const iframeRect = await resolveTargetRectInFrames(tabId, target);
-    if (iframeRect) return iframeRect;
-  } catch (e) {
-    // CDP frame enumeration failed, ignore
-  }
-
-  return null;
-}
-
-async function resolveByText(tabId, text, tag) {
-  const script = `(() => {
-  const text = ${JSON.stringify(text)};
-  const tagFilter = ${tag ? JSON.stringify(tag).toLowerCase() : "null"};
-  const interactiveTags = new Set(['a','button','input','select','textarea','label','details','summary']);
-  const candidates = tagFilter
-    ? document.querySelectorAll(tagFilter)
-    : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
-  function isVisible(el) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return null;
-    if (rect.bottom < 0 || rect.right < 0) return null;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
-    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height,
-      centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
-  }
-  let firstVisible = null;
-  let bestInteractive = null;
-  let bestArea = Infinity;
-  for (const el of candidates) {
-    if (!el.textContent || !el.textContent.includes(text)) continue;
-    const r = isVisible(el);
-    if (!r) continue;
-    if (!firstVisible) firstVisible = r;
-    const area = r.width * r.height;
-    const tn = el.tagName.toLowerCase();
-    if (interactiveTags.has(tn) || el.hasAttribute('role')
-        || el.hasAttribute('onclick') || el.closest('a,button,label,[role]')) {
-      // Prefer the smallest (most specific) interactive element
-      if (area < bestArea) {
-        bestArea = area;
-        bestInteractive = r;
-      }
-    }
-  }
-  if (bestInteractive) return bestInteractive;
-  return firstVisible;
-})()`;
-  const result = await sendCDP(tabId, "Runtime.evaluate", { expression: script, returnByValue: true });
-  return result?.result?.value || null;
-}
-
-// ── iframe support helpers ────────────────────────────────
-
-async function getChildFrameContexts(tabId) {
-  const tree = await sendCDP(tabId, "Page.getFrameTree");
-  const childFrames = tree?.frameTree?.childFrames || [];
-  const results = [];
-  for (const child of childFrames) {
-    const frameId = child.frame?.id;
-    const frameUrl = child.frame?.url || "";
-    if (!frameId) continue;
-    // Skip about:blank and chrome-internal frames
-    if (!frameUrl || frameUrl === "about:blank" || frameUrl.startsWith("chrome")) continue;
-    try {
-      const { executionContextId } = await sendCDP(tabId, "Page.createIsolatedWorld", {
-        frameId,
-        worldName: "deepagents-iframe",
-      });
-      // Get the iframe element's bounding rect in the main frame
-      const iframeRectScript = `(() => {
-  const targetUrl = ${JSON.stringify(frameUrl)}.replace(/\\/$/, '');
-  const frames = document.querySelectorAll('iframe');
-  // First pass: match by src URL
-  for (const f of frames) {
-    try {
-      if (!f.src) continue;
-      const src = new URL(f.src, location.href).href.replace(/\\/$/, '');
-      if (targetUrl === src || targetUrl.startsWith(src) || src.startsWith(targetUrl)) {
-        const r = f.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          return { x: r.left, y: r.top, width: r.width, height: r.height };
-        }
-      }
-    } catch(e) {}
-  }
-  // Fallback: return first visible iframe
-  for (const f of frames) {
-    const r = f.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) {
-      return { x: r.left, y: r.top, width: r.width, height: r.height };
-    }
-  }
-  return null;
-})()`;
-      const rectResult = await sendCDP(tabId, "Runtime.evaluate", {
-        expression: iframeRectScript,
-        returnByValue: true,
-      });
-      const rect = rectResult?.result?.value || { x: 0, y: 0, width: 0, height: 0 };
-      results.push({ frameId, contextId: executionContextId, url: frameUrl, rect });
-    } catch (e) {
-      // Frame may have been destroyed, skip
-    }
-  }
-  return results;
-}
-
-async function resolveTargetRectInFrames(tabId, target) {
-  const selector = target.selector || (target.id ? `[data-da-id="${target.id}"]` : null);
-  const frames = await getChildFrameContexts(tabId);
-
-  for (const frame of frames) {
-    let elementRect = null;
-    if (selector) {
-      const script = `(() => {
-  const el = document.querySelector(${JSON.stringify(selector)});
-  if (!el) return null;
-  const rect = el.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return null;
-  return {
-    x: rect.left, y: rect.top,
-    width: rect.width, height: rect.height,
-    centerX: rect.left + rect.width / 2,
-    centerY: rect.top + rect.height / 2
-  };
-})()`;
-      const result = await sendCDP(tabId, "Runtime.evaluate", {
-        expression: script,
-        contextId: frame.contextId,
-        returnByValue: true,
-      });
-      elementRect = result?.result?.value || null;
-    }
-    if (!elementRect && target.text) {
-      const script = `(() => {
-  const text = ${JSON.stringify(target.text)};
-  const tagFilter = ${target.tag ? JSON.stringify(target.tag).toLowerCase() : "null"};
-  const interactiveTags = new Set(['a','button','input','select','textarea','label','details','summary']);
-  const candidates = tagFilter
-    ? document.querySelectorAll(tagFilter)
-    : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
-  function isVis(el) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return null;
-    if (rect.bottom < 0 || rect.right < 0) return null;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
-    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height,
-      centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
-  }
-  let firstVisible = null;
-  let bestInteractive = null;
-  let bestArea = Infinity;
-  for (const el of candidates) {
-    if (!el.textContent || !el.textContent.includes(text)) continue;
-    const r = isVis(el);
-    if (!r) continue;
-    if (!firstVisible) firstVisible = r;
-    const area = r.width * r.height;
-    const tn = el.tagName.toLowerCase();
-    if (interactiveTags.has(tn) || el.hasAttribute('role')
-        || el.hasAttribute('onclick') || el.closest('a,button,label,[role]')) {
-      if (area < bestArea) { bestArea = area; bestInteractive = r; }
-    }
-  }
-  return bestInteractive || firstVisible;
-})()`;
-      const result = await sendCDP(tabId, "Runtime.evaluate", {
-        expression: script,
-        contextId: frame.contextId,
-        returnByValue: true,
-      });
-      elementRect = result?.result?.value || null;
-    }
-    if (elementRect) {
-      // Coordinate transform: iframe-local → viewport-absolute
-      return {
-        x: frame.rect.x + elementRect.x,
-        y: frame.rect.y + elementRect.y,
-        width: elementRect.width,
-        height: elementRect.height,
-        centerX: frame.rect.x + elementRect.centerX,
-        centerY: frame.rect.y + elementRect.centerY,
-        frameContextId: frame.contextId,
-        frameId: frame.frameId,
-      };
-    }
-  }
-  return null;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function waitForTabLoad(tabId, timeoutMs = 8000) {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, timeoutMs);
-    function listener(updatedTabId, changeInfo) {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        // Small delay for content script injection
-        setTimeout(resolve, 300);
-      }
-    }
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-// ── Tab lifecycle events ───────────────────────────────────
+// ── Tab 生命周期事件 ───────────────────────────────────────
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   wsSend({ type: "browser.tab.closed", tab_id: tabId });
@@ -735,56 +66,34 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-// ── Snapshot aggregation (main + iframe frames) ─────────────
-
-function finalizeSnapshot(requestId) {
-  const entry = pendingSnapshot.get(requestId);
-  if (!entry) return;
-  pendingSnapshot.delete(requestId);
-
-  const snapshot = entry.mainSnapshot || { page: {}, text: "", elements: [], ts: Date.now() };
-  // Merge iframe elements into the main snapshot
-  if (entry.iframeElements.length > 0) {
-    snapshot.elements = (snapshot.elements || []).concat(entry.iframeElements);
-  }
-
-  if (entry.resolve) {
-    entry.resolve(snapshot);
-  }
-  if (entry.sendToServer) {
-    wsSend({
-      type: "browser.snapshot",
-      request_id: requestId,
-      tab_id: entry.tabId,
-      snapshot,
-    });
-  }
-}
-
-// ── Message handler (popup / content script) ───────────────
+// ── 内部消息路由（popup / content script）──────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ── content script 消息 ──
   if (message?.source === "content") {
+    // 快照数据回传
     if (message.type === "snapshot") {
       const requestId = message.request_id;
       const entry = pendingSnapshot.get(requestId);
       if (!entry) return;
 
       if (message.isIframe) {
-        // Collect iframe elements for merging
+        // 收集 iframe 元素，后续由 finalizeSnapshot 合并
         const iframeElements = (message.snapshot?.elements || []);
         entry.iframeElements.push(...iframeElements);
       } else {
-        // Main frame snapshot
+        // 主 frame 快照
         entry.mainSnapshot = message.snapshot || null;
       }
 
-      // Start or reset the aggregation timer — wait briefly for all frames
+      // 启动/重置聚合定时器——等待所有 frame 响应
       if (entry.aggregateTimer) clearTimeout(entry.aggregateTimer);
       entry.aggregateTimer = setTimeout(() => {
         finalizeSnapshot(requestId);
       }, 500);
     }
+
+    // 从网页注入的 bridge 配置（自动发现服务端地址）
     if (message.type === "bridge_config") {
       const nextServerUrl = message.serverUrl || message.baseUrl || state.serverUrl;
       const nextToken = message.token || state.token;
@@ -806,6 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  // ── popup: 手动连接 ──
   if (message?.type === "connect") {
     state.serverUrl = message.serverUrl || state.serverUrl;
     state.token = message.token || state.token;
@@ -818,6 +128,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // ── popup: 绑定当前 tab ──
   if (message?.type === "bind_tab") {
     getActiveTabId().then(async (tabId) => {
       if (tabId != null) {
@@ -830,22 +141,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // ── popup: 查询连接状态 ──
   if (message?.type === "status") {
     sendResponse({ connected: state.connected });
     return;
   }
 });
 
-// ── Service Worker startup / install ───────────────────────
-
-async function restoreAndConnect() {
-  const stored = await chrome.storage.local.get(["serverUrl", "token"]);
-  state.serverUrl = stored.serverUrl || "";
-  state.token = stored.token || "";
-  if (state.serverUrl) {
-    connectWs();
-  }
-}
+// ── Service Worker 启动 / 安装 ────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => restoreAndConnect());
 chrome.runtime.onStartup.addListener(() => restoreAndConnect());
