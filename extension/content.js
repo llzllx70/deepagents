@@ -192,8 +192,96 @@ function extractVisibleText(limit) {
  * 这样 Agent 对比前后两次快照时能识别出同一个元素。
  *
  * @param {number} limit - 最大采集元素数
- * @returns {Array<{id, tag, role, text, ariaLabel, href, type, value, disabled, selector, rect}>}
+ * @returns {Array<{id, tag, role, text, ariaLabel, title, href, type, value, disabled, selector, rect}>}
  */
+
+/**
+ * 常见社交/第三方登录的 class name 关键词 → 可读标签映射。
+ * 用于 getElementLabel 的 class name 降级阶段，将
+ * "weChat-login" 之类的 CSS 类名翻译为 LLM 能理解的中文标签。
+ *
+ * 匹配逻辑：将 class name 转小写后，检查是否包含（includes）映射表中的 key。
+ * key 按从长到短排序，优先匹配更精确的关键词（如 "wechat" 优先于 "we"）。
+ */
+const CLASS_LABEL_PATTERNS = [
+  ["wechat", "微信登录"],
+  ["weixin", "微信登录"],
+  ["wx-login", "微信登录"],
+  ["wx_login", "微信登录"],
+  ["dingtalk", "钉钉登录"],
+  ["alipay", "支付宝登录"],
+  ["zhifubao", "支付宝登录"],
+  ["taobao", "淘宝登录"],
+  ["weibo", "微博登录"],
+  ["sina", "微博登录"],
+  ["douyin", "抖音登录"],
+  ["tiktok", "TikTok登录"],
+  ["apple", "Apple登录"],
+  ["google", "Google登录"],
+  ["github", "GitHub登录"],
+  ["facebook", "Facebook登录"],
+  ["twitter", "Twitter登录"],
+  ["qq", "QQ登录"],
+];
+
+/**
+ * 尝试从 class name 中识别常见社交登录模式并返回可读标签。
+ * @param {string} cls - 元素的 className 字符串
+ * @returns {string} 匹配到的可读标签，或空字符串
+ */
+function classNameToLabel(cls) {
+  if (!cls) return "";
+  const lower = cls.toLowerCase();
+  for (const [keyword, label] of CLASS_LABEL_PATTERNS) {
+    if (lower.includes(keyword)) return label;
+  }
+  return "";
+}
+
+/**
+ * 为纯图标元素合成可读标签。
+ * 当 innerText 为空时，依次从 aria-label、title、子 <img> alt、
+ * aria-labelledby 引用文本、子 <svg><title> 中提取。
+ * 最后兜底：从 class name 中识别常见模式（如社交登录图标）。
+ */
+function getElementLabel(el) {
+  const ariaLabel = el.getAttribute("aria-label");
+  if (ariaLabel) return ariaLabel;
+
+  const title = el.getAttribute("title");
+  if (title) return title;
+
+  const img = el.querySelector("img");
+  if (img && img.alt) return img.alt;
+
+  const labelledBy = el.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const parts = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent?.trim())
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+
+  const svgTitle = el.querySelector("svg title");
+  if (svgTitle && svgTitle.textContent) return svgTitle.textContent.trim();
+
+  // 兜底：从 class name 提取标签（适用于纯 CSS 图标按钮）
+  // 优先尝试识别常见社交登录模式（如 "weChat-login" → "微信登录"），
+  // 否则直接返回原始 class name（跳过 Tailwind 等大量工具类）。
+  const cls = typeof el.className === "string" ? el.className : "";
+  if (cls) {
+    const socialLabel = classNameToLabel(cls);
+    if (socialLabel) return socialLabel;
+    const parts = cls.trim().split(/\s+/).filter((c) => c.length > 1);
+    if (parts.length > 0 && parts.length <= 3) {
+      return parts.join(" ");
+    }
+  }
+
+  return "";
+}
+
 function collectElements(limit) {
   const selectors =
     "a,button,input,textarea,select,summary,[role='button'],[role='link'],[contenteditable='true']";
@@ -206,27 +294,82 @@ function collectElements(limit) {
       el.dataset.daId = nextId();
     }
     const rect = el.getBoundingClientRect();
-    const text = el.innerText || el.value || "";
-    items.push({
-      id: el.dataset.daId,
-      tag: el.tagName.toLowerCase(),
-      role: el.getAttribute("role"),
-      text: text.trim().slice(0, 200),
-      ariaLabel: el.getAttribute("aria-label"),
-      href: el.getAttribute("href"),
-      type: el.getAttribute("type"),
-      value: typeof el.value === "string" ? el.value.slice(0, 120) : null,
-      disabled: el.disabled === true,
-      selector: `[data-da-id=\"${el.dataset.daId}\"]`,
-      rect: {
+    const rawText = (el.innerText || el.value || "").trim();
+    const text = rawText || getElementLabel(el);
+    const item = { id: el.dataset.daId, tag: el.tagName.toLowerCase() };
+    const role = el.getAttribute("role");
+    if (role) item.role = role;
+    const trimmedText = text.trim().slice(0, 200);
+    if (trimmedText) item.text = trimmedText;
+    const ariaLabel = el.getAttribute("aria-label");
+    if (ariaLabel) item.ariaLabel = ariaLabel;
+    const elTitle = el.getAttribute("title");
+    if (elTitle) item.title = elTitle;
+    const href = el.getAttribute("href");
+    if (href) item.href = href;
+    const elType = el.getAttribute("type");
+    if (elType) item.type = elType;
+    if (typeof el.value === "string" && el.value) item.value = el.value.slice(0, 120);
+    if (el.disabled === true) item.disabled = true;
+    item.selector = `[data-da-id=\"${el.dataset.daId}\"]`;
+    item.rect = {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+    items.push(item);
+    if (items.length >= limit) break;
+  }
+
+  // 二次扫描：收集 cursor:pointer 的非语义可交互元素
+  // 场景：Vue/React 中 <span>/<div> 绑定了 click 事件但没有语义标签和 role，
+  //       如搜狐登录页的 <span class="weChat-login"> 图标按钮。
+  if (items.length < limit) {
+    const pointerCandidates = document.querySelectorAll("div, span, li");
+    for (const el of pointerCandidates) {
+      if (el.dataset.daId) continue; // 已在第一轮收集
+      if (!isVisible(el)) continue;
+      if (getComputedStyle(el).cursor !== "pointer") continue;
+      // 跳过已收集元素的子元素（如 <button> 内部的 <span>）
+      if (el.closest("[data-da-id]")) continue;
+      // 跳过包裹已收集元素的容器
+      if (el.querySelector("[data-da-id]")) continue;
+
+      const rect = el.getBoundingClientRect();
+      const rawText = (el.innerText || "").trim();
+      const text = rawText || getElementLabel(el);
+      // 无任何可识别文本的元素对 Agent 无意义，跳过
+      if (!text) continue;
+
+      el.dataset.daId = nextId();
+      const item2 = { id: el.dataset.daId, tag: el.tagName.toLowerCase() };
+      const role2 = el.getAttribute("role");
+      if (role2) item2.role = role2;
+      const trimmedText2 = text.trim().slice(0, 200);
+      if (trimmedText2) item2.text = trimmedText2;
+      const ariaLabel2 = el.getAttribute("aria-label");
+      if (ariaLabel2) item2.ariaLabel = ariaLabel2;
+      const elTitle2 = el.getAttribute("title");
+      if (elTitle2) item2.title = elTitle2;
+      const href2 = el.getAttribute("href");
+      if (href2) item2.href = href2;
+      const elType2 = el.getAttribute("type");
+      if (elType2) item2.type = elType2;
+      if (typeof el.value === "string" && el.value) item2.value = el.value.slice(0, 120);
+      if (el.disabled === true) item2.disabled = true;
+      item2.selector = `[data-da-id=\"${el.dataset.daId}\"]`;
+      item2.rect = {
         x: Math.round(rect.left),
         y: Math.round(rect.top),
         width: Math.round(rect.width),
         height: Math.round(rect.height),
-      },
-    });
-    if (items.length >= limit) break;
+      };
+      items.push(item2);
+      if (items.length >= limit) break;
+    }
   }
+
   return items;
 }
 

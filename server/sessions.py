@@ -1139,8 +1139,15 @@ class Session:
         if self.browser_bridge and self.browser_bridge.is_connected():
             browser_context = self.browser_bridge.format_snapshot_for_prompt()
             if browser_context:
+                age = self.browser_bridge.snapshot_age_seconds()
+                age_hint = ""
+                if age is not None:
+                    if age < 60:
+                        age_hint = f" (captured {int(age)}s ago)"
+                    else:
+                        age_hint = f" (captured {int(age // 60)}m ago)"
                 prompt_text = (
-                    f"{prompt_text}\n\n## Browser Snapshot\n{browser_context}\n\n"
+                    f"{prompt_text}\n\n## Browser Snapshot{age_hint}\n{browser_context}\n\n"
                     "If you need a fresh snapshot, call browser_request_snapshot."
                 )
             else:

@@ -259,7 +259,7 @@ def _extract_target_hint(target: Any) -> str | None:
         selector = target.get("selector")
         if target_id not in (None, "") and selector not in (None, ""):
             return _truncate_inline(_compact_single_line(f"{target_id} ({selector})"))
-        value = target_id or selector or target.get("text") or target.get("name") or target.get("label")
+        value = target_id or selector or target.get("text") or target.get("title") or target.get("name") or target.get("label")
         if value is None or value == "":
             return None
         return _truncate_inline(str(value))

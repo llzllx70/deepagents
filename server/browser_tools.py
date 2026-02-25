@@ -27,11 +27,17 @@ def build_browser_tools(
         mode: str = "compact",
         reason: str | None = None,
         timeout_s: float = 8.0,
-    ) -> dict[str, Any]:
-        return await browser_bridge.request_snapshot(
+    ) -> str:
+        result = await browser_bridge.request_snapshot(
             mode=mode,
             timeout=timeout_s,
             reason=reason,
+        )
+        if not result.get("success"):
+            return f"Error: {result.get('error', 'unknown error')}"
+        snapshot_data = result.get("snapshot")
+        return browser_bridge.format_snapshot_for_tool(
+            mode=mode, snapshot_data=snapshot_data,
         )
 
     @tool(
@@ -80,6 +86,12 @@ def build_browser_tools(
         result = await browser_bridge.send_action(payload)
         if isinstance(result, dict) and result.get("status") == "error":
             raise ToolException(result.get("error") or "Browser action failed")
+        # Format snapshot in result as compact text for LLM
+        if isinstance(result, dict) and isinstance(result.get("snapshot"), dict):
+            result = dict(result)  # shallow copy
+            result["snapshot"] = browser_bridge.format_snapshot_for_tool(
+                mode="compact", snapshot_data=result["snapshot"],
+            )
         return result
 
     browser_action.handle_tool_error = True
