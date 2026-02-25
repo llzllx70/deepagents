@@ -7,7 +7,7 @@ This is an unpacked Chrome extension that connects a user's local browser to the
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
-4. Select `deepagents/web/extension`
+4. Select `deepagents/extension`
 
 ## Connect
 
