@@ -8,7 +8,29 @@
  * - 实时显示连接状态
  *
  * 通过 chrome.runtime.sendMessage 与 background.js 通信，
- * 所有实际逻辑由 background.js 及其子模块执行。
+ * 所有实际逻辑由 background.js 及其子模块执行。popup.js 本身是纯 UI 层。
+ *
+ * ═══ 典型使用场景 ═══
+ *
+ * 场景 1：首次使用（手动连接）
+ *   用户点击扩展图标打开 popup → 在输入框中填写 ws://host:port/ws/browser
+ *   → 点击 Connect → popup 发送 "connect" 消息给 background
+ *   → background 建立 WebSocket → 400ms 后 popup 查询状态 → 显示 "Connected"
+ *
+ * 场景 2：自动填充（配合 DeepAgents 网页）
+ *   用户已打开 DeepAgents Web 客户端 → 点击扩展图标
+ *   → autofillFromActiveTab() 注入脚本到当前页面
+ *   → 读取页面中的 data-da-server-ws-base 或 localStorage 配置
+ *   → 自动填入输入框并保存 → 用户只需点击 Connect
+ *
+ * 场景 3：绑定 Tab（提前 attach debugger）
+ *   用户导航到目标页面（如要操控的网站） → 打开 popup → 点击 Bind Active Tab
+ *   → background 对该 tab attach CDP debugger → 后续 Agent 可直接操控该 tab
+ *   → 这一步是可选的，Agent 发送操作时也会自动 attach
+ *
+ * 场景 4：检查连接状态
+ *   用户打开 popup → 立即查询并显示当前连接状态（Connected / Disconnected）
+ *   → 方便用户确认扩展是否正常工作
  */
 
 // ── DOM 元素引用 ──────────────────────────────────────────
@@ -65,6 +87,13 @@ async function loadConfig() {
  *
  * 如果成功获取到 WS 地址，自动填入输入框并保存。
  * 这使得用户在已配置的网页上打开 popup 时，地址会自动填充。
+ *
+ * 与 content.js 的 bridge 配置发现的区别：
+ * - content.js 是被动式：页面加载时自动读取，通过 MutationObserver 监听变化
+ * - 此函数是主动式：用户打开 popup 时立即读取当前页面的配置
+ * 两者互为补充：content.js 确保后台自动连接，此函数确保 popup UI 显示正确地址
+ *
+ * 注意：chrome:// 页面、扩展页面等特权页面不允许注入脚本，会静默失败。
  */
 async function autofillFromActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -183,6 +212,11 @@ bindBtn.addEventListener("click", async () => {
  * 2. refreshStatus — 查询并显示当前连接状态
  * 3. autofillFromActiveTab — 尝试从当前页面自动获取配置
  * 4. refreshStatus — 再次刷新（autofill 可能触发了连接）
+ *
+ * 两条初始化链并行执行：
+ * - loadConfig → refreshStatus（快速显示已保存的配置和状态）
+ * - autofillFromActiveTab → refreshStatus（稍慢，需要注入脚本到页面）
+ * 这样用户打开 popup 时能立即看到状态，而不需要等待 autofill 完成。
  */
 loadConfig().then(refreshStatus);
 autofillFromActiveTab().then(refreshStatus);

@@ -15,6 +15,33 @@
  * 2. **Bridge 配置自动发现**（仅主 frame）
  *    从 DOM data 属性或 localStorage 中读取服务端地址和 token，
  *    自动推送给 background.js，实现免手动配置的自动连接。
+ *
+ * ═══ 注入生命周期 ═══
+ *
+ * 1. 用户打开任意网页（或 iframe 加载）
+ * 2. Chrome 在 document_idle 阶段（DOM 解析完成后）自动注入此脚本
+ * 3. 每个 frame 独立运行一份 content.js 实例（互不干扰）
+ * 4. 主 frame 的实例额外负责 bridge 配置自动发现
+ * 5. 脚本注入后即进入待命状态，等待 background.js 发送 collect_snapshot 消息
+ *
+ * ═══ 快照采集场景 ═══
+ *
+ * 场景：Agent 想「看」当前网页
+ *   background.js 广播 collect_snapshot → 所有 frame 的 content.js 各自采集
+ *   → 主 frame 回传完整快照（page + text + elements）
+ *   → 各 iframe 回传 elements（标记 isIframe: true 和 frameUrl）
+ *   → background.js 聚合所有数据后发送到 Server
+ *
+ * ═══ Bridge 自动发现场景 ═══
+ *
+ * 场景：用户打开 DeepAgents 的 Web 客户端（如 http://localhost:8080）
+ *   该页面在 <html> 元素或 localStorage 中设置了 data-da-server-ws-base 和 token
+ *   → content.js 读取这些配置 → 发送 bridge_config 到 background.js
+ *   → background.js 自动保存并建立 WebSocket 连接
+ *   → 用户无需打开 popup 手动输入地址，实现「打开网页即连接」的体验
+ *
+ * MutationObserver 监听 <html> 属性变化，确保网页动态更新配置时扩展能即时感知。
+ * 例如：Web 客户端切换环境/用户时，token 变化 → 自动重新连接。
  */
 
 // ── 元素 ID 管理 ──────────────────────────────────────────
@@ -41,6 +68,12 @@ const isIframe = window !== window.top;
  * 元素 ID 前缀
  * 主 frame 使用 "da-" 前缀，iframe 使用随机前缀（如 "da-f3k7-"），
  * 避免多 frame 间 da-id 冲突。
+ *
+ * 为什么 iframe 需要随机前缀？
+ * 每个 frame 独立运行 content.js，各自的 idCounter 都从 0 开始。
+ * 如果都用 "da-" 前缀，主 frame 和 iframe 会产生相同的 da-id（如 "da-1"）。
+ * Agent 发送 click { id: "da-1" } 时会匹配到错误的元素。
+ * 随机前缀确保每个 frame 生成的 id 全局唯一。
  */
 const idPrefix = isIframe ? `da-f${Math.random().toString(36).slice(2, 6)}-` : 'da-';
 
@@ -66,6 +99,9 @@ function nextId() {
  * - 不在视口上方/左方（rect.bottom >= 0 且 rect.right >= 0）
  * - 不在视口下方/右方（rect.top <= innerHeight 且 rect.left <= innerWidth）
  *
+ * 场景：快照只需包含用户能看到的内容。隐藏菜单、折叠面板、屏幕外的元素
+ * 不应出现在快照中，否则会干扰 Agent 的判断（Agent 可能尝试点击不可见的元素）。
+ *
  * @param {Element} element - 要检查的 DOM 元素
  * @returns {boolean}
  */
@@ -90,6 +126,15 @@ function isVisible(element) {
  * 使用 TreeWalker 遍历 DOM 树中的文本节点，
  * 只收集父元素可见的文本内容。
  * 文本以空格连接，总长度不超过 limit。
+ *
+ * 场景：Agent 通过此文本了解页面内容（文章正文、搜索结果、错误提示等），
+ * 据此做出语义层面的决策。例如：
+ * - 看到 "搜索结果为空" → Agent 决定换一个关键词重新搜索
+ * - 看到商品价格和描述 → Agent 决定是否点击「购买」
+ *
+ * 为什么限制长度？快照数据通过 WebSocket 传输，再由 Agent（LLM）处理。
+ * 过大的文本会增加延迟和 token 消耗。compact 模式 8000 字符足以覆盖
+ * 大多数页面的关键内容。
  *
  * @param {number} limit - 最大字符数
  * @returns {string} 拼接后的可见文本
@@ -134,6 +179,17 @@ function extractVisibleText(limit) {
  *
  * 为每个元素分配唯一的 data-da-id（如已有则复用），
  * 返回包含定位信息、文本、属性等的元素描述数组。
+ *
+ * 场景：Agent 通过此列表了解页面上有哪些可以操作的元素。每个元素包含：
+ * - id + selector：Agent 发送操作指令时用于定位（如 { target: { id: "da-5" } }）
+ * - text / ariaLabel：Agent 理解元素用途的语义信息
+ * - rect：元素位置和尺寸，Agent 可选择用坐标直接定位
+ * - tag / role / type：元素类型信息，帮助 Agent 判断应该 click 还是 type
+ * - value：输入框的当前值，Agent 据此判断是否需要清空再输入
+ * - disabled：是否禁用，Agent 不应尝试操作禁用元素
+ *
+ * data-da-id 的复用机制：同一元素多次采集快照时保持相同的 id，
+ * 这样 Agent 对比前后两次快照时能识别出同一个元素。
  *
  * @param {number} limit - 最大采集元素数
  * @returns {Array<{id, tag, role, text, ariaLabel, href, type, value, disabled, selector, rect}>}
@@ -277,6 +333,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * 这使得网页可以通过设置 DOM 属性或 localStorage 来自动配置扩展，
  * 用户无需手动在 popup 中输入服务端地址。
  *
+ * ═══ 网页端集成方式 ═══
+ *
+ * 方式 A：HTML 属性（推荐，服务端渲染时直接注入）
+ *   <html data-da-server-ws-base="ws://example.com/ws/browser"
+ *         data-da-token="user-session-token">
+ *
+ * 方式 B：localStorage（适合 SPA 动态设置）
+ *   localStorage.setItem('deepagents_server_ws_base', 'ws://...');
+ *   localStorage.setItem('deepagents_auth_token', 'token...');
+ *
+ * 方式 C：仅设置 HTTP 地址（自动推导 WS 地址）
+ *   localStorage.setItem('deepagents_server_url', 'https://example.com');
+ *   → 自动推导为 wss://example.com/ws/browser
+ *
  * @returns {{serverUrl: string, token: string}}
  */
 function readBridgeConfig() {
@@ -345,6 +415,8 @@ function observeBridgeConfig() {
 }
 
 // 仅主 frame 管理 bridge 配置 — iframe 只提供快照数据
+// 原因：iframe 中的 localStorage 是隔离的（不同源），读不到主页面的配置。
+// 且 iframe 不应该触发连接行为（多个 iframe 同时发送 bridge_config 会导致重复连接）。
 if (!isIframe) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', observeBridgeConfig, { once: true });
