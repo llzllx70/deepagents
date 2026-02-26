@@ -27,7 +27,7 @@ SESSION_OWNERS_PATH = DATA_DIR / "session_owners.json"
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d - %(message)s",
+    format="%(asctime)s %(levelname)s %(filename)s:%(lineno)d - %(message)s",
     handlers=[
         logging.FileHandler(LOG_DIR / "server.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
