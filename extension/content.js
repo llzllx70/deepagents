@@ -44,6 +44,17 @@
  * 例如：Web 客户端切换环境/用户时，token 变化 → 自动重新连接。
  */
 
+// ── 内联日志 ─────────────────────────────────────────────
+// content script 不支持 ES Module import，内联一个简易 logger
+// 日志在目标网页的 F12 → Console 中查看，筛选 "[DA:content]"
+const _daLog = {
+  _tag: "[DA:content]",
+  info(...a)  { console.log(`%c${_daLog._tag}`, "color:#4a9eff", ...a); },
+  debug(...a) { console.log(`%c${_daLog._tag}`, "color:#888", ...a); },
+  warn(...a)  { console.warn(_daLog._tag, ...a); },
+  error(...a) { console.error(_daLog._tag, ...a); },
+};
+
 // ── 元素 ID 管理 ──────────────────────────────────────────
 
 /**
@@ -435,7 +446,16 @@ function collectSnapshot(mode) {
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "collect_snapshot") {
+    const t0 = performance.now();
     const snapshot = collectSnapshot(message.mode || "compact");
+    const ms = (performance.now() - t0).toFixed(1);
+    _daLog.info("snapshot collected", {
+      mode: message.mode || "compact",
+      frame: isIframe ? "iframe" : "main",
+      elements: snapshot.elements?.length || 0,
+      textLen: snapshot.text?.length || 0,
+      ms,
+    });
     if (isIframe) {
       // iframe 快照：为元素标记来源 URL，便于 agent 区分元素所在 frame
       const frameUrl = location.href;

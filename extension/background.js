@@ -50,6 +50,9 @@ import { wsSend, connectWs, restoreAndConnect, setMessageHandler } from "./lib/c
 import { ensureDebugger } from "./lib/cdp.js";
 import { requestSnapshotFromTab, finalizeSnapshot } from "./lib/snapshot.js";
 import { handleAction } from "./lib/actions.js";
+import { createLogger } from "./lib/logger.js";
+
+const log = createLogger("bg");
 
 // ── 注册服务端消息处理回调 ──────────────────────────────────
 
@@ -73,6 +76,7 @@ async function handleServerMessage(data) {
   if (!data || typeof data !== "object") return;
   const type = data.type;
   if (type === "pong") return;
+  log.debug("server msg", type);
 
   if (type === "browser.request_snapshot") {
     const requestId = data.request_id || crypto.randomUUID();
@@ -162,6 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 效果：用户无需手动在 popup 中填写地址，扩展会自动连接到对应的 Server。
     // 如果地址或 token 发生变化（如用户切换到不同环境的网页），会自动重连。
     if (message.type === "bridge_config") {
+      log.info("bridge config received", { serverUrl: message.serverUrl });
       const nextServerUrl = message.serverUrl || message.baseUrl || state.serverUrl;
       const nextToken = message.token || state.token;
       const changed =
@@ -229,5 +234,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // - onStartup：浏览器启动时触发（如果扩展已安装），同样恢复配置并连接
 // 两者确保无论是首次安装、扩展更新还是浏览器重启，都能自动恢复 WebSocket 连接
 
-chrome.runtime.onInstalled.addListener(() => restoreAndConnect());
-chrome.runtime.onStartup.addListener(() => restoreAndConnect());
+chrome.runtime.onInstalled.addListener(() => {
+  log.info("extension installed/updated");
+  restoreAndConnect();
+});
+chrome.runtime.onStartup.addListener(() => {
+  log.info("browser startup");
+  restoreAndConnect();
+});
