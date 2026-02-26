@@ -76,7 +76,7 @@ const log = createLogger("snapshot");
  * @param {number|null} tabId        - 目标 tab ID，为 null 时直接报错
  */
 export function requestSnapshotFromTab(requestId, sendToServer, mode, tabId) {
-  log.info("request", { requestId: requestId.slice(0, 8), mode, tabId });
+  log.info(`request requestId=${requestId.slice(0, 8)} mode=${mode} tabId=${tabId}`);
   if (tabId == null) {
     if (sendToServer) {
       wsSend({
@@ -217,8 +217,6 @@ export function finalizeSnapshot(requestId) {
     }
   }
 
-  log.info(`finalize requestId=${requestId.slice(0, 8)} main=${snapshot.elements?.length || 0} iframe=${iframeElements.length} textLen=${snapshot.text?.length || 0}`);
-
   // 合并 iframe 中采集到的元素，限制总数不超过模式上限
   const elementLimit = entry.mode === "full" ? 200 : 120;
   if (iframeElements.length > 0) {
@@ -227,6 +225,21 @@ export function finalizeSnapshot(requestId) {
     const iframeSlice = remaining > 0 ? iframeElements.slice(0, remaining) : [];
     snapshot.elements = mainElements.concat(iframeSlice);
   }
+
+  const totalElements = snapshot.elements?.length || 0;
+  log.info(`finalize requestId=${requestId.slice(0, 8)} elements=${totalElements} iframe=${iframeElements.length} textLen=${snapshot.text?.length || 0} url=${snapshot.page?.url || ""}`);
+  // 折叠分组展示完整快照内容，方便调试
+  console.groupCollapsed(`[DA:snapshot] elements ×${totalElements} — ${snapshot.page?.title || snapshot.page?.url || ""}`);
+  for (const el of snapshot.elements || []) {
+    const r = el.rect;
+    const pos = r ? `${r.x},${r.y} ${r.width}×${r.height}` : "";
+    const frameHint = el.frame ? ` [${new URL(el.frame).hostname}]` : "";
+    console.log(`  [${el.id}] <${el.tag}> "${el.text || ""}" ${pos}${frameHint}`);
+  }
+  if (snapshot.text) {
+    console.log(`  --- text (${snapshot.text.length}chars) ---\n  ${snapshot.text.slice(0, 500)}${snapshot.text.length > 500 ? "…" : ""}`);
+  }
+  console.groupEnd();
 
   if (entry.resolve) {
     entry.resolve(snapshot);
