@@ -219,6 +219,10 @@ const CLASS_LABEL_PATTERNS = [
   ["weixin", "微信登录"],
   ["wx-login", "微信登录"],
   ["wx_login", "微信登录"],
+  ["-wx", "微信登录"],      // 覆盖 login-wx / btn-wx / icon-wx 等后缀形式
+  ["_wx", "微信登录"],      // 覆盖 login_wx / btn_wx 等后缀形式
+  ["wxlogin", "微信登录"],  // 覆盖 wxlogin 拼合形式
+  ["loginwx", "微信登录"],  // 覆盖 loginwx 拼合形式
   ["dingtalk", "钉钉登录"],
   ["alipay", "支付宝登录"],
   ["zhifubao", "支付宝登录"],
@@ -264,6 +268,13 @@ function getElementLabel(el) {
 
   const img = el.querySelector("img");
   if (img && img.alt) return img.alt;
+  // img src 中包含社交平台关键词时也可识别（适用于 alt 为空的图标）
+  if (img && img.src) {
+    const srcLower = img.src.toLowerCase();
+    for (const [keyword, label] of CLASS_LABEL_PATTERNS) {
+      if (srcLower.includes(keyword)) return label;
+    }
+  }
 
   const labelledBy = el.getAttribute("aria-labelledby");
   if (labelledBy) {
@@ -336,8 +347,10 @@ function collectElements(limit) {
   // 二次扫描：收集 cursor:pointer 的非语义可交互元素
   // 场景：Vue/React 中 <span>/<div> 绑定了 click 事件但没有语义标签和 role，
   //       如搜狐登录页的 <span class="weChat-login"> 图标按钮。
+  // 注意：reverse() 使子元素先于父容器被处理，避免"其他方式"容器获得 da-id
+  //       后将微信/QQ 等图标子元素全部屏蔽。
   if (items.length < limit) {
-    const pointerCandidates = document.querySelectorAll("div, span, li");
+    const pointerCandidates = Array.from(document.querySelectorAll("div, span, li")).reverse();
     for (const el of pointerCandidates) {
       if (el.dataset.daId) continue; // 已在第一轮收集
       if (!isVisible(el)) continue;
@@ -444,18 +457,44 @@ function collectSnapshot(mode) {
  *    - iframe 快照：  额外标记 isIframe: true 和 frameUrl
  * 4. background.js 的 snapshot 模块负责聚合所有 frame 的数据
  */
+/**
+ * 判断当前 iframe 是否为跨域 frame（广告/统计等）。
+ * 利用 document.referrer 获取父页面域名并与自身对比。
+ * 注意：referrer 为空（严格隐私策略）时保守返回 false（不过滤）。
+ */
+function isCrossOriginFrame() {
+  if (!isIframe) return false;
+  if (!document.referrer) return false;
+  try {
+    const myBase = location.hostname.split(".").slice(-2).join(".");
+    const parentBase = new URL(document.referrer).hostname.split(".").slice(-2).join(".");
+    return myBase !== parentBase;
+  } catch { return false; }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "collect_snapshot") {
+    // 跨域 iframe（广告/统计）直接跳过，不采集也不上报
+    if (isCrossOriginFrame()) {
+      sendResponse({ ok: true });
+      return;
+    }
+
     const t0 = performance.now();
     const snapshot = collectSnapshot(message.mode || "compact");
     const ms = (performance.now() - t0).toFixed(1);
-    _daLog.info("snapshot collected", {
-      mode: message.mode || "compact",
-      frame: isIframe ? "iframe" : "main",
-      elements: snapshot.elements?.length || 0,
-      textLen: snapshot.text?.length || 0,
-      ms,
-    });
+    const frameLabel = isIframe ? "iframe" : "main";
+    _daLog.info(`snapshot collected mode=${message.mode || "compact"} frame=${frameLabel} elements=${snapshot.elements?.length || 0} textLen=${snapshot.text?.length || 0} ms=${ms}ms`);
+    // 逐条打印采集到的元素，方便定位缺失元素
+    if (snapshot.elements?.length) {
+      console.groupCollapsed(`%c[DA:content] elements (${frameLabel}) ×${snapshot.elements.length}`, "color:#888");
+      for (const el of snapshot.elements) {
+        const r = el.rect;
+        const pos = r ? `${r.x},${r.y} ${r.width}×${r.height}` : "";
+        _daLog.debug(`  [${el.id}] <${el.tag}> "${el.text || ""}" ${pos}`);
+      }
+      console.groupEnd();
+    }
     if (isIframe) {
       // iframe 快照：为元素标记来源 URL，便于 agent 区分元素所在 frame
       const frameUrl = location.href;

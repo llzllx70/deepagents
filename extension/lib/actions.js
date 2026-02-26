@@ -481,8 +481,10 @@ async function resolveByText(tabId, text, tag) {
     ? document.querySelectorAll(tagFilter)
     : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
   const LABEL_CLASS_MAP = {
-    '微信':'wechat','钉钉':'dingtalk','支付宝':'alipay','淘宝':'taobao',
-    '微博':'weibo','抖音':'douyin','QQ':'qq','qq':'qq',
+    '微信':['wechat','weixin','-wx','_wx','wxlogin','loginwx'],
+    '微信登录':['wechat','weixin','-wx','_wx','wxlogin','loginwx'],
+    '钉钉':['dingtalk'],'支付宝':['alipay'],'淘宝':['taobao'],
+    '微博':['weibo','sina'],'抖音':['douyin'],'QQ':['qq'],'qq':['qq'],
   };
   function matchText(el, t) {
     if (el.textContent && el.textContent.includes(t)) return true;
@@ -493,8 +495,12 @@ async function resolveByText(tabId, text, tag) {
     const cls = el.className;
     if (cls && typeof cls === 'string') {
       if (cls.includes(t)) return true;
-      const clsKey = LABEL_CLASS_MAP[t];
-      if (clsKey && cls.toLowerCase().includes(clsKey)) return true;
+      const clsKeys = LABEL_CLASS_MAP[t];
+      if (clsKeys) {
+        const clsLower = cls.toLowerCase();
+        const arr = Array.isArray(clsKeys) ? clsKeys : [clsKeys];
+        if (arr.some(k => clsLower.includes(k))) return true;
+      }
     }
     return false;
   }
@@ -674,8 +680,10 @@ async function resolveTargetRectInFrames(tabId, target) {
     ? document.querySelectorAll(tagFilter)
     : document.querySelectorAll('a,button,input,select,textarea,label,[role],span,div,li,td,th,p,h1,h2,h3,h4,h5,h6');
   const LABEL_CLASS_MAP = {
-    '微信':'wechat','钉钉':'dingtalk','支付宝':'alipay','淘宝':'taobao',
-    '微博':'weibo','抖音':'douyin','QQ':'qq','qq':'qq',
+    '微信':['wechat','weixin','-wx','_wx','wxlogin','loginwx'],
+    '微信登录':['wechat','weixin','-wx','_wx','wxlogin','loginwx'],
+    '钉钉':['dingtalk'],'支付宝':['alipay'],'淘宝':['taobao'],
+    '微博':['weibo','sina'],'抖音':['douyin'],'QQ':['qq'],'qq':['qq'],
   };
   function matchText(el, t) {
     if (el.textContent && el.textContent.includes(t)) return true;
@@ -686,8 +694,12 @@ async function resolveTargetRectInFrames(tabId, target) {
     const cls = el.className;
     if (cls && typeof cls === 'string') {
       if (cls.includes(t)) return true;
-      const clsKey = LABEL_CLASS_MAP[t];
-      if (clsKey && cls.toLowerCase().includes(clsKey)) return true;
+      const clsKeys = LABEL_CLASS_MAP[t];
+      if (clsKeys) {
+        const clsLower = cls.toLowerCase();
+        const arr = Array.isArray(clsKeys) ? clsKeys : [clsKeys];
+        if (arr.some(k => clsLower.includes(k))) return true;
+      }
     }
     return false;
   }

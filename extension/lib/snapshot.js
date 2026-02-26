@@ -182,24 +182,49 @@ export async function getSnapshotOnce(tabId, requestId, mode) {
  *
  * @param {string} requestId - 请求唯一标识
  */
+/**
+ * 从 URL 提取可注册域（最后两段，如 sohu.com）
+ * 用于判断 iframe 是否与主页面同域。
+ */
+function getBaseDomain(url) {
+  if (!url) return "";
+  try {
+    const host = new URL(url).hostname;
+    const parts = host.split(".");
+    return parts.length >= 2 ? parts.slice(-2).join(".") : host;
+  } catch { return ""; }
+}
+
 export function finalizeSnapshot(requestId) {
   const entry = pendingSnapshot.get(requestId);
   if (!entry) return;
   pendingSnapshot.delete(requestId);
 
   const snapshot = entry.mainSnapshot || { page: {}, text: "", elements: [], ts: Date.now() };
-  log.info("finalize", {
-    requestId: requestId.slice(0, 8),
-    elements: (snapshot.elements?.length || 0),
-    iframeElements: entry.iframeElements.length,
-    textLen: snapshot.text?.length || 0,
-  });
+
+  // 过滤跨域 iframe 的元素（广告、统计等与主页面不同域的 iframe）
+  const mainDomain = getBaseDomain(snapshot.page?.url);
+  let iframeElements = entry.iframeElements;
+  if (mainDomain && iframeElements.length > 0) {
+    const before = iframeElements.length;
+    iframeElements = iframeElements.filter(el => {
+      const frameDomain = getBaseDomain(el.frame);
+      return !frameDomain || frameDomain === mainDomain;
+    });
+    const removed = before - iframeElements.length;
+    if (removed > 0) {
+      log.info(`finalize: filtered ${removed} cross-origin iframe elements (kept domain: ${mainDomain})`);
+    }
+  }
+
+  log.info(`finalize requestId=${requestId.slice(0, 8)} main=${snapshot.elements?.length || 0} iframe=${iframeElements.length} textLen=${snapshot.text?.length || 0}`);
+
   // 合并 iframe 中采集到的元素，限制总数不超过模式上限
   const elementLimit = entry.mode === "full" ? 200 : 120;
-  if (entry.iframeElements.length > 0) {
+  if (iframeElements.length > 0) {
     const mainElements = snapshot.elements || [];
     const remaining = Math.max(0, elementLimit - mainElements.length);
-    const iframeSlice = remaining > 0 ? entry.iframeElements.slice(0, remaining) : [];
+    const iframeSlice = remaining > 0 ? iframeElements.slice(0, remaining) : [];
     snapshot.elements = mainElements.concat(iframeSlice);
   }
 
