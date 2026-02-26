@@ -218,7 +218,7 @@ export function finalizeSnapshot(requestId) {
   }
 
   // 合并 iframe 中采集到的元素，限制总数不超过模式上限
-  const elementLimit = entry.mode === "full" ? 200 : 120;
+  const elementLimit = entry.mode === "full" ? 500 : 300;
   if (iframeElements.length > 0) {
     const mainElements = snapshot.elements || [];
     const remaining = Math.max(0, elementLimit - mainElements.length);

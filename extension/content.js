@@ -304,93 +304,107 @@ function getElementLabel(el) {
   return "";
 }
 
+/**
+ * 将 DOM 元素转换为快照描述对象，分配/复用 data-da-id。
+ * 供三个采集阶段共用，避免逻辑重复。
+ */
+function buildItem(el) {
+  if (!el.dataset.daId) el.dataset.daId = nextId();
+  const rect = el.getBoundingClientRect();
+  const rawText = (el.innerText || el.value || "").trim();
+  const text = rawText || getElementLabel(el);
+  const item = { id: el.dataset.daId, tag: el.tagName.toLowerCase() };
+  const role = el.getAttribute("role");
+  if (role) item.role = role;
+  const trimmedText = text.trim().slice(0, 200);
+  if (trimmedText) item.text = trimmedText;
+  const ariaLabel = el.getAttribute("aria-label");
+  if (ariaLabel) item.ariaLabel = ariaLabel;
+  const elTitle = el.getAttribute("title");
+  if (elTitle) item.title = elTitle;
+  const href = el.getAttribute("href");
+  if (href) item.href = href;
+  const elType = el.getAttribute("type");
+  if (elType) item.type = elType;
+  if (typeof el.value === "string" && el.value) item.value = el.value.slice(0, 120);
+  if (el.disabled === true) item.disabled = true;
+  item.selector = `[data-da-id="${el.dataset.daId}"]`;
+  item.rect = {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+  return item;
+}
+
+/**
+ * 判断元素是否在前景弹窗/对话框内。
+ * 优先用语义属性和 class 关键词，最后用 position:fixed + z-index 兜底。
+ */
+const MODAL_SELECTOR =
+  "[role='dialog'],[role='alertdialog'],[aria-modal='true']," +
+  "[class*='modal'],[class*='dialog'],[class*='popup'],[class*='overlay'],[class*='drawer'],[class*='lightbox']";
+
+function isInModal(el) {
+  if (el.closest(MODAL_SELECTOR)) return true;
+  // 兜底：祖先中有 position:fixed 且 z-index > 100 视为前景浮层（如自定义登录弹窗）
+  let node = el.parentElement;
+  while (node && node !== document.body) {
+    const s = getComputedStyle(node);
+    if (s.position === "fixed" && parseInt(s.zIndex) > 100) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
 function collectElements(limit) {
   const selectors =
     "a,button,input,textarea,select,summary,[role='button'],[role='link'],[contenteditable='true']";
   const nodes = Array.from(document.querySelectorAll(selectors));
   const items = [];
+  const addedEls = new Set();
+
+  // ── 阶段 1：优先收集弹窗/对话框内的元素 ──────────────────
+  // 登录弹窗等覆盖层通常注入在 DOM 末尾，若按文档顺序采集会被导航链接等
+  // 占满 limit，导致微信/QQ 等登录图标永远采集不到。
   for (const el of nodes) {
     if (!isVisible(el)) continue;
-    // 分配或复用 data-da-id
-    if (!el.dataset.daId) {
-      el.dataset.daId = nextId();
-    }
-    const rect = el.getBoundingClientRect();
-    const rawText = (el.innerText || el.value || "").trim();
-    const text = rawText || getElementLabel(el);
-    const item = { id: el.dataset.daId, tag: el.tagName.toLowerCase() };
-    const role = el.getAttribute("role");
-    if (role) item.role = role;
-    const trimmedText = text.trim().slice(0, 200);
-    if (trimmedText) item.text = trimmedText;
-    const ariaLabel = el.getAttribute("aria-label");
-    if (ariaLabel) item.ariaLabel = ariaLabel;
-    const elTitle = el.getAttribute("title");
-    if (elTitle) item.title = elTitle;
-    const href = el.getAttribute("href");
-    if (href) item.href = href;
-    const elType = el.getAttribute("type");
-    if (elType) item.type = elType;
-    if (typeof el.value === "string" && el.value) item.value = el.value.slice(0, 120);
-    if (el.disabled === true) item.disabled = true;
-    item.selector = `[data-da-id=\"${el.dataset.daId}\"]`;
-    item.rect = {
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
-    items.push(item);
-    if (items.length >= limit) break;
+    if (!isInModal(el)) continue;
+    addedEls.add(el);
+    items.push(buildItem(el));
   }
 
-  // 二次扫描：收集 cursor:pointer 的非语义可交互元素
+  // ── 阶段 2：收集其余页面元素（补满 limit）─────────────────
+  for (const el of nodes) {
+    if (items.length >= limit) break;
+    if (addedEls.has(el)) continue;
+    if (!isVisible(el)) continue;
+    addedEls.add(el);
+    items.push(buildItem(el));
+  }
+
+  // ── 阶段 3：cursor:pointer 非语义元素（弹窗优先，页面补充）─
   // 场景：Vue/React 中 <span>/<div> 绑定了 click 事件但没有语义标签和 role，
   //       如搜狐登录页的 <span class="weChat-login"> 图标按钮。
-  // 注意：reverse() 使子元素先于父容器被处理，避免"其他方式"容器获得 da-id
-  //       后将微信/QQ 等图标子元素全部屏蔽。
+  // reverse() 使子元素先于父容器被处理，避免容器获得 da-id 后屏蔽子图标。
   if (items.length < limit) {
     const pointerCandidates = Array.from(document.querySelectorAll("div, span, li")).reverse();
-    for (const el of pointerCandidates) {
-      if (el.dataset.daId) continue; // 已在第一轮收集
-      if (!isVisible(el)) continue;
-      if (getComputedStyle(el).cursor !== "pointer") continue;
-      // 跳过已收集元素的子元素（如 <button> 内部的 <span>）
-      if (el.closest("[data-da-id]")) continue;
-      // 跳过包裹已收集元素的容器
-      if (el.querySelector("[data-da-id]")) continue;
-
-      const rect = el.getBoundingClientRect();
-      const rawText = (el.innerText || "").trim();
-      const text = rawText || getElementLabel(el);
-      // 无任何可识别文本的元素对 Agent 无意义，跳过
-      if (!text) continue;
-
-      el.dataset.daId = nextId();
-      const item2 = { id: el.dataset.daId, tag: el.tagName.toLowerCase() };
-      const role2 = el.getAttribute("role");
-      if (role2) item2.role = role2;
-      const trimmedText2 = text.trim().slice(0, 200);
-      if (trimmedText2) item2.text = trimmedText2;
-      const ariaLabel2 = el.getAttribute("aria-label");
-      if (ariaLabel2) item2.ariaLabel = ariaLabel2;
-      const elTitle2 = el.getAttribute("title");
-      if (elTitle2) item2.title = elTitle2;
-      const href2 = el.getAttribute("href");
-      if (href2) item2.href = href2;
-      const elType2 = el.getAttribute("type");
-      if (elType2) item2.type = elType2;
-      if (typeof el.value === "string" && el.value) item2.value = el.value.slice(0, 120);
-      if (el.disabled === true) item2.disabled = true;
-      item2.selector = `[data-da-id=\"${el.dataset.daId}\"]`;
-      item2.rect = {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-      };
-      items.push(item2);
-      if (items.length >= limit) break;
+    // 弹窗内的 cursor:pointer 元素先收集
+    for (const pass of [true, false]) {
+      for (const el of pointerCandidates) {
+        if (items.length >= limit) break;
+        if (el.dataset.daId) continue;
+        if (!isVisible(el)) continue;
+        if (getComputedStyle(el).cursor !== "pointer") continue;
+        if (el.closest("[data-da-id]")) continue;
+        if (el.querySelector("[data-da-id]")) continue;
+        if (isInModal(el) !== pass) continue; // 第一轮只收弹窗，第二轮收其余
+        const rawText = (el.innerText || "").trim();
+        const text = rawText || getElementLabel(el);
+        if (!text) continue;
+        items.push(buildItem(el));
+      }
     }
   }
 
@@ -419,7 +433,7 @@ function collectElements(limit) {
  */
 function collectSnapshot(mode) {
   const textLimit = mode === "full" ? 20000 : 8000;
-  const elementLimit = mode === "full" ? 200 : 120;
+  const elementLimit = mode === "full" ? 500 : 300;
   const page = {
     url: location.href,
     title: document.title,
