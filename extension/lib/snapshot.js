@@ -182,40 +182,12 @@ export async function getSnapshotOnce(tabId, requestId, mode) {
  *
  * @param {string} requestId - 请求唯一标识
  */
-/**
- * 从 URL 提取可注册域（最后两段，如 sohu.com）
- * 用于判断 iframe 是否与主页面同域。
- */
-function getBaseDomain(url) {
-  if (!url) return "";
-  try {
-    const host = new URL(url).hostname;
-    const parts = host.split(".");
-    return parts.length >= 2 ? parts.slice(-2).join(".") : host;
-  } catch { return ""; }
-}
-
 export function finalizeSnapshot(requestId) {
   const entry = pendingSnapshot.get(requestId);
   if (!entry) return;
   pendingSnapshot.delete(requestId);
 
   const snapshot = entry.mainSnapshot || { page: {}, text: "", elements: [], ts: Date.now() };
-
-  // 过滤跨域 iframe 的元素（广告、统计等与主页面不同域的 iframe）
-  const mainDomain = getBaseDomain(snapshot.page?.url);
-  let iframeElements = entry.iframeElements;
-  if (mainDomain && iframeElements.length > 0) {
-    const before = iframeElements.length;
-    iframeElements = iframeElements.filter(el => {
-      const frameDomain = getBaseDomain(el.frame);
-      return !frameDomain || frameDomain === mainDomain;
-    });
-    const removed = before - iframeElements.length;
-    if (removed > 0) {
-      log.info(`finalize: filtered ${removed} cross-origin iframe elements (kept domain: ${mainDomain})`);
-    }
-  }
 
   // 合并 iframe 中采集到的元素，限制总数不超过模式上限
   const elementLimit = entry.mode === "full" ? 500 : 300;

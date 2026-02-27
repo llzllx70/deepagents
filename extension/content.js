@@ -471,29 +471,8 @@ function collectSnapshot(mode) {
  *    - iframe 快照：  额外标记 isIframe: true 和 frameUrl
  * 4. background.js 的 snapshot 模块负责聚合所有 frame 的数据
  */
-/**
- * 判断当前 iframe 是否为跨域 frame（广告/统计等）。
- * 利用 document.referrer 获取父页面域名并与自身对比。
- * 注意：referrer 为空（严格隐私策略）时保守返回 false（不过滤）。
- */
-function isCrossOriginFrame() {
-  if (!isIframe) return false;
-  if (!document.referrer) return false;
-  try {
-    const myBase = location.hostname.split(".").slice(-2).join(".");
-    const parentBase = new URL(document.referrer).hostname.split(".").slice(-2).join(".");
-    return myBase !== parentBase;
-  } catch { return false; }
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "collect_snapshot") {
-    // 跨域 iframe（广告/统计）直接跳过，不采集也不上报
-    if (isCrossOriginFrame()) {
-      sendResponse({ ok: true });
-      return;
-    }
-
     const t0 = performance.now();
     const snapshot = collectSnapshot(message.mode || "compact");
     const ms = (performance.now() - t0).toFixed(1);
