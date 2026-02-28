@@ -1,4 +1,5 @@
 {
+  "$schema": "https://aka.ms/codetour-schema",
   "title": "Extension 页面快照流程",
   "description": "Agent 需要「看」当前网页时的完整调用链：Server 请求 → background 广播 → 各 frame 的 content.js 采集 → 聚合 → 回传 Server",
   "steps": [

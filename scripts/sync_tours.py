@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOURS_DIR = REPO_ROOT / ".tours"
-ANCHORS_FILE = TOURS_DIR / "anchors.json"
+ANCHORS_FILE = REPO_ROOT / "scripts" / "anchors.json"
 
 
 # ──────────────────────────────────────────────

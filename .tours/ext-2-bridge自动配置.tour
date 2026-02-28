@@ -1,4 +1,5 @@
 {
+  "$schema": "https://aka.ms/codetour-schema",
   "title": "Extension Bridge 自动配置流程",
   "description": "用户打开 DeepAgents 网页后，content.js 自动读取页面配置并触发 WebSocket 连接，无需手动操作 popup",
   "steps": [
