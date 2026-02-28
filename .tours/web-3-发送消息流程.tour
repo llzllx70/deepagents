@@ -1,0 +1,52 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Web 发送消息流程",
+  "description": "用户点击发送后的完整处理链：sendMessage → UI元素创建 → network.send → handleMessage路由 → run生命周期事件",
+  "steps": [
+    {
+      "file": "web/app/messages.js",
+      "line": 586,
+      "description": "**[入口] sendMessage()**\n\n点击发送按钮或按 Enter 时触发。\n\n前置检查：\n- 输入非空、未在运行中、已认证\n- 若无 `sessionId` → 先 `await ensureSession()`\n\n后续步骤：构建 UI → 生成 runId → 发送 WS 消息"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 603,
+      "description": "**用户消息气泡渲染**\n\n`createMessageElement('user')` 创建消息 DOM 节点：\n- 若有附件（图片/文件）先渲染附件预览行\n- 将输入文本写入 `.message-text`（纯文本，XSS 安全）\n- 追加到 `#messages` 容器\n- 清空输入框、重置附件预览"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 623,
+      "description": "**runId 生成 + 状态初始化**\n\n`generateRunId()` 生成唯一 run 标识（UUID hex）。\n\n初始化 run 状态：\n- `app.currentRunId = runId`\n- `app.currentRunStatus = 'queued'`\n- `runIdToChatId.set(runId, activeChatId)` — 绑定 run 到当前对话\n- `runStates` Map 中创建此 run 的 UI 状态对象"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 632,
+      "description": "**AI 消息占位 + 思考动效**\n\n预先创建 AI 回复气泡（`createMessageElement('assistant')`），立即追加到消息列表。\n\n`showThinkingIndicator(assistantMessage)` 在气泡内显示「⋯」跳动动画，让用户感知请求已发出，正在等待响应。\n\n将此 DOM 元素存入 `runState.messageElement`，后续流式文字直接写入此元素，无需重新查找。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 646,
+      "description": "**network.send({type:'run'}) — 发出请求**\n\n通过 `network.send()` 发送：\n```json\n{ \"type\": \"run\", \"input\": \"用户输入\", \"run_id\": \"生成的runId\" }\n```\n\n`send()` 内部：\n- WS 已连接 → 直接 `ws.send(JSON.stringify(data))`\n- WS 未连接 → 推入 `pendingMessages` 队列，调用 `ensureConnection()` 重建连接，连接成功后 `flushPendingMessages()` 批量重发\n\n同时保存会话状态到服务端（`PUT /session_state`）。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 10,
+      "description": "**handleMessage() — WS 事件路由**\n\n所有服务端推送消息都经过此 `switch` 分发：\n\n| 事件类型 | 处理函数 |\n|----------|----------|\n| `run.queued/started` | 更新运行状态、显示取消按钮 |\n| `run.completed/failed/cancelled/rejected` | `handleRunEnded` — 重置运行状态 |\n| `assistant.delta` | 流式追加文字 |\n| `assistant.message` | 完整消息（去重处理）|\n| `tool.call.started/ended` | 工具调用卡片 |\n| `file.op` | 文件操作面板（含 diff）|\n| `todos.updated` | 任务抽屉 |\n| `interrupt.request` | 人工审批弹窗 |"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 85,
+      "description": "**handleRunStarted() — run 开始**\n\n收到 `run.started` 后：\n- `app.isRunning = true`\n- `updateCancelButton(true)` — 显示取消按钮\n- `messageBuffer.set(runId, '')` — 初始化文字缓冲\n- 隐藏欢迎页\n- `history.updateChatStatus(runId, 'running')` — 更新历史列表状态指示"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 111,
+      "description": "**handleRunEnded() — run 结束**\n\n收到 `run.completed / failed / cancelled / rejected` 后：\n- `app.isRunning = false`，隐藏取消按钮\n- `ui.finalizeRunState(runId, status)` — 锁定该 run 的消息区域（只读）\n- 移除思考动效（`typingIndicator.remove()`）\n- `history.updateChatStatus()` — 侧边栏历史条目标记完成/失败"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 656,
+      "description": "**cancelRun() — 取消任务**\n\n用户点击停止按钮时：\n1. `network.send({type:'cancel'})` — 向服务端发取消指令\n2. `app.cancelRequested = true` — 防止重复点击\n3. 在消息区追加「正在取消…」提示日志元素\n\n服务端收到后设置 `cancel_event`，LangGraph 在下一个检查点抛出 `CancelledError`，广播 `run.cancelled`，客户端 `handleRunEnded` 完成收尾。"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Web 应用初始化流程",
+  "description": "从页面加载到用户就绪的完整初始化链：DOMContentLoaded → DeepAgentsClient → 模块装配 → ui.init → tryRestoreAuth → loadHistory",
+  "steps": [
+    {
+      "file": "web/app.js",
+      "line": 75,
+      "description": "**[入口] DOMContentLoaded**\n\n页面 DOM 就绪后触发，创建全局单例 `app = new DeepAgentsClient()`，并挂到 `window.app` 供调试。\n\n整个 Web 客户端是一个大类，所有模块共享同一个 `app` 实例引用。"
+    },
+    {
+      "file": "web/app.js",
+      "line": 10,
+      "description": "**DeepAgentsClient 构造器 — 状态初始化**\n\n在 `constructor` 中初始化所有运行状态：\n- `sessionId / wsUrl / ws` — WebSocket 连接\n- `currentRunId / isRunning` — 当前任务跟踪\n- `messageBuffer` (Map) — 按 runId 聚合 LLM 流式文字\n- `runStates` (Map) — 每个 run 的 UI 状态（消息元素、工具调用列表）\n- `chatHistory / activeChatId` — 会话历史管理"
+    },
+    {
+      "file": "web/app.js",
+      "line": 55,
+      "description": "**模块装配**\n\n六个功能模块各司其职，全部接收 `this`（app 实例）作为共享上下文：\n\n| 模块 | 职责 |\n|------|------|\n| `UtilsModule` | 工具函数（Markdown、格式化、ID生成）|\n| `AuthModule` | 登录/登出/token管理 |\n| `HistoryModule` | 聊天历史加载/渲染/持久化 |\n| `NetworkModule` | HTTP API + WebSocket 连接管理 |\n| `UiModule` | DOM 操作、事件绑定、UI 状态 |\n| `MessageModule` | WebSocket 消息路由和渲染 |"
+    },
+    {
+      "file": "web/app.js",
+      "line": 69,
+      "description": "**ui.init() — UI 启动入口**\n\n触发两步初始化：\n1. `cacheElements()` — 将所有 DOM 元素 id 映射到 `app.elements` 对象，之后代码统一通过 `app.elements.xxx` 访问\n2. `setupEventListeners()` — 绑定所有交互事件（发送按钮、回车键、登录表单、历史列表点击等）\n3. `tryRestoreAuth()` — 尝试从 localStorage 恢复上次登录态"
+    },
+    {
+      "file": "web/app/ui.js",
+      "line": 41,
+      "description": "**tryRestoreAuth() — 静默恢复登录**\n\n从 `localStorage` 读取 `deepagents_auth_token` 和时间戳：\n- 若 token 存在且在 24 小时内 → 恢复 `app.authToken`、`app.currentUser`\n- 调用 `auth.applyLoggedInState()` 解锁输入框/发送按钮\n- 调用 `history.loadHistory()` 加载历史对话列表\n- 若已过期或无 token → `auth.applyLoggedOutState()` 显示登录表单\n\n登录成功后默认展示「新对话」页面，不自动恢复上次会话。"
+    },
+    {
+      "file": "web/app/ui.js",
+      "line": 97,
+      "description": "**cacheElements() — DOM 元素缓存**\n\n将 `index.html` 中所有关键元素 id 收集到 `app.elements` 字典，避免在运行时反复 `getElementById`。\n\n包含：侧边栏、输入框、发送/取消按钮、历史列表、中断弹窗、附件预览、任务抽屉、工具详情侧边栏等。"
+    },
+    {
+      "file": "web/app/ui.js",
+      "line": 165,
+      "description": "**setupEventListeners() — 事件绑定**\n\n绑定所有用户交互：\n- `newChatBtn` → `messages.newChat()`\n- `autoApproveToggle` → `network.send({type:\"auto_approve\"})` + `auth.saveUserConfig()`\n- `loginForm submit` → `auth.handleLogin()`\n- `sendBtn click` → 运行中时 `cancelRun()`，否则 `sendMessage()`\n- `userInput keydown Enter`（非 Shift/Ctrl）→ `sendMessage()`\n- `attachInput change` → `handleAttachmentUpload()`\n- `interruptModal` 审批按钮 → `interrupt_response` 消息"
+    }
+  ]
+}

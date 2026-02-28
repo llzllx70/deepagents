@@ -1,0 +1,42 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Server WebSocket 消息循环",
+  "description": "客户端 WebSocket 连接建立后的完整消息路由链：/ws/{session_id} → 认证 → connections注册 → receive_text → handle_client_message → enqueue_run → _run_worker",
+  "steps": [
+    {
+      "file": "server/app.py",
+      "line": 526,
+      "description": "**[入口] /ws/{session_id} WebSocket 端点**\n\nWeb 客户端连接此端点建立实时双向通道。\n\n连接前置校验：\n1. `DEEPAGENTS_MODEL` 等服务是否就绪（manager 非 None）\n2. `token` query 参数验证用户身份\n3. 校验 session 归属（防止跨用户访问）\n4. `manager.get_session(session_id)` 确认会话存在"
+    },
+    {
+      "file": "server/app.py",
+      "line": 551,
+      "description": "**websocket.accept() — 握手完成**\n\nHTTP Upgrade → WebSocket 握手成功后：\n- `session.connections.add(websocket)` — 同一 session 可有多个并发连接（如多标签页）\n- `manager.activate_session(session_id)` — 标记当前活跃会话\n\n`session.broadcast()` 方法会向 `connections` 集合中所有已连接客户端广播事件。"
+    },
+    {
+      "file": "server/app.py",
+      "line": 559,
+      "description": "**receive_text 消息接收循环**\n\n`while True` 循环持续接收客户端消息（JSON 字符串），解析后路由到 `handle_client_message()`。\n\n异常处理：\n- `WebSocketDisconnect` — 正常断开，从 connections 移除，触发 `deactivate_session`\n- `Exception` — 异常断开，同上并关闭连接（code 1011）"
+    },
+    {
+      "file": "server/app.py",
+      "line": 573,
+      "description": "**handle_client_message() — 消息路由**\n\n按 `msg_type` 路由客户端消息：\n\n| type | 动作 |\n|------|------|\n| `run` | 创建 RunRequest → enqueue_run |\n| `cancel` | 取消当前 run（设置 cancel_event）|\n| `run.status` | 查询 run 状态 |\n| `interrupt_response` | 解决 HITL 等待（resolve_interrupt）|\n| `browser_intervention_response` | 解决浏览器干预等待 |\n| `auto_approve` | 切换自动批准模式 |"
+    },
+    {
+      "file": "server/app.py",
+      "line": 575,
+      "description": "**msg_type == \"run\" — 用户发送消息**\n\n收到用户输入后：\n1. 从 data 提取 `user_input`、`run_id`、`auto_approve`\n2. 构建 `RunRequest(run_id, user_input, auto_approve)`\n3. 调用 `session.enqueue_run(run_request)` 入队"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 633,
+      "description": "**enqueue_run() — 入队并广播**\n\n将 `RunRequest` 放入 `run_queue`（asyncio.Queue）。\n\n立即广播 `run.queued` 事件给客户端，让 UI 进入等待状态。\n\n`run_status[run_id] = \"queued\"` 记录状态，后续可通过 `run.status` 消息查询。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 603,
+      "description": "**_run_worker() — 串行消费队列**\n\nworker 协程的核心循环：\n1. `await self.run_queue.get()` — 阻塞等待新 run 请求\n2. `asyncio.create_task(self._execute_run(run_request))` — 创建执行任务\n3. `await run_task` — 等待执行完成（保证串行）\n4. 异常兜底：广播 `run.failed` 事件，不中断 worker 继续服务\n\n下一步：进入 `_execute_run` 真正执行 LangGraph 流。"
+    }
+  ]
+}

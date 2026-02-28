@@ -1,0 +1,36 @@
+{
+  "title": "Extension Bridge 自动配置流程",
+  "description": "用户打开 DeepAgents 网页后，content.js 自动读取页面配置并触发 WebSocket 连接，无需手动操作 popup",
+  "steps": [
+    {
+      "file": "extension/content.js",
+      "line": 615,
+      "description": "**[入口] 主 frame 初始化 Bridge 监听**\n\n`content.js` 注入到每个页面后，仅主 frame（非 iframe）执行此初始化。\n\n- DOM 未就绪：监听 `DOMContentLoaded` 后再初始化\n- DOM 已就绪：直接调用 `observeBridgeConfig()`"
+    },
+    {
+      "file": "extension/content.js",
+      "line": 601,
+      "description": "**observeBridgeConfig()**\n\n用 `MutationObserver` 监听 `<html>` 元素的两个 data 属性变化：\n- `data-da-server-ws-base`\n- `data-da-token`\n\n属性变化时自动重新推送配置（如切换账号/环境）。初始化时立即调用一次 `sendBridgeConfig()`。"
+    },
+    {
+      "file": "extension/content.js",
+      "line": 547,
+      "description": "**readBridgeConfig()**\n\n按优先级读取配置：\n1. `<html data-da-server-ws-base>` DOM 属性\n2. `localStorage.deepagents_server_ws_base`\n3. 从 HTTP URL 推导 WebSocket URL（`deepagents_server_url`）\n\n返回 `{ serverUrl, token }`。"
+    },
+    {
+      "file": "extension/content.js",
+      "line": 579,
+      "description": "**sendBridgeConfig()**\n\n读取配置后与 `lastConfigSent` 比对，**去重**：配置未变化则不发送，避免重复触发重连。\n\n有变化时向 background 发送 `{ source: 'content', type: 'bridge_config', serverUrl, token }`。"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 168,
+      "description": "**[background] 处理 bridge_config 消息**\n\n收到 content.js 发来的配置后：\n1. 更新 `state.serverUrl / state.token`\n2. 持久化到 `chrome.storage.local`\n3. 如果配置有变化，重置 `reconnectAttempt = 0`\n4. 调用 `connectWs(changed)` 建立连接"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 127,
+      "description": "**connectWs(force)**\n\nBridge 触发时 `force=true`（配置变化）或 `force=false`（相同地址）。\n\n后续流程与「连接建立流程」相同：新建 WebSocket → onopen → sendHello + startHeartbeat。"
+    }
+  ]
+}

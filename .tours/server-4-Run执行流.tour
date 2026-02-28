@@ -1,0 +1,57 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Server Run 执行流",
+  "description": "LangGraph Agent 的完整执行循环：_execute_run → prompt构建 → agent.astream → AI消息/工具消息处理 → HITL中断 → run完成",
+  "steps": [
+    {
+      "file": "server/sessions.py",
+      "line": 1120,
+      "description": "**[入口] _execute_run()**\n\n每个用户请求的执行入口。\n\n初始化：\n- `RunExecution(run_id)` — 持有 cancel_event 和 interrupt_waiters\n- `self.current_run = run_ctx` — 挂载到 session，供 cancel/interrupt 响应使用\n- 广播 `run.started` 事件，客户端 UI 进入流式状态"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1135,
+      "description": "**Prompt 上下文构建**\n\n在原始用户输入基础上注入额外上下文：\n1. `inject_file_context()` — 解析用户消息中的 `@文件路径` 引用，展开文件内容\n2. `format_uploaded_files_context()` — 如有上传附件，附加文件列表和已提取的文本内容\n3. 浏览器快照 — 如浏览器扩展已连接，附加当前页面快照（DOM/截图摘要）\n\n最终 `prompt_text` 作为 HumanMessage 内容发给 LLM。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1168,
+      "description": "**stream_input 初始输入**\n\n首轮输入格式：\n```python\nstream_input = {\"messages\": [{\"role\": \"user\", \"content\": prompt_text}]}\n```\n\nHITL 批准后的后续轮次变为：\n```python\nstream_input = Command(resume=hitl_response)\n```\n\n`config[\"configurable\"][\"thread_id\"]` 绑定会话历史，LangGraph 的 InMemorySaver 按此 key 维护多轮对话状态。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1216,
+      "description": "**agent.astream() — LangGraph 流式执行**\n\n核心异步生成器，同时订阅两种流模式：\n- `\"messages\"` — LLM 增量输出（文字流、工具调用流）\n- `\"updates\"` — 图节点状态变更（含 `__interrupt__` HITL 暂停信号）\n\n每个 chunk 为三元组 `(namespace, stream_mode, data)`：\n- `namespace` — 子图路径（空列表 = 根图）\n- `stream_mode` — `\"messages\"` 或 `\"updates\"`\n- `data` — 消息/状态数据\n\n只处理根图（`is_root_namespace`）的消息，过滤子 Agent 噪声。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1276,
+      "description": "**_handle_ai_message() — LLM 文字输出**\n\n处理 `AIMessage`（含流式 chunk）：\n- **流式 chunk**：追加到 `message_buffer`，同时广播 `assistant.delta` 事件（增量文字）\n- **完整消息**：广播 `assistant.message` 事件（完整文字，去重）\n- **工具调用**：提取 `tool_calls` 列表，通过 `emit_tool_call_started` 广播 `tool.call.started` 事件\n\n客户端收到 delta 事件后逐字渲染，收到工具调用后展示「正在执行…」状态。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1280,
+      "description": "**_handle_tool_message() — 工具执行结果**\n\n处理 `ToolMessage`（工具执行完成后由 LangGraph 返回）：\n1. `pop_tool_call_args()` — 从 ToolCallArgsMiddleware 捕获的参数存储中取出完整 args\n2. `file_op_tracker.complete_with_message()` — 记录文件操作指标（行数、diff）\n3. 广播 `file.op` 事件（含 diff 和内容，供前端展示文件变更面板）\n4. 广播 `tool.call.ended` 事件（含 args、结果内容预览、display_title）\n5. 特殊处理 `qwen_image_understand`/`extract_file_text` — 缓存提取的文件内容到 session"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1235,
+      "description": "**__interrupt__ — HITL 暂停信号**\n\n当 LangGraph 检测到需要人工审批的工具调用时，在 `updates` 流中推送 `__interrupt__`。\n\n每个 interrupt 包含 `HITLRequest`（action_requests 列表，含工具名、描述、参数预览）。\n\n设置 `interrupt_occurred = True`，暂存到 `pending_interrupts` dict，待本轮 stream 结束后统一处理。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1287,
+      "description": "**_process_interrupts() — HITL 审批等待**\n\n两种模式：\n- **auto_approve=True**：立即构造 `{\"decisions\": [{\"type\": \"approve\"}]}` 响应，广播 `interrupt.auto_approved`\n- **手动审批**：广播 `interrupt.request` 事件，`await waiter`（Future）阻塞等待用户在客户端点击批准/拒绝\n\n用户在客户端点击后，WS 收到 `interrupt_response` 消息 → `resolve_interrupt()` → Future.set_result() → 解除阻塞。\n\n若有任何决策为 `\"reject\"`，广播 `run.rejected` 并提前返回。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1292,
+      "description": "**Command(resume=hitl_response) — 恢复执行**\n\nHITL 审批通过后，将响应封装为 LangGraph `Command`，作为下一轮 `agent.astream` 的输入，继续中断前的工具调用。\n\n`continue` 回到 `while True` 循环，`stream_round += 1`，开启新一轮流式消费。\n\n当 Agent 不产生新的中断且完成思考输出后，退出循环。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1299,
+      "description": "**run 完成**\n\n`while True` 正常退出（无中断、无 break 以外退出）后：\n- `run_status[run_id] = \"completed\"`\n- 广播 `run.completed` 事件\n\n客户端收到后隐藏流式状态，恢复输入框。\n\n`finally` 块确保 `run_ctx.cancel_pending()` 清理所有未完成的 Future，`self.current_run = None` 解除占用，worker 继续处理队列中的下一个请求。"
+    }
+  ]
+}

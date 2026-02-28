@@ -1,0 +1,52 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Server 会话创建流程",
+  "description": "从 POST /sessions 到 Agent 就绪的完整创建链：REST 接口 → SessionManager.create_session → 工具装配 → create_cli_agent → 中间件栈 → Session 启动",
+  "steps": [
+    {
+      "file": "server/app.py",
+      "line": 258,
+      "description": "**[入口] POST /sessions**\n\nWeb 客户端发起创建会话请求，携带：\n- `assistant_id` — 使用哪个 Agent 配置（对应 `~/.deepagents/<id>/agent.md`）\n- `auto_approve` — 是否自动批准所有工具调用（跳过 HITL）\n\n验证 token 后调用 `manager.create_session()`，返回 `session_id` 和 `sandbox_id`。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1441,
+      "description": "**SessionManager.create_session()**\n\n核心会话工厂方法。主要步骤：\n1. 生成 `session_id`（UUID hex），创建独立工作区目录 `workspace/{session_id}/`\n2. `create_model()` — 从 `config/model.yml` 按当前 `DEEPAGENTS_MODEL` 初始化 LLM\n3. 装配工具列表（http_request、fetch_url、web_search、MCP、浏览器工具、sandbox 工具）\n4. 从 Docker 池获取容器\n5. `create_cli_agent()` — 创建 LangGraph agent\n6. 构建 `Session` 对象并启动 worker"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1492,
+      "description": "**pool.acquire_for_session() — 分配 Docker 容器**\n\n从预热池取出一个空闲容器（或临时启动新容器），绑定到本会话：\n- 容器 `/workspace` 映射到宿主机 `workspace/{session_id}/`\n- 返回 `DockerSandboxBackend`，封装 `execute()`、`read_file()`、`write_file()` 等操作\n\n随后用此 backend 构建 `build_qwen_tools` 和 `build_sandbox_tools`，注入到工具列表。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1510,
+      "description": "**create_cli_agent() 调用**\n\n将模型、工具列表、sandbox backend 传入 `agent.py` 的工厂函数。\n\n注意参数：\n- `sandbox_type=\"docker\"` — 生成 Docker 环境专用的 system prompt\n- `auto_approve=False` — 服务端 agent 始终配置 HITL，实际 auto_approve 在 run 时由 session_state 控制"
+    },
+    {
+      "file": "server/agent.py",
+      "line": 373,
+      "description": "**create_cli_agent() — Agent 工厂**\n\n构建步骤：\n1. 初始化 `agent_dir`（`~/.deepagents/{assistant_id}/`）\n2. 读取 `memory_sources`（agent.md 路径列表）\n3. 按 sandbox 模式选择 `CompositeBackend`（本地 FilesystemBackend 或 Docker sandbox）\n4. 组装中间件栈（见下一步）\n5. 调用 `create_deep_agent()` 生成 LangGraph Pregel 图"
+    },
+    {
+      "file": "server/agent.py",
+      "line": 443,
+      "description": "**中间件栈装配**\n\n中间件按顺序叠加（先入先出）：\n\n1. `MemoryMiddleware` — 启动时读取 `agent.md`，注入到 system prompt 前缀\n2. `SkillsMiddleware` — 从 `skills/` 目录加载自定义工具（每个 skill 一个子目录含 SKILL.md）\n3. `ShellMiddleware` — 仅本地模式：提供 `shell` 工具执行宿主机命令\n4. `ToolResultTruncationMiddleware` — 截断过长的工具返回，防止撑爆上下文\n5. `ToolCallArgsMiddleware` — 在工具执行时捕获完整参数（解决部分 LLM 流式时 args 为空的问题）"
+    },
+    {
+      "file": "server/agent.py",
+      "line": 540,
+      "description": "**create_deep_agent() — LangGraph Pregel 图**\n\n`deepagents` 包的核心入口，创建：\n- ReAct 风格的 agent 循环图（思考 → 工具调用 → 观察 → 循环）\n- `InMemorySaver` checkpointer — 支持多轮会话历史（按 `thread_id` 隔离）\n- `interrupt_on` 配置 — 对 `execute`、`write_file`、`shell` 等危险操作触发 HITL 暂停\n\n返回 `(agent_graph, composite_backend)` 二元组。"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 1527,
+      "description": "**Session 对象组装**\n\n将所有组件汇集到 `Session` dataclass：\n- `agent` — LangGraph Pregel 图\n- `backend` — CompositeBackend（文件操作路由）\n- `sandbox_backend` — Docker 容器句柄\n- `workspace_dir` — 宿主机工作区路径\n- `browser_bridge` — 浏览器扩展通道（可选）\n- `run_queue` — asyncio 任务队列（串行处理用户请求）"
+    },
+    {
+      "file": "server/sessions.py",
+      "line": 599,
+      "description": "**session.start() — 启动 worker 协程**\n\n`asyncio.create_task(self._run_worker())` 在后台启动消息消费者循环。\n\n`_run_worker` 持续 `await run_queue.get()`，每次取出一个 `RunRequest` 后调用 `_execute_run()`，确保同一会话的请求串行执行，互不交叉。"
+    }
+  ]
+}

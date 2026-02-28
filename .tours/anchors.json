@@ -1,0 +1,125 @@
+{
+  "_comment": "每个 tour 步骤的代码锚点（用于 sync_tours.py 自动修正行号）。pattern 取自步骤所在行的 strip() 内容。",
+  "ext-1-连接建立.tour": [
+    {"step": 1, "pattern": "chrome.runtime.onInstalled.addListener(() => {"},
+    {"step": 2, "pattern": "chrome.runtime.onStartup.addListener(() => {"},
+    {"step": 3, "pattern": "export async function restoreAndConnect() {"},
+    {"step": 4, "pattern": "export async function connectWs(force = false) {"},
+    {"step": 5, "pattern": "state.ws.onopen = async () => {"},
+    {"step": 6, "pattern": "export function startHeartbeat() {"},
+    {"step": 7, "pattern": "export async function sendHello() {"},
+    {"step": 8, "pattern": "state.ws.onmessage = (event) => {"},
+    {"step": 9, "pattern": "state.ws.onclose = (e) => {"},
+    {"step": 10, "pattern": "export function scheduleReconnect() {"}
+  ],
+  "ext-2-bridge自动配置.tour": [
+    {"step": 1, "pattern": "if (!isIframe) {"},
+    {"step": 2, "pattern": "function observeBridgeConfig() {"},
+    {"step": 3, "pattern": "function readBridgeConfig() {"},
+    {"step": 4, "pattern": "function sendBridgeConfig() {"},
+    {"step": 5, "pattern": "if (message.type === \"bridge_config\") {"},
+    {"step": 6, "pattern": "export async function connectWs(force = false) {"}
+  ],
+  "ext-3-页面快照.tour": [
+    {"step": 1, "pattern": "state.ws.onmessage = (event) => {"},
+    {"step": 2, "pattern": "async function handleServerMessage(data) {"},
+    {"step": 3, "pattern": "if (type === \"browser.request_snapshot\") {"},
+    {"step": 4, "pattern": "export function requestSnapshotFromTab(requestId, sendToServer, mode, tabId) {"},
+    {"step": 5, "pattern": "chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {"},
+    {"step": 6, "pattern": "function collectSnapshot(mode) {"},
+    {"step": 7, "pattern": "if (message.type === \"snapshot\") {"},
+    {"step": 8, "pattern": "export function finalizeSnapshot(requestId) {"}
+  ],
+  "ext-4-浏览器操作.tour": [
+    {"step": 1, "pattern": "if (type === \"browser.action\") {"},
+    {"step": 2, "pattern": "export async function handleAction(payload) {"},
+    {"step": 3, "pattern": "export async function ensureDebugger(tabId) {"},
+    {"step": 4, "pattern": "export function attachDebugger(tabId) {"},
+    {"step": 5, "pattern": "export function sendCDP(tabId, method, params = {}) {"},
+    {"step": 6, "pattern": "async function resolveTargetRect(tabId, target) {"},
+    {"step": 7, "pattern": "async function performClick(tabId, target, text) {"},
+    {"step": 8, "pattern": "async function performType(tabId, target, text, clearFirst) {"},
+    {"step": 9, "pattern": "export async function getSnapshotOnce(tabId, requestId, mode) {"},
+    {"step": 10, "pattern": "export function detachDebugger(tabId) {"}
+  ],
+  "server-1-服务启动.tour": [
+    {"step": 1, "pattern": "def run() -> None:"},
+    {"step": 2, "pattern": "async def lifespan(app: FastAPI):"},
+    {"step": 3, "pattern": "pool_config = DockerPoolConfig.from_env()"},
+    {"step": 4, "pattern": "docker_pool = DockerSandboxPool(pool_config)"},
+    {"step": 5, "pattern": "manager = SessionManager(docker_pool)"},
+    {"step": 6, "pattern": "app = FastAPI(lifespan=lifespan)"}
+  ],
+  "server-2-会话创建.tour": [
+    {"step": 1, "pattern": "@app.post(\"/sessions\", response_model=CreateSessionResponse)"},
+    {"step": 2, "pattern": "async def create_session("},
+    {"step": 3, "pattern": "sandbox_backend = await self._pool.acquire_for_session(session_id,"},
+    {"step": 4, "pattern": "agent, backend = create_cli_agent("},
+    {"step": 5, "pattern": "def create_cli_agent("},
+    {"step": 6, "pattern": "agent_middleware = []"},
+    {"step": 7, "pattern": "agent = create_deep_agent("},
+    {"step": 8, "pattern": "session = Session("},
+    {"step": 9, "pattern": "async def start(self) -> None:"}
+  ],
+  "server-3-WebSocket消息循环.tour": [
+    {"step": 1, "pattern": "@app.websocket(\"/ws/{session_id}\")"},
+    {"step": 2, "pattern": "logger.info(\"WebSocket connected: session_id=%s\", session_id)"},
+    {"step": 3, "pattern": "await handle_client_message(session, data)"},
+    {"step": 4, "pattern": "async def handle_client_message(session: Session, data: dict[str, Any]) -> None:"},
+    {"step": 5, "pattern": "if msg_type == \"run\":"},
+    {"step": 6, "pattern": "async def enqueue_run(self, run_request: RunRequest) -> None:"},
+    {"step": 7, "pattern": "async def _run_worker(self) -> None:"}
+  ],
+  "server-4-Run执行流.tour": [
+    {"step": 1, "pattern": "async def _execute_run(self, run_request: RunRequest) -> None:"},
+    {"step": 2, "pattern": "prompt_text, warnings = inject_file_context(run_request.user_input)"},
+    {"step": 3, "pattern": "stream_input: dict[str, Any] | Command = {\"messages\": [{\"role\": \"user\","},
+    {"step": 4, "pattern": "async for chunk in self.agent.astream("},
+    {"step": 5, "pattern": "if isinstance(message, AIMessage):"},
+    {"step": 6, "pattern": "if isinstance(message, ToolMessage):"},
+    {"step": 7, "pattern": "if \"__interrupt__\" in data:"},
+    {"step": 8, "pattern": "hitl_response = await self._process_interrupts("},
+    {"step": 9, "pattern": "stream_input = Command(resume=hitl_response)"},
+    {"step": 10, "pattern": "self.run_status[run_request.run_id] = \"completed\""}
+  ],
+  "web-1-应用初始化.tour": [
+    {"step": 1, "pattern": "document.addEventListener('DOMContentLoaded', () => {"},
+    {"step": 2, "pattern": "export class DeepAgentsClient {"},
+    {"step": 3, "pattern": "this.utils = new UtilsModule(this);"},
+    {"step": 4, "pattern": "this.ui.init();"},
+    {"step": 5, "pattern": "async tryRestoreAuth() {"},
+    {"step": 6, "pattern": "cacheElements() {"},
+    {"step": 7, "pattern": "setupEventListeners() {"}
+  ],
+  "web-2-登录与会话建立.tour": [
+    {"step": 1, "pattern": "async handleLogin() {"},
+    {"step": 2, "pattern": "this.applyLoggedInState();"},
+    {"step": 3, "pattern": "async afterLogin() {"},
+    {"step": 4, "pattern": "async ensureSession() {"},
+    {"step": 5, "pattern": "async createSession() {"},
+    {"step": 6, "pattern": "connectWebSocket() {"},
+    {"step": 7, "pattern": "ws.onopen = () => {"},
+    {"step": 8, "pattern": "ws.onclose = (event) => {"}
+  ],
+  "web-3-发送消息流程.tour": [
+    {"step": 1, "pattern": "async sendMessage() {"},
+    {"step": 2, "pattern": "const userMessage = app.ui.createMessageElement('user');"},
+    {"step": 3, "pattern": "const runId = app.utils.generateRunId();"},
+    {"step": 4, "pattern": "const assistantMessage = app.ui.createMessageElement('assistant');"},
+    {"step": 5, "pattern": "type: 'run',"},
+    {"step": 6, "pattern": "handleMessage(data) {"},
+    {"step": 7, "pattern": "handleRunStarted(data) {"},
+    {"step": 8, "pattern": "handleRunEnded(data) {"},
+    {"step": 9, "pattern": "cancelRun() {"}
+  ],
+  "web-4-流式渲染与工具卡片.tour": [
+    {"step": 1, "pattern": "handleAssistantDelta(data) {"},
+    {"step": 2, "pattern": "ingestAssistantText(runId, incomingText) {"},
+    {"step": 3, "pattern": "appendAssistantText(runId, text) {"},
+    {"step": 4, "pattern": "handleToolCallStarted(data) {"},
+    {"step": 5, "pattern": "handleToolCallEnded(data) {"},
+    {"step": 6, "pattern": "handleFileOp(data) {"},
+    {"step": 7, "pattern": "handleTodosUpdated(data) {"},
+    {"step": 8, "pattern": "handleInterruptRequest(data) {"}
+  ]
+}

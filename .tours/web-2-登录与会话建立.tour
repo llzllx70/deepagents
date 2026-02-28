@@ -1,0 +1,47 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Web 登录与会话建立流程",
+  "description": "用户登录后建立 WebSocket 连接的完整链：handleLogin → afterLogin → ensureSession → createSession (POST /sessions) → connectWebSocket → onopen",
+  "steps": [
+    {
+      "file": "web/app/auth.js",
+      "line": 114,
+      "description": "**[入口] handleLogin()**\n\n用户点击登录按钮或提交表单时触发。\n\n步骤：\n1. 读取用户名/密码，校验非空\n2. `POST /login` 获取 token\n3. 保存 `app.authToken`、`app.currentUser` 到内存\n4. 将 token 写入 `localStorage`（24 小时有效）\n5. `applyLoggedInState()` 解锁 UI\n6. `afterLogin()` 加载配置和历史"
+    },
+    {
+      "file": "web/app/auth.js",
+      "line": 141,
+      "description": "**applyLoggedInState() — 解锁 UI**\n\n登录成功后启用所有交互控件：\n- 解禁输入框、发送/附件/新对话按钮\n- 隐藏登录表单，显示用户名\n- 恢复 auto_approve 开关状态\n\n登出 (`applyLoggedOutState`) 执行相反操作：禁用所有控件、清空 token 和会话状态。"
+    },
+    {
+      "file": "web/app/auth.js",
+      "line": 172,
+      "description": "**afterLogin() — 登录后初始化**\n\n1. `loadUserConfig()` — GET `/user_config`，同步服务端保存的 `auto_approve` 设置\n2. `history.loadHistory()` — GET `/history`，加载最近 50 条对话记录\n3. `history.renderHistory()` — 渲染左侧对话历史列表\n4. 显示「新对话」欢迎页\n\n注意：登录后 **不** 自动恢复上次会话，用户需主动点击历史记录或发送消息。"
+    },
+    {
+      "file": "web/app/network.js",
+      "line": 81,
+      "description": "**ensureSession() — 惰性创建会话**\n\n发送消息前确保会话存在的防并发封装：\n- 若 `app.sessionId` 已有值 → 直接返回\n- 若正在创建（`sessionCreatePromise`）→ 等待同一个 Promise\n- 否则调用 `createSession()` 并缓存 Promise，避免并发重复创建\n\n`sendMessage()` 和 `uploadAttachments()` 都通过此方法获取 sessionId。"
+    },
+    {
+      "file": "web/app/network.js",
+      "line": 48,
+      "description": "**createSession() — POST /sessions**\n\n向服务端请求创建新会话：\n- 携带 `assistant_id`（默认 `\"agent\"`）和 `auto_approve`\n- 收到响应后调用 `setSessionId(data.session_id)`\n- 立即调用 `connectWebSocket()` 建立 WS 连接\n\n`setSessionId` 同时构造 WS URL：`ws://host/ws/{session_id}?token=...`"
+    },
+    {
+      "file": "web/app/network.js",
+      "line": 246,
+      "description": "**connectWebSocket() — 建立 WebSocket**\n\n核心连接函数：\n1. 防重入：若已 OPEN/CONNECTING 则跳过\n2. `new WebSocket(app.wsUrl)` 发起握手\n3. 注册四个回调：`onopen`、`onmessage`、`onclose`、`onerror`\n\n设计细节：`app.ws !== ws` 的守卫检查防止旧连接的回调干扰新连接（竞态保护）。"
+    },
+    {
+      "file": "web/app/network.js",
+      "line": 256,
+      "description": "**onopen — 连接就绪**\n\nWebSocket 握手成功后：\n1. `updateConnectionStatus('connected')` — 状态指示灯变绿\n2. 重置重连计数器，隐藏重连提示\n3. `send({type:\"auto_approve\", enabled})` — 同步客户端 auto_approve 到服务端\n4. 若有 `pendingRunStatusId` → 查询 run 状态（断线重连场景）\n5. `flushPendingMessages()` — 发送断线期间缓存的消息\n\n至此双向通道就绪，用户可以发送消息。"
+    },
+    {
+      "file": "web/app/network.js",
+      "line": 293,
+      "description": "**onclose — 断线重连策略**\n\n连接断开时：\n- code `1008`（Policy Violation）→ 会话已失效，调用 `handleMissingSession()` 静默清空状态\n- 其他 code + 有未完成工作（`hasReconnectWork()`）→ `attemptReconnect()`\n\n`hasReconnectWork()` 判断：有 pendingMessages、有进行中的 run、有 forceReconnect 标志时才重连，避免空闲时无意义重连。\n\n`attemptReconnect` 使用固定 2s 延迟重试（最多 5 次，forceReconnect 模式无限重试）。"
+    }
+  ]
+}

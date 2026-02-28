@@ -1,0 +1,57 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Extension 连接建立流程",
+  "description": "扩展启动后自动恢复 WebSocket 连接的完整调用链：onInstalled/onStartup → restoreAndConnect → connectWs → onopen → sendHello + startHeartbeat",
+  "steps": [
+    {
+      "file": "extension/background.js",
+      "line": 237,
+      "description": "**[入口] onInstalled**\n\n扩展安装或更新后触发，调用 `restoreAndConnect()` 恢复上次保存的配置并自动连接。\n\n`onStartup`（下一步）在浏览器启动时同样触发相同逻辑。"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 241,
+      "description": "**[入口] onStartup**\n\n浏览器冷启动时触发，与 onInstalled 调用相同的 `restoreAndConnect()`。\n\n两者共同确保无论哪种场景都能自动恢复连接。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 217,
+      "description": "**restoreAndConnect()**\n\n从 `chrome.storage.local` 读取上次保存的 `serverUrl` 和 `token`，写回 `state`，如果 serverUrl 存在则调用 `connectWs()`。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 127,
+      "description": "**connectWs()**\n\n核心连接函数。步骤：\n1. 用 `buildWsUrl` 拼接完整 URL（含 token）\n2. 如果已连接到相同 URL 且非强制模式，跳过\n3. 关闭旧连接，`new WebSocket(wsUrl)`\n4. 注册 onopen / onclose / onerror / onmessage"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 146,
+      "description": "**onopen 回调**\n\nWebSocket 握手成功后执行：\n- `state.connected = true`\n- `state.reconnectAttempt = 0`（重置重连计数）\n- 调用 `startHeartbeat()`\n- 调用 `sendHello()`"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 268,
+      "description": "**startHeartbeat()**\n\n每 20 秒发送一次 `{ type: \"ping\" }`，防止 WebSocket 被中间层超时关闭，同时帮助 MV3 Service Worker 保持活跃。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 237,
+      "description": "**sendHello()**\n\n向 Server 发送握手消息 `browser.hello`，携带：\n- `protocol_version: 2`\n- 当前活跃 tab 的 `tab_id / url / title`\n- `user_agent`\n\nServer 收到后初始化浏览器会话。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 167,
+      "description": "**onmessage — 连接就绪，开始接收指令**\n\n连接建立完成后，后续所有 Server 下发的消息都在此接收。\n\n解析 JSON 后调用 `onServerMessage(data)`，路由到 `background.js` 的 `handleServerMessage`。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 154,
+      "description": "**onclose → scheduleReconnect()**\n\n连接断开时标记 `state.connected = false`，停止心跳，然后调度重连。"
+    },
+    {
+      "file": "extension/lib/connection.js",
+      "line": 197,
+      "description": "**scheduleReconnect() — 指数退避**\n\n重连延迟序列：200ms → 400ms → 1s → 2s → 5s → 10s → 30s。\n每次失败递增 `reconnectAttempt`，确保网络恢复后快速重试，长期不可用时减少无效连接。"
+    }
+  ]
+}

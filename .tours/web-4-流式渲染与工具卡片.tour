@@ -1,0 +1,47 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Web 流式渲染与工具卡片",
+  "description": "服务端推送到屏幕渲染的完整路径：assistant.delta → ingestAssistantText → appendAssistantText → Markdown渲染 | tool.call.started/ended → 工具卡片 | interrupt.request → 审批弹窗",
+  "steps": [
+    {
+      "file": "web/app/messages.js",
+      "line": 179,
+      "description": "**handleAssistantDelta() — 增量文字**\n\n收到 `assistant.delta`（LLM 流式 token）后，调用 `appendAssistantText(runId, data.text)`。\n\n`handleAssistantMessage`（完整消息）走同一路径，由 `ingestAssistantText` 内部去重处理。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 534,
+      "description": "**ingestAssistantText() — 增量去重算法**\n\n服务端在流式传输和完整消息之间存在重叠，此函数负责去重后返回真正需要追加的部分：\n\n- `text` 从当前 buffer 开始（新增量）→ 追加新增部分\n- `text` 是 buffer 的前缀（旧全量）→ buffer 不变，`appended = ''`（忽略）\n- 否则拼接（兜底）\n\n`messageBuffer` 按 runId 隔离，多个并发 run 互不干扰。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 561,
+      "description": "**appendAssistantText() — 写入 DOM**\n\n1. `ingestAssistantText()` 计算真实增量\n2. `ui.getOrCreateRunMessageElement()` 获取/创建此 run 的 AI 气泡 DOM\n3. `ui.hideThinkingIndicator()` — AI 开始回复，隐藏「⋯」动效\n4. `ui.getOrCreateAssistantSegmentElement()` — 获取当前文字段落元素（工具调用会打断段落，产生新 segment）\n5. `state.assistantSegmentText += appended` — 追加到段落文本\n6. `segmentElement.innerHTML = utils.parseMarkdown(state.assistantSegmentText)` — 整段重渲（保证 Markdown 正确解析）\n7. `scrollToBottom()` — 自动滚动"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 189,
+      "description": "**handleToolCallStarted() — 工具卡片创建**\n\n收到 `tool.call.started` 时：\n1. `ui.closeAssistantSegment(state)` — 封闭当前文字段落（防止后续文字混入工具卡片前）\n2. `ui.createToolCallElement({name, args, status:'running'})` — 创建折叠卡片 DOM\n3. 检查 `parent_tool_call_id`：子任务工具添加到父任务的 `.task-children` 容器中，否则追加到消息容器\n4. `task` / `write_todos` 工具特殊处理：第一次调用时创建但不插入 DOM（等第二次调用时才显示，避免闪烁）\n5. `showThinkingIndicator()` — 工具执行中重新显示「⋯」动效在卡片下方"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 346,
+      "description": "**handleToolCallEnded() — 工具卡片更新**\n\n收到 `tool.call.ended` 后：\n1. 找到对应 `tool_call_id` 的卡片元素\n2. 更新 `.tool-status` 样式（success/error）\n3. 更新 `.tool-summary` 摘要文字（display_content）\n4. 若有结果内容（非 task 类工具），在卡片内追加 `.tool-result` 结果区\n5. `state.toolCalls.delete(tool_call_id)` — 从活跃 Map 移除\n6. 重新显示思考动效（Agent 还可能继续思考/调用下一个工具）"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 440,
+      "description": "**handleFileOp() — 文件操作面板**\n\n收到 `file.op` 事件（read_file/write_file/edit_file 执行完毕）：\n1. `ui.createFileOpElement({toolName, path, status, metrics, diff, content})` — 创建专用文件卡片\n2. 卡片内含：操作类型图标、文件路径、行数指标（读/写/增/删）、可展开的 diff/内容区\n3. 追加到当前 run 的消息容器\n\n文件卡片和工具卡片是独立 DOM 节点，同一工具（如 `edit_file`）会同时产生工具卡片（tool.call.started/ended）和文件卡片（file.op）。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 475,
+      "description": "**handleTodosUpdated() — 任务抽屉**\n\n收到 `todos.updated` 后，`ui.updateTaskDrawer(todos, prevTodos)` 更新右下角任务抽屉。\n\n抽屉中显示所有 Todo 条目的状态（pending/in_progress/completed），提供当前任务进度概览。\n\n当 in_progress 任务数量变化时，抽屉 Badge 数字更新，吸引用户注意。"
+    },
+    {
+      "file": "web/app/messages.js",
+      "line": 501,
+      "description": "**handleInterruptRequest() — HITL 审批弹窗**\n\n收到 `interrupt.request` 后：\n1. 将 `{interrupt_id, request, run_id}` 推入 `app.pendingInterrupts`\n2. `ui.showInterruptModal(request, interrupt_id, run_id)` — 展示审批弹窗\n\n弹窗内容由服务端 `HITLRequest` 的 `description` 字段驱动（工具名、参数摘要、警告信息）。\n\n用户点击「批准」或「拒绝」后，`setupEventListeners` 中的按钮回调发送：\n```json\n{ \"type\": \"interrupt_response\", \"interrupt_id\": \"...\", \"response\": {\"decisions\": [{\"type\": \"approve\"}]} }\n```\n服务端 `resolve_interrupt()` 解除 Future 等待，Agent 恢复执行。"
+    }
+  ]
+}

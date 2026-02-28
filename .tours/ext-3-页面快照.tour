@@ -1,0 +1,46 @@
+{
+  "title": "Extension 页面快照流程",
+  "description": "Agent 需要「看」当前网页时的完整调用链：Server 请求 → background 广播 → 各 frame 的 content.js 采集 → 聚合 → 回传 Server",
+  "steps": [
+    {
+      "file": "extension/lib/connection.js",
+      "line": 167,
+      "description": "**[入口] onmessage — 收到 Server 消息**\n\nWebSocket 收到 JSON 消息后解析，调用 `onServerMessage(data)`。\n\n本流程触发条件：`data.type === 'browser.request_snapshot'`。"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 75,
+      "description": "**handleServerMessage(data)**\n\n服务端消息路由总入口。根据 `data.type` 分发：\n- `browser.request_snapshot` → 快照流程（当前）\n- `browser.action` → 操作流程"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 81,
+      "description": "**路由到快照模块**\n\n从消息中提取：\n- `requestId`（唯一标识，用于匹配多 frame 的响应）\n- `tabId`（目标 tab，默认当前活跃 tab）\n- `mode`（`compact` 或 `full`）\n\n调用 `requestSnapshotFromTab(requestId, true, mode, tabId)`。"
+    },
+    {
+      "file": "extension/lib/snapshot.js",
+      "line": 78,
+      "description": "**requestSnapshotFromTab()**\n\n初始化 `pendingSnapshot` 聚合缓冲区，然后通过 `chrome.tabs.sendMessage` 广播 `collect_snapshot` 到目标 tab 的**所有 frame**（因 content.js 配置了 `all_frames: true`）。\n\n主 frame + 每个 iframe 都会收到并各自响应。"
+    },
+    {
+      "file": "extension/content.js",
+      "line": 474,
+      "description": "**[content.js] 收到 collect_snapshot**\n\n每个 frame 的 content.js 独立响应此消息：\n1. 调用 `collectSnapshot(mode)` 采集当前 frame 数据\n2. iframe 为每个元素添加 `frame` 字段（标记来源 URL）\n3. 通过 `chrome.runtime.sendMessage` 回传给 background"
+    },
+    {
+      "file": "extension/content.js",
+      "line": 434,
+      "description": "**collectSnapshot(mode)**\n\n采集当前 frame 的结构化快照：\n- `page`：URL、标题、视口、滚动位置\n- `text`：调用 `extractVisibleText()`，compact 上限 8000 字符\n- `elements`：调用 `collectElements()`，采集可见可交互元素列表（按钮、链接、输入框等）"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 142,
+      "description": "**[background] 聚合各 frame 快照**\n\n`chrome.runtime.onMessage` 中接收各 frame 回传的数据：\n- 主 frame → `entry.mainSnapshot = snapshot`\n- iframe → `entry.iframeElements.push(...elements)`\n\n每次收到数据重置 500ms 定时器，定时器到期后调用 `finalizeSnapshot()`。"
+    },
+    {
+      "file": "extension/lib/snapshot.js",
+      "line": 185,
+      "description": "**finalizeSnapshot()**\n\n合并主 frame + iframe 元素（按模式上限截取），然后：\n- 如果是服务端请求（`sendToServer=true`）→ `wsSend({ type: 'browser.snapshot', snapshot })`\n- 如果是操作后附带（`getSnapshotOnce`）→ `resolve(snapshot)`\n\n快照回传 Server，Agent 据此决定下一步操作。"
+    }
+  ]
+}

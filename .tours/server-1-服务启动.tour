@@ -1,0 +1,37 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Server 服务启动流程",
+  "description": "从入口脚本到 FastAPI + DockerPool + SessionManager 就绪的完整启动链：run() → uvicorn → lifespan → DockerSandboxPool → SessionManager",
+  "steps": [
+    {
+      "file": "server/deepagents_server.py",
+      "line": 16,
+      "description": "**[入口] run()**\n\n`python -m server.deepagents_server` 或 `run.sh start server` 最终调用此函数。\n\n通过 `uvicorn.run(app, host=\"0.0.0.0\", port=8000)` 启动 ASGI 服务器，`app` 从 `server/app.py` 导入。"
+    },
+    {
+      "file": "server/app.py",
+      "line": 128,
+      "description": "**lifespan — 应用生命周期管理**\n\nFastAPI 的 `lifespan` 异步上下文管理器在服务器启动/关闭时执行。\n\n- **启动阶段**（`yield` 之前）：读取配置、初始化 Docker 池、创建 SessionManager\n- **关闭阶段**（`yield` 之后）：依次关闭 manager → docker_pool，释放所有容器"
+    },
+    {
+      "file": "server/app.py",
+      "line": 130,
+      "description": "**DockerPoolConfig.from_env()**\n\n从环境变量读取 Docker 池配置：\n- `DEEPAGENTS_DOCKER_POOL_SIZE`（默认 10）— 池中容器总数\n- `DEEPAGENTS_DOCKER_MIN_IDLE`（默认 2）— 最小空闲容器数\n- `DEEPAGENTS_DOCKER_IMAGE`（默认 `deepagents-sandbox:22.04`）— 容器镜像\n- `DEEPAGENTS_DOCKER_BIND_WORKSPACE=1` — 开发模式：直接挂载宿主机目录"
+    },
+    {
+      "file": "server/app.py",
+      "line": 136,
+      "description": "**DockerSandboxPool 创建与启动**\n\n`docker_pool.start()` 预热容器池：\n1. 拉取/检查镜像\n2. 预启动 `min_idle` 个容器（warm pool）\n3. 后台维护池中容器数量\n\n每个容器挂载路径：\n- `/workspace` → `workspace/{session_id}/`（宿主机）\n- `/user-skills` → 用户技能目录（只读）\n- `/skills` → 项目技能目录（只读）"
+    },
+    {
+      "file": "server/app.py",
+      "line": 138,
+      "description": "**SessionManager 初始化**\n\n`SessionManager(docker_pool)` 持有全局会话字典 `_sessions: dict[str, Session]`。\n\n关键职责：\n- `create_session()` — 从 Docker 池分配容器、创建 Agent、启动 worker\n- `delete_session()` — 关闭会话、同步工作区、释放容器回池\n- `activate/deactivate_session()` — 追踪当前活跃会话（单活跃模型）"
+    },
+    {
+      "file": "server/app.py",
+      "line": 150,
+      "description": "**FastAPI 应用与路由挂载**\n\n`app = FastAPI(lifespan=lifespan)` 完成后：\n- `/files` → `StaticFiles(WORKSPACE_DIR)` — Agent 生成的文件直接通过 HTTP 访问\n- REST 路由：`POST /login`, `POST /sessions`, `DELETE /sessions/{id}`, `PUT /history` 等\n- WebSocket 路由：`/ws/{session_id}`（主通信）、`/ws/browser`（扩展桥接）\n\n至此服务器就绪，等待客户端连接。"
+    }
+  ]
+}

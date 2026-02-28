@@ -1,0 +1,56 @@
+{
+  "title": "Extension 浏览器操作流程",
+  "description": "Agent 操控浏览器的完整调用链：Server 下发 browser.action → handleAction → ensureDebugger(CDP) → 4级元素定位 → 执行 click/type/scroll → 可选附带快照回传",
+  "steps": [
+    {
+      "file": "extension/background.js",
+      "line": 88,
+      "description": "**[入口] 路由到操作模块**\n\n`handleServerMessage` 收到 `browser.action` 消息后，调用 `handleAction(data)`。\n\npayload 包含：`action`（操作类型）、`target`（目标元素）、`tab_id`、`return_snapshot` 等。"
+    },
+    {
+      "file": "extension/lib/actions.js",
+      "line": 92,
+      "description": "**handleAction(payload) — 操作入口路由**\n\n解析 payload，分发到对应处理函数：\n- `open` → 新标签页/页面导航\n- `click` → `performClick()`\n- `type` → `performType()`\n- `scroll` → `performScroll()`\n- `wait` → `sleep()`\n\n操作完成后可选：附带快照（`return_snapshot`）、detach debugger（`detach_after`）。"
+    },
+    {
+      "file": "extension/lib/cdp.js",
+      "line": 151,
+      "description": "**ensureDebugger(tabId) — 确保 CDP 已 attach**\n\nclick/type/scroll/open 操作前的必要前置步骤（幂等调用）：\n- 已 attach 同一 tab → 直接返回（发送 `Runtime.enable` 自愈验证）\n- 已 attach 其他 tab → 先 detach 旧 tab 再 attach 新 tab\n- 未 attach → 调用 `attachDebugger()`"
+    },
+    {
+      "file": "extension/lib/cdp.js",
+      "line": 66,
+      "description": "**attachDebugger(tabId)**\n\n调用 `chrome.debugger.attach({ tabId }, '1.3')` 挂载 CDP。\n\nattach 成功后依次启用三个 domain：`Page.enable` / `Runtime.enable` / `DOM.enable`，这是后续所有 CDP 操作的前置条件。\n\n注：attach 后浏览器顶部会显示「正在调试」横幅。"
+    },
+    {
+      "file": "extension/lib/cdp.js",
+      "line": 122,
+      "description": "**sendCDP(tabId, method, params)**\n\n所有 CDP 命令的统一出口，对 `chrome.debugger.sendCommand` 的 Promise 封装。\n\n常用调用：\n- `Input.dispatchMouseEvent` → 模拟鼠标\n- `Input.insertText` → 模拟输入\n- `Runtime.evaluate` → 执行 JS 脚本\n- `Page.navigate` → 页面跳转"
+    },
+    {
+      "file": "extension/lib/actions.js",
+      "line": 405,
+      "description": "**resolveTargetRect() — 4级元素定位策略**\n\nAgent 发送的 target 按优先级依次尝试：\n1. **直接坐标** `target.point / target.x,y`\n2. **CSS 选择器 / data-da-id**（最多重试 3 次，间隔 500ms）\n3. **文本内容匹配**（选最小面积的交互元素）\n4. **iframe 内搜索**（创建隔离世界 + 坐标变换）\n\n返回元素的 `{ centerX, centerY }` 用于 CDP 鼠标事件。"
+    },
+    {
+      "file": "extension/lib/actions.js",
+      "line": 198,
+      "description": "**performClick(tabId, target)**\n\n通过 `resolveTargetRect` 获取目标坐标后，依次发送三个 CDP 鼠标事件：\n1. `mouseMoved` — 移动到目标位置（触发 hover 状态）\n2. `mousePressed` — 按下左键\n3. `mouseReleased` — 释放左键\n\n模拟完整的真实用户点击行为，兼容监听 mousedown/mouseup 的 React/Vue 组件。"
+    },
+    {
+      "file": "extension/lib/actions.js",
+      "line": 267,
+      "description": "**performType(tabId, target, text)**\n\n三级聚焦策略（依次尝试直到成功）：\n1. CSS 选择器 → `Runtime.evaluate` focus 并可选清空\n2. 文本内容匹配 → 遍历候选元素 focus\n3. iframe 内搜索 → 在隔离世界中 focus\n\n聚焦后用 `Input.insertText` 直接插入文本（支持中文、无需处理 IME）。"
+    },
+    {
+      "file": "extension/lib/snapshot.js",
+      "line": 146,
+      "description": "**[可选] getSnapshotOnce() — 操作后附带快照**\n\n当 payload 包含 `return_snapshot: true` 时，操作完成后自动采集一次快照附在结果中返回。\n\n设置 3 秒超时保护，超时后强制聚合已收到的部分数据。\n\n这样 Agent 一次请求就能同时拿到「操作结果 + 最新页面状态」，减少一次网络往返。"
+    },
+    {
+      "file": "extension/lib/cdp.js",
+      "line": 89,
+      "description": "**[可选] detachDebugger() — 释放 CDP**\n\n当 payload 包含 `detach_after: true` 时，操作结束后 detach debugger。\n\n释放后浏览器顶部的「正在调试」横幅消失，用户不会感知到扩展的调试状态。"
+    }
+  ]
+}
