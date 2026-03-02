@@ -1,12 +1,12 @@
 ---
 name: html2pdf
-description: 将 HTML 文件转换为 PDF 的通用技能，基于 Playwright (Chromium)，完美支持 CSS @page 规则和复杂布局，内置中文字体支持。
+description: 将 HTML 文件转换为 PDF 的通用技能，基于 Playwright (Chromium)，完美支持 CSS @page 规则和复杂布局，内置 @page 尺寸智能检测与回退保障，确保横版幻灯片等自定义尺寸的 PDF 导出正确。
 ---
 # HTML 转 PDF Skill (html2pdf)
 
 本 Skill 用于将 **HTML 文件转换为 PDF 文件**，基于 `Playwright` (Chromium 浏览器引擎) 实现，能够完美模拟浏览器打印效果，适用于：
 
-- **PPT/幻灯片导出**: 能够正确处理 `html-ppt-designer` 生成的复杂 CSS 布局和分页控制。
+- **PPT/幻灯片导出**: 能够正确处理 `html-ppt-designer` 生成的复杂 CSS 布局和分页控制，确保横版尺寸正确。
 - **报告类 HTML → PDF**: 确保图表、渐变背景等视觉元素正确渲染。
 - **任何需要"所见即所得"的 HTML 转换场景**。
 
@@ -37,7 +37,7 @@ pip3 install playwright -q && python3 -m playwright install chromium
 ## 技术实现
 
 - **渲染引擎**: Playwright + Chromium，与用户浏览器渲染效果一致。
-- **页面尺寸**: 默认优先使用 HTML 中定义的 `@page` 尺寸规则 (`prefer_css_page_size=True`)。
+- **页面尺寸（双重保障）**: 脚本会自动从 HTML 的 `<style>` 中解析 `@page { size: W H; }` 规则，将解析到的宽高通过 Playwright API 的 `width`/`height` 参数传入，同时保持 `prefer_css_page_size=True`。这种双重保障机制确保即使某些 Chromium 版本无法正确识别 CSS `@page` 规则（如嵌套在 `@media print` 内的声明），PDF 输出尺寸仍然正确。
 - **背景渲染**: 默认开启 `print_background=True`，确保渐变、背景色等正确输出。
 - **自动安装**: 首次运行时自动安装依赖，不使用 `--with-deps` 避免 apt 锁冲突。
 - **锁文件机制**: 安装成功后创建 `~/.playwright_installed` 锁文件，后续运行直接跳过安装。
@@ -50,5 +50,6 @@ pip3 install playwright -q && python3 -m playwright install chromium
 | **CSS兼容性** | **高** (现代浏览器标准) | **中** (部分CSS属性不支持) |
 | **分页控制** | **可靠** | **不可靠** (内容溢出时强制分页) |
 | **`overflow:hidden`** | **支持** (裁剪内容) | **不支持** (忽略并分页) |
+| **@page 尺寸** | **双重保障** (CSS + API回退) | 仅依赖 CSS |
 | **转换速度** | ~2秒 (已安装后) | ~3秒 |
 | **适用场景** | 复杂、高保真度文档 | 简单、纯文本为主的文档 |

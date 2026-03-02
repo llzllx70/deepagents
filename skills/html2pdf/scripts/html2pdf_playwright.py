@@ -4,6 +4,7 @@ html2pdf_playwright.py — 使用 Playwright (Chromium) 将 HTML 转换为 PDF
 
 特点:
 - 完美支持 CSS @page 规则、overflow:hidden、page-break 分页控制
+- 自动从 HTML 中解析 @page 尺寸，作为 Playwright API 层面的回退保障
 - 仅在缺少 Playwright/Chromium 时自动安装，已安装则跳过
 - 移除 --with-deps 避免 apt 锁冲突
 
@@ -11,11 +12,13 @@ html2pdf_playwright.py — 使用 Playwright (Chromium) 将 HTML 转换为 PDF
     python html2pdf_playwright.py input.html output.pdf
 """
 
+import re
 import sys
 import subprocess
 from pathlib import Path
 
 LOCK_FILE = Path.home() / ".playwright_installed"
+
 
 def _install_playwright_package() -> bool:
     """安装 playwright pip 包。"""
@@ -68,7 +71,7 @@ def ensure_playwright() -> bool:
     只有在确实缺少 Playwright 时才安装。
 
     说明:
-    - 之前用 LOCK_FILE 作为“首次运行”判断，但它可能和当前 Python 环境不一致。
+    - 之前用 LOCK_FILE 作为"首次运行"判断，但它可能和当前 Python 环境不一致。
     - 现在以 import 结果为准，只在需要时触发安装。
     """
     try:
@@ -102,6 +105,84 @@ def _looks_like_missing_chromium(err: Exception) -> bool:
         return True
     return False
 
+
+def _css_length_to_inches(value: str) -> float | None:
+    """将 CSS 长度值转换为英寸。支持 cm, mm, in, px, pt。"""
+    value = value.strip().lower()
+    conversions = {
+        "cm": 1 / 2.54,
+        "mm": 1 / 25.4,
+        "in": 1.0,
+        "px": 1 / 96.0,
+        "pt": 1 / 72.0,
+    }
+    for unit, factor in conversions.items():
+        if value.endswith(unit):
+            try:
+                return float(value[: -len(unit)].strip()) * factor
+            except ValueError:
+                return None
+    return None
+
+
+def _detect_page_size(html_content: str) -> dict | None:
+    """
+    从 HTML 的 <style> 中解析 @page { size: W H; } 规则，
+    返回 Playwright page.pdf() 可用的 width/height 字符串（英寸单位）。
+
+    解析策略：
+    1. 提取所有 <style> 标签内容
+    2. 移除 CSS 注释
+    3. 在顶层和 @media print 内部同时查找 @page 规则
+    4. 解析 size 属性中的宽高值
+    """
+    # 提取所有 <style> 内容
+    style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", html_content, re.DOTALL | re.IGNORECASE)
+    if not style_blocks:
+        return None
+
+    css_text = "\n".join(style_blocks)
+
+    # 移除 CSS 注释
+    css_text = re.sub(r"/\*.*?\*/", "", css_text, flags=re.DOTALL)
+
+    # 匹配 @page { ... size: W H; ... }
+    # 同时匹配顶层和 @media print 内部的 @page
+    page_matches = re.findall(r"@page\s*\{([^}]*)\}", css_text)
+    if not page_matches:
+        return None
+
+    # 取最后一个 @page 规则（CSS 层叠：后声明的优先）
+    for page_block in reversed(page_matches):
+        size_match = re.search(r"size\s*:\s*([^;]+)", page_block)
+        if not size_match:
+            continue
+
+        size_value = size_match.group(1).strip()
+
+        # 处理关键字 landscape / portrait
+        if "landscape" in size_value.lower():
+            # 如果只有 landscape 关键字（如 "A4 landscape"），不做精确解析
+            # 但至少知道是横版
+            return None  # 让 prefer_css_page_size 处理
+
+        # 解析两个长度值: "25.4cm 14.29cm"
+        parts = size_value.split()
+        if len(parts) >= 2:
+            w = _css_length_to_inches(parts[0])
+            h = _css_length_to_inches(parts[1])
+            if w is not None and h is not None:
+                return {"width": f"{w:.4f}in", "height": f"{h:.4f}in"}
+
+        # 单个长度值（正方形）
+        if len(parts) == 1:
+            side = _css_length_to_inches(parts[0])
+            if side is not None:
+                return {"width": f"{side:.4f}in", "height": f"{side:.4f}in"}
+
+    return None
+
+
 def html_to_pdf(html_path: str, pdf_path: str):
     """使用 Playwright (Chromium) 将 HTML 转换为 PDF"""
     if not ensure_playwright():
@@ -118,6 +199,15 @@ def html_to_pdf(html_path: str, pdf_path: str):
         sys.exit(1)
 
     pdf_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # 预读 HTML，解析 @page 尺寸作为回退保障
+    html_content = html_file.read_text(encoding="utf-8", errors="ignore")
+    detected_size = _detect_page_size(html_content)
+
+    if detected_size:
+        print(f"[html2pdf] 检测到 @page 尺寸: {detected_size['width']} x {detected_size['height']}")
+    else:
+        print("[html2pdf] 未检测到 @page 尺寸，将依赖 CSS prefer_css_page_size 或使用默认尺寸。")
 
     print(f"[html2pdf] 正在转换: {html_file.name} -> {pdf_file.name}")
     with sync_playwright() as p:
@@ -143,12 +233,25 @@ def html_to_pdf(html_path: str, pdf_path: str):
 
         page.goto(f"file://{html_file}", wait_until="networkidle", timeout=60000)
 
-        page.pdf(
-            path=str(pdf_file),
-            prefer_css_page_size=True,
-            print_background=True,
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}
-        )
+        # 构建 pdf() 参数
+        # 双重保障策略:
+        #   1. prefer_css_page_size=True 让 Chromium 优先使用 CSS @page 规则
+        #   2. 同时通过 width/height 参数传入解析到的尺寸作为回退
+        #      当 Chromium 无法识别 CSS @page 时（如旧版本或嵌套声明），
+        #      Playwright API 的 width/height 参数仍能确保正确的页面尺寸
+        pdf_options = {
+            "path": str(pdf_file),
+            "prefer_css_page_size": True,
+            "print_background": True,
+            "margin": {"top": "0", "right": "0", "bottom": "0", "left": "0"},
+        }
+
+        # 如果从 HTML 中检测到了 @page 尺寸，同时设置 width/height 作为双重保障
+        if detected_size:
+            pdf_options["width"] = detected_size["width"]
+            pdf_options["height"] = detected_size["height"]
+
+        page.pdf(**pdf_options)
 
         browser.close()
     print(f"[html2pdf] PDF 已成功生成: {pdf_file}")
