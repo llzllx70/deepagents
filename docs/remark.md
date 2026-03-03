@@ -494,3 +494,15 @@ server去掉接收web日志的相关代码，接口是client_logs
 7. 打开 mail.163.com, 使用 llzllx70@163.com / llzllx.LSJ70 登录, 并选择30天免登陆
 
 当前agent通过CDP 处理涉及浏览器的需求，请列举最常见的几个使用场景
+
+# 20260302
+
+## openclaw
+
+1. 开源，集成, 主动(定时调度)
+
+## claude code
+
+1. 开源: 有sdk，但内核claude code不开源
+2. 集成: max 订阅有remote 功能，手机端Claude app 可连, 但不支持其他通信工具
+
