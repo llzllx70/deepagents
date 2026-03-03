@@ -506,3 +506,25 @@ server去掉接收web日志的相关代码，接口是client_logs
 1. 开源: 有sdk，但内核claude code不开源
 2. 集成: max 订阅有remote 功能，手机端Claude app 可连, 但不支持其他通信工具
 
+
+# 20260303
+
+## 打开 boss 页面退出
+
+1. 帮我去boss直聘中搜索一下人工智能产品经理相关的岗位，要求杭州地区，并找到相关的岗位情况说给我
+2. 打开后页面会退出，后面又重新打开了
+3. 滚动过程中页面会闪烁
+4. 难道是boss的反爬机制?
+
+## 配置优化
+
+本次优化配置：
+1. deepagents.yml 中将 WEB_ROOT 和 WEB_DEPLOY_DIR 合并为一个
+2. deepagents.yml  中添加 server中的8000的配置和web 中 8080 的配置
+3. deepagents.yml  中添加nginx的配置，供deploy_nginx.sh 使用，依据macos 和 ubuntu 设置不的配置
+4. run.sh 中添加对deploy_nginx.sh 的调用，部署web和nginx时自动匹配当前环境
+
+一句话，用户只需要通过deepagents.yml 来配置，其他的全部通过run.sh 来完成
+
+先给出解决方案
+

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,7 +15,13 @@ except ImportError:
 
 
 def run() -> None:
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", access_log=False)
+    host = os.environ.get("SERVER_HOST", "0.0.0.0")
+    port_raw = os.environ.get("SERVER_PORT", "8000")
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError):
+        port = 8000
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 
 if __name__ == "__main__":

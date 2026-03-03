@@ -7,20 +7,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Server (Python FastAPI)
 
 ```bash
-# run.sh CLI: ./scripts/run.sh <action> [target] [model]
-# Actions: start, stop, restart, deploy, update-web, update-all, process, log
-# Targets: server, web, all (default depends on action)
-# Model defaults to "main" entry in config/llm-scene.yml
+# run.sh CLI: ./scripts/run.sh [--profile <name>] [-m model] <command>
+# Commands: start, stop, restart, deploy, status, log, model, profile
+# Shortcuts: up/down/re/da/dw/st
 
-./scripts/run.sh                          # Interactive menu mode
-./scripts/run.sh start server             # Start server with default model
-./scripts/run.sh start server glm         # Start server with specific model
-./scripts/run.sh stop server              # Stop server
-./scripts/run.sh restart server           # Restart with default model
-./scripts/run.sh deploy all               # Update web + restart server
-./scripts/run.sh update-web               # Copy web/ to WEB_DEPLOY_DIR
-./scripts/run.sh process all              # Show running processes
-./scripts/run.sh log server               # Tail server logs
+./scripts/run.sh                          # Interactive REPL (profile selection + status)
+./scripts/run.sh --profile macos-dev start # Start server with specific profile
+./scripts/run.sh -m kimi start            # Start server with specific model
+./scripts/run.sh stop                     # Stop server
+./scripts/run.sh restart                  # Restart server
+./scripts/run.sh deploy                   # Restart server + sync web + nginx
+./scripts/run.sh status                   # Show status overview
+./scripts/run.sh log                      # Tail server logs
+./scripts/run.sh model list               # List available models
+./scripts/run.sh model set glm-prod       # Set default model for profile
 
 # Direct Python execution
 export DEEPAGENTS_MODEL=kimi
@@ -55,7 +55,7 @@ Web Client (WebSocket) → FastAPI Server (sessions.py) → LangGraph Agent → 
 
 ### Backend Architecture
 
-**Entry Point**: `server/deepagents_server.py` - Uvicorn server on port 8000
+**Entry Point**: `server/deepagents_server.py` - Uvicorn server (`SERVER_HOST`/`SERVER_PORT`, default `0.0.0.0:8000`)
 
 **Session Management** (`server/sessions.py`):
 - Each WebSocket connection creates a session with unique `session_id`
@@ -117,21 +117,25 @@ models:
 
 ### `config/deepagents.yml`
 
-Environment variables and paths (loaded by `run.sh` via `load_env_config`):
+Environment variables and multi-environment profiles (loaded by `run.sh`):
 ```yaml
+default_profile: "macos-dev"
+
 env:
   LANGCHAIN_TRACING_V2: "true"
   LANGCHAIN_API_KEY: "..."
   DEEPAGENTS_DOCKER_BIND_WORKSPACE: "1"
-  WEB_ROOT: "<project_root>/web"
-  WEB_DEPLOY_DIR: "/path/to/nginx/root"
-```
 
-### `config/llm-scene.yml`
-
-Scene-to-model mapping; `main` key sets the default model for `run.sh`:
-```yaml
-main: "glm"
+profiles:
+  macos-dev:
+    scenes:
+      main: "glm"
+      image-understand: "qwen3-vl-plus"
+      image-create: "qwen-image-max"
+    env:
+      WEB_ROOT: "/opt/deepagents/web-dev"
+      SERVER_PORT: "8000"
+      WEB_PORT: "8080"
 ```
 
 ### `.deepagents/agent.md`
