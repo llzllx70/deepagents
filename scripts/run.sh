@@ -355,23 +355,10 @@ print_header() {
   echo "【$1】"
 }
 
-# Resolve nginx conf path for the current profile/OS
+# Resolve nginx conf path for the current profile
 resolve_nginx_conf() {
   export_env_config
-  local conf="${NGINX_CONF:-}"
-  if [ -n "$conf" ]; then
-    echo "$conf"
-    return
-  fi
-  local os_kind=""
-  os_kind="$(uname -s 2>/dev/null || true)"
-  if [ "$os_kind" = "Darwin" ] && [ -n "${NGINX_CONF_MACOS:-}" ]; then
-    echo "$NGINX_CONF_MACOS"
-  elif [ -n "${NGINX_CONF_UBUNTU:-}" ]; then
-    echo "$NGINX_CONF_UBUNTU"
-  else
-    echo ""
-  fi
+  echo "${NGINX_CONF:-}"
 }
 
 # Compact status overview

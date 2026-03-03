@@ -8,7 +8,7 @@ CONFIG_FILE="${ROOT_DIR}/config/deepagents.yml"
 SUDO=""
 
 # Determine if sudo is needed — deferred until NGINX_CONF is known.
-# Call resolve_sudo() after select_nginx_conf_by_os().
+# Call resolve_sudo() after resolve_nginx_conf().
 resolve_sudo() {
   if [ "$(id -u)" -eq 0 ]; then
     SUDO=""
@@ -34,8 +34,6 @@ BACKEND_HOST="${NGINX_BACKEND_HOST:-${BACKEND_HOST:-}}"
 BACKEND_PORT="${NGINX_BACKEND_PORT:-${BACKEND_PORT:-}}"
 WEB_ROOT="${WEB_ROOT:-}"
 NGINX_CONF="${NGINX_CONF:-}"
-NGINX_CONF_MACOS="${NGINX_CONF_MACOS:-}"
-NGINX_CONF_UBUNTU="${NGINX_CONF_UBUNTU:-}"
 PYTHON_BIN=""
 
 if command -v python >/dev/null 2>&1; then
@@ -199,28 +197,10 @@ detect_nginx_conf_auto() {
   NGINX_CONF="/etc/nginx/conf.d/deepagents.conf"
 }
 
-select_nginx_conf_by_os() {
+resolve_nginx_conf() {
   if [ -n "$NGINX_CONF" ]; then
     return 0
   fi
-
-  local os_kind=""
-  os_kind="$(detect_os)"
-  case "$os_kind" in
-    macos)
-      if [ -n "$NGINX_CONF_MACOS" ]; then
-        NGINX_CONF="$NGINX_CONF_MACOS"
-        return 0
-      fi
-      ;;
-    ubuntu)
-      if [ -n "$NGINX_CONF_UBUNTU" ]; then
-        NGINX_CONF="$NGINX_CONF_UBUNTU"
-        return 0
-      fi
-      ;;
-  esac
-
   detect_nginx_conf_auto
 }
 
@@ -247,7 +227,7 @@ BACKEND_PORT="${NGINX_BACKEND_PORT:-${BACKEND_PORT:-}}"
 
 apply_defaults
 ensure_nginx
-select_nginx_conf_by_os
+resolve_nginx_conf
 resolve_sudo
 
 $SUDO mkdir -p "$WEB_ROOT"
